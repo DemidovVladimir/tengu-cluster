@@ -1,4 +1,4 @@
-//! Evidence coverage (`tengu evidence coverage`, `docs/lineage-2026-10-06.md`
+//! Evidence coverage (`tengu evidence coverage`, `docs/lineage.md`
 //! § 3): which cadence slots of a window a recorded stream holds, its gaps,
 //! and which gaps a second source (backfilled 1 m bars) covers — every
 //! interval labelled [`Provenance`] `LIVE_RECORDED` / `BACKFILLED` /

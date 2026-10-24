@@ -411,7 +411,7 @@ pub(crate) fn secret_backends() -> Vec<SecretBackend> {
             available: true,
             note:
                 "The key is a Worker secret (`npx wrangler secret put NAME`); tengu gets a route \
-                 and a session, never the key ([keys], docs/sealed-keys-2026-10-09.md)."
+                 and a session, never the key ([keys], docs/sealed-keys.md)."
                     .into(),
         },
     ]
@@ -911,7 +911,7 @@ type SecretPreset = (
 );
 
 /// The secret card presets — the
-/// shipped seal-proxy routes (`docs/sealed-keys-2026-10-09.md` § Worker)
+/// shipped seal-proxy routes (`docs/sealed-keys.md` § Worker)
 /// and plain keys. Data only: the compiler treats every secret alike.
 const SECRET_PRESETS: &[SecretPreset] = &[
     (

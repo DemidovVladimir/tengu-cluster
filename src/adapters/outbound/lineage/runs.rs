@@ -1,5 +1,5 @@
 //! Backtest run dirs, read-only (`docs/xlab-2026-10-01.md` § 10 run dir,
-//! `docs/lineage-2026-10-06.md` § 5): the attempts behind search accounting
+//! `docs/lineage.md` § 5): the attempts behind search accounting
 //! ([`RunDirs`]) and the figures a result's `extract` recomputes
 //! ([`ReportJson`]).
 //!

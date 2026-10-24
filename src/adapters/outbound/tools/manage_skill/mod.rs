@@ -4,7 +4,7 @@
 //! Replaces `apply_improver_proposal` entirely; partially replaces
 //! `skill_distill` (kept as a thin alias for back-compat).
 //!
-//! See `docs/skill-redesign-2026-04-29.md` § "New tools > manage_skill actions"
+//! See `docs/archive/2026-04/skill-redesign-2026-04-29.md` § "New tools > manage_skill actions"
 //! for the action shapes and migration plan.
 //!
 //! Doctrine notes:

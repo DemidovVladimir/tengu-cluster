@@ -48,7 +48,7 @@ tools = ["read_file", "list_directory", "http_request", "memory_search", "memory
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
 # workspace_tools = ["shared_cache", "skill_distill"]  # opt-in tools: only names in src/domain/tools.rs::WORKSPACE_TOOLS (memory, skill lifecycle — and the families below)
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide
-#   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
+#   (docs/observations.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
 #   + Solana writes (simulate by default): solana_close_token_accounts, jupiter_swap, dlmm_open_position, dlmm_close_position, jup_perps_order — "Solana signing" below
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
 #   + xmarket risk (typed): risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade (private agent only) — needs [xmarket] + [risk] + [paper]; scope examples under "Risk + paper trading" below
@@ -140,7 +140,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # --- Webhooks (inbound HTTP) ---
 # Run with: tengu webhooks --sandbox <name>
-# Listens on [webhooks].port (default 7080). See docs/webhooks-2026-05-11.md.
+# Listens on [webhooks].port (default 7080). See docs/webhooks.md.
 
 # [webhooks]
 # enabled = true
@@ -170,7 +170,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # --- Decision loops (Jev picks, tools execute) ---
 # Test one event: tengu decide --sandbox <name> --loop watch [--event e.json]
-# Full example: sandboxes/lping/config.toml. Doc: docs/decision-loop-plan-2026-09-24.md.
+# Full example: sandboxes/lping/config.toml. Doc: docs/decision-loops.md.
 # [decision_loops.watch]
 # goal = "Keep the position in range; max 2 SOL"
 # agent = "main"              # tools + scopes + workspace come from this agent
@@ -186,7 +186,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # slots = { pair = ["SOL-USDC"] }
 # reduce = { pools = "/data/*/{address,tvl}" }
 #
-# Typed tools (results carry an Observation; docs/typed-observations-2026-09-24.md):
+# Typed tools (results carry an Observation; docs/observations.md):
 # world = { price = "price_oracle/1:So11111111111111111111111111111111111111112", pools = "dlmm_pools/1:SOL-USDC|fee_tvl_24h|10|100000" }  # alias → observation key, read (never fetched) each step
 # world_max_age_secs = 30                 # older world entries render as stale, no numbers (default 30)
 # [decision_loops.watch.actions.price]
@@ -219,12 +219,12 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [solana]
 # privy_wallet_id = "<Privy Solana wallet id>"   # not a secret; needs [keys.env] PRIVY_API_URL = "privy"
 
-# --- xmarket (docs/xmarket-tracker-2026-09-29.md) ---
+# --- xmarket (docs/xmarket-tracker.md) ---
 # Install-wide state of the xmarket runtime lives in <TENGU_HOME>/state/<state>/
 # (ledger.db, runtime.db, history/<YYYYMMDD>.db; catalog / events / audit /
 # spend .db reserved) — `tengu prune` keeps it. One directory name. Load rules
 # with [feeds], [risk] or [xmarket] (src/config/xmarket.rs,
-# docs/runtime-2026-09-30.md § State layout): the agents of feeds, decision
+# docs/runtime.md § State layout): the agents of feeds, decision
 # loops and xmarket tools (hl_*, risk_status, paper_*, xm_*) share one
 # `workspace`, absolute or ~/ (it keeps only .tengu/observations.db); with
 # [risk] every agent sets one and [xmarket] is required; the state dir sits
@@ -283,7 +283,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [xmarket.calendars.crypto]                # Hyperliquid crypto perps
 # kind = "24x7"
 #
-# Weekend fade, rule W (docs/xmarket-risk-paper-2026-09-30.md § Weekend fade):
+# Weekend fade, rule W (docs/xmarket-risk-paper.md § Weekend fade):
 # the exec tool xm_weekend_fade, run by [feeds.xm_weekend_fade] below. Every
 # key required, unknown keys refused. Load rules (src/config/xmarket.rs):
 # [risk] + [paper]; [recorder] records mkt_ctx/1 (the anchor price);
@@ -372,7 +372,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # ledger and the kill-switch file itself; its scope needs only the workspace
 # (observation store). Operator: `tengu risk status | halt | resume
 # --sandbox <name>` (halt / resume at a terminal only) —
-# docs/xmarket-risk-paper-2026-09-30.md.
+# docs/xmarket-risk-paper.md.
 # [default_scopes.risk_status]
 # fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
 #
@@ -385,7 +385,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # run it from the feed below, every 15 s. xm_weekend_fade runs rule W (the
 # [xmarket.weekend_fade] block above) from its feed, every 60 s.
 # Rows paper_fill/1, paper_close/1, paper_positions/1, xm_exits/1, xm_weekend/1 —
-# docs/xmarket-risk-paper-2026-09-30.md § Exec tools.
+# docs/xmarket-risk-paper.md § Exec tools.
 # [agents.xm_exec]                          # a decision loop's / feed's agent
 # engine = "openrouter"
 # model = "google/gemini-2.5-flash-lite"
@@ -429,7 +429,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # per_minute = 600                          # set it to your RPC plan (Helius free: 10 req / s)
 #
 # Hyperliquid tools (opt-in: list them in the agent's `tools`; args, keys,
-# weights: docs/typed-observations-2026-09-24.md § Hyperliquid tools). Each
+# weights: docs/observations.md § Hyperliquid tools). Each
 # needs its scope: the workspace (observation store), the HL host, and
 # HL_API_URL (testnet override https://api.hyperliquid-testnet.xyz; unset = mainnet).
 # [default_scopes.hl_ctx]
@@ -442,7 +442,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # net_hosts = ["api.hyperliquid.xyz"]
 # env_reads = ["HL_API_URL"]
 
-# --- tengu run (docs/runtime-2026-09-30.md) ---
+# --- tengu run (docs/runtime.md) ---
 # `tengu run --sandbox <name>`: one long-running process per sandbox (lease
 # runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
 # once + the [webhooks] routes. All optional.
@@ -453,7 +453,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
 # heartbeat_stale_secs = 30                 # `tengu doctor --sandbox <name> --live` fails past this
 #
-# --- Feeds: scheduled work of `tengu run` (docs/runtime-2026-09-30.md § Feeds) ---
+# --- Feeds: scheduled work of `tengu run` (docs/runtime.md § Feeds) ---
 # kind = "tool" calls a tool of `agent` (the executor its decision loop would
 # get: scopes, workspace, secret redaction; call id feed:<name>:<slot ms>:<i>);
 # kind = "tick" sends `event` + ts_ms to a [decision_loops.*] block. When:
@@ -519,7 +519,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # at = ["Sun 18:00", "Mon 09:00"]           # wall-clock times, DST-safe
 # event = { phase = "review" }              # the loop gets { phase, ts_ms }
 
-# --- Tengu Studio (tengu studio --sandbox <name>, default build; docs/studio-2026-10-08.md) ---
+# --- Tengu Studio (tengu studio --sandbox <name>, default build; docs/studio.md) ---
 # control = true: the local Studio page may Play (start this sandbox's runtime in
 # the Studio process — the `tengu run` composition, lease and stores), Stop it (the
 # graceful drain) and send a scenario event (sandboxes/<name>/scenarios/*.json) to
@@ -531,7 +531,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- Observation history (recorder; needs [xmarket]) ---
 # Typed-tool observations appended to <TENGU_HOME>/state/<xmarket.state>/history/
 # <YYYYMMDD>.db (UTC day). Read: tengu history range|asof. Rules:
-# docs/typed-observations-2026-09-24.md § History recorder.
+# docs/observations.md § History recorder.
 # [recorder]
 # enabled = true
 # schemas = ["mkt_ctx/1", "hl_book/1"]       # "*" = every schema
@@ -541,7 +541,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # min_interval_secs = { "hl_book/1" = 60 }   # at most one row per key per interval
 # retention_days = 30                        # older day files deleted (0 = keep all)
 
-# --- Generation binding (lineage registry; docs/lineage-2026-10-06.md § 4) ---
+# --- Generation binding (lineage registry; docs/lineage.md § 4) ---
 # Binds this sandbox to one generation of the lineage registry: `Config::load`
 # refuses any agent / feed / loop tool, or [backtest.strategies] kind, outside
 # the generation's capabilities (an opt-in tool no capability binds too), and a
@@ -552,7 +552,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # id = "W1"
 # registry = "../../lineage"                # relative to this config file
 
-# --- Strategy ranking (lineage contracts; docs/strategy-ranking-automation-2026-10-08.md) ---
+# --- Strategy ranking (lineage contracts; docs/ranking.md) ---
 # The ranking contracts this sandbox runs (`lineage/rankings/<id>.toml`, sealed
 # with `tengu lineage seal ranking:<id>` before any ranking). `Config::load`
 # refuses an unknown contract, one of another sandbox, a contract strategy
@@ -674,7 +674,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # burst = 2
 #
 # Only the operator fetches: `tengu sources --sandbox <s> list | fetch | import |
-# asof | terms | purge | disable | enable` (docs/source-evidence-2026-10-08.md).
+# asof | terms | purge | disable | enable` (docs/source-evidence.md).
 # Agents read through the opt-in tool source_evidence (the as-of evidence packet
 # of sources.db, no fetch argument); sources.db is its own state, outside every
 # fs root. Its scope: the workspace (observation store), no host, no env.
@@ -847,7 +847,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #                                           # bridge — readable by its built-in shell
 
 # --- Network egress (Tor by default, host allowlist, audit) ---
-# Code-enforced policy for every request tengu makes. docs/egress-2026-09-16.md
+# Code-enforced policy for every request tengu makes. docs/egress.md
 # Tor proxy:  make tor   (Arti + lyrebird-rs over obfs4/snowflake bridges, 127.0.0.1:9050)
 # Check:      tengu doctor --tor
 
@@ -868,7 +868,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # <proxy>/<route> and the Worker puts the key at that route's one header / path /
 # query spot and forwards. The session covers only the routes [keys.env] uses
 # that the key's CLIENTS entry allows (empty routes = none).
-# docs/sealed-keys-2026-10-09.md · docs/cloudflare-secrets-setup.html · tengu keys --help
+# docs/sealed-keys.md · docs/cloudflare-secrets-setup.html · tengu keys --help
 
 # [keys]
 # proxy = "https://tengu-seal.<subdomain>.workers.dev"   # Worker origin (allow_hosts must admit it)
@@ -931,7 +931,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }  # $VAR resolved from the environment
 # # auth = { type = "bearer", token = "$MCP_TOKEN" }   # http transport only
 
-# --- A2A: talk to other agent harnesses (docs/a2a-2026-10-10.md) -------------
+# --- A2A: talk to other agent harnesses (docs/a2a.md) -------------
 # Client: the opt-in `a2a` tool reaches only these remotes (JSON-RPC 1.0 / 0.3,
 # HTTP+JSON 1.0); a card naming another host is refused. List `a2a` in an
 # agent's `tools` and scope it. Server: `tengu a2a serve --sandbox <s>` serves

@@ -3,7 +3,7 @@
 //! action history a decision loop feeds back into the next call's state, and
 //! the `Verdict` of a terminal-only loop (the backtest gate arm).
 //!
-//! Wire shapes were probed live on 2026-09-24 (`docs/lping-2026-09-24.md`):
+//! Wire shapes were probed live on 2026-09-24 (`docs/lping.md`):
 //! `choice` takes `criteria` as a `{label: description}` map, `score` takes
 //! `criteria` as `[{score, description}]`, `noul` takes instructions only.
 //! Answers carry `probabilities` + `confidence` for choice/score. A

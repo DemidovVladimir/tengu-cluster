@@ -60,7 +60,7 @@
   <rect x="0" y="0" width="1200" height="4786" fill="#ffffff" />
 
   <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response, and what runs without one</text>
-  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-13 · companion to docs/architecture-2026-04-27.md and .html · section 7: lineage, rankings, sources, SOE · 8: trace + Studio · 9: builder + Codex · 10: A2A · 11: seal proxy</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-13 · companion to docs/architecture.md and .html · section 7: lineage, rankings, sources, SOE · 8: trace + Studio · 9: builder + Codex · 10: A2A · 11: seal proxy</text>
 
   <g transform="translate(20, 56)">
     <rect width="1160" height="50" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
@@ -487,7 +487,7 @@
   <text x="20" y="1966" class="h2">section 5 - other flows - no user message: tengu run and tengu backtest</text>
   <line x1="20" y1="1972" x2="1180" y2="1972" stroke="#cbd5e1" />
 
-  <text x="20" y="1996" class="h3">A. tengu run --sandbox &lt;s&gt;  -  feed → tool → store → loop → exec tool → gate → ledger     (docs/runtime-2026-09-30.md)</text>
+  <text x="20" y="1996" class="h3">A. tengu run --sandbox &lt;s&gt;  -  feed → tool → store → loop → exec tool → gate → ledger     (docs/runtime.md)</text>
 
   <g transform="translate(20, 2008)">
     <rect width="145" height="100" rx="6" class="lane-orch" />
@@ -854,7 +854,7 @@
   <text x="20" y="3088" class="h2">section 7 - research lineage, rankings, sources, SOE - 2026-10-06 → 2026-10-09</text>
   <line x1="20" y1="3094" x2="1180" y2="3094" stroke="#cbd5e1" />
 
-  <text x="20" y="3118" class="h3">C. tengu ranking run --sandbox &lt;s&gt;  -  sealed contract → date → lease → backtests → rank → publish     (docs/strategy-ranking-automation-2026-10-08.md)</text>
+  <text x="20" y="3118" class="h3">C. tengu ranking run --sandbox &lt;s&gt;  -  sealed contract → date → lease → backtests → rank → publish     (docs/ranking.md)</text>
 
   <g transform="translate(20, 3130)">
     <rect width="173" height="100" rx="6" class="lane-orch" />
@@ -1084,7 +1084,7 @@
     <text x="10" y="176" class="small">write_file, list_directory · scenarios/*.json</text>
     <text x="10" y="196" class="small">editor (ST-40): built 2026-10-10 as the</text>
     <text x="10" y="208" class="small">Studio builder (section 9)</text>
-    <text x="10" y="244" class="small" font-style="italic">runbook: docs/control-loop-lab-2026-10-08.md</text>
+    <text x="10" y="244" class="small" font-style="italic">runbook: docs/control-loop-lab.md</text>
   </g>
 
   <!-- ===================== SECTION 9 — Studio builder + Codex engine ===================== -->
@@ -1153,7 +1153,7 @@
     <text x="10" y="108" class="small">· OpenAI (subscription) · local model</text>
     <text x="10" y="128" class="small">secrets: vault · env · Cloudflare seal</text>
     <text x="10" y="140" class="small">proxy (writes [keys] + [keys.env]; section 11)</text>
-    <text x="10" y="244" class="small" font-style="italic">doc: docs/studio-builder-2026-10-10.md</text>
+    <text x="10" y="244" class="small" font-style="italic">doc: docs/builder.md</text>
   </g>
 
 
@@ -1218,7 +1218,7 @@
     <text x="10" y="116" class="file">tests/a2a_e2e.rs · conformance · matrix</text>
     <text x="10" y="128" class="small">two tengu processes; every engine leg;</text>
     <text x="10" y="140" class="small">official a2a-sdk interop both ways</text>
-    <text x="10" y="188" class="small" font-style="italic">doc: docs/a2a-2026-10-10.md</text>
+    <text x="10" y="188" class="small" font-style="italic">doc: docs/a2a.md</text>
   </g>
 
   <!-- ===================== SECTION 11 — seal proxy + Privy Solana signing ===================== -->
@@ -1284,7 +1284,7 @@
     <text x="10" y="96" class="small">OpenRouter only through the Worker</text>
     <text x="10" y="116" class="file">docs/cloudflare-secrets-setup.html</text>
     <text x="10" y="128" class="small">account, deploy, CLIENTS, secrets, revoke</text>
-    <text x="10" y="188" class="small" font-style="italic">doc: docs/sealed-keys-2026-10-09.md</text>
+    <text x="10" y="188" class="small" font-style="italic">doc: docs/sealed-keys.md</text>
   </g>
 
   <g transform="translate(20, 4658)">

@@ -1,4 +1,4 @@
-//! `tengu lineage verify` (`docs/lineage-2026-10-06.md` § 2): is the registry
+//! `tengu lineage verify` (`docs/lineage.md` § 2): is the registry
 //! consistent, is W1 unchanged, is the evidence intact. IO through
 //! `ports/lineage.rs`; any `Error` finding fails the command.
 //!

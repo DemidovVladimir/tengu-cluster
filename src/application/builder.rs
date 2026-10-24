@@ -1,4 +1,4 @@
-//! Studio builder use cases (`docs/studio-builder-2026-10-10.md`): the page
+//! Studio builder use cases (`docs/builder.md`): the page
 //! state, autosave + check, preview and Finalise of one sandbox, and the
 //! sandbox a template starts (`tengu sandbox new`). Rust decides every
 //! verdict; the page draws it.

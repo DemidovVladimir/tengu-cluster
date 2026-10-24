@@ -1,5 +1,5 @@
 //! `tengu lineage …` — the lineage registry's checks and views
-//! (`docs/lineage-2026-10-06.md` § 5). No sandbox config, no secrets: it
+//! (`docs/lineage.md` § 5). No sandbox config, no secrets: it
 //! reads the registry (`--registry`, default `lineage` under the cwd), the
 //! repo around it (`sandboxes/`, `skills/`, `repo:` files) and
 //! `<TENGU_HOME>/state` read-only; only `seal` writes (one row appended to

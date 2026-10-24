@@ -1,5 +1,5 @@
 //! `FsVault` — `ports::evidence::Vault` over `<TENGU_HOME>/state/evidence/<vault>/`
-//! (`docs/lineage-2026-10-06.md` § 3). The vault dir is created once
+//! (`docs/lineage.md` § 3). The vault dir is created once
 //! (`create_dir`, never over an existing one); files are copied with
 //! `std::fs::copy` (APFS: `clonefile`, no extra disk), each copy hashed and
 //! checked equal to its source's hash; `seal` clears every write bit.

@@ -240,7 +240,7 @@
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="172" cy="14" r="4" class="added" /><text x="182" y="18" class="body">tengu run: feeds · lease · heartbeat</text>
     <circle cx="172" cy="32" r="4" class="added" /><text x="182" y="36" class="body">doctor --live · graceful drain</text>
-    <text x="172" y="52" class="small">docs/runtime-2026-09-30.md</text>
+    <text x="172" y="52" class="small">docs/runtime.md</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">built-in cron scheduler (§ Tools)</text>
     <circle cx="439" cy="32" r="4" class="unk" /><text x="449" y="36" class="body">decision model: not covered</text>

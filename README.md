@@ -7,17 +7,17 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | Orchestrated chat: planner → `tengu run-agent` subagents | `tengu chat` / `telegram` / `webhooks` | § Orchestration |
 | Four engines — `openrouter`, `local`, `claude_code`, `codex` (ChatGPT subscription) — every tool under each (schema lint, bridge conformance, live engine matrix; the live `local` legs (operator's PC) and the live `codex` legs still to run) | `[agents.<a>] engine` | § Engines, `docs/engine-backends.md` |
 | 51 catalog tools (52 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
-| Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loop-plan-2026-09-24.md` |
-| Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime-2026-09-30.md` |
-| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); the drag-and-drop **builder** (`tengu sandbox new`, `--allow-edit`) composes a sandbox on a canvas and writes its `config.toml` | `tengu studio` (default build), `tengu studio graph`, `tengu sandbox new`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md`, `docs/studio-builder-2026-10-10.md`, `docs/control-loop-lab-2026-10-08.md` |
-| Execution trace: one JSONL file per recording (`tengu run`, `tengu decide`, `tengu webhooks`, Studio; chat / telegram / eval plans with `[orchestrator]`), correlated events, redacted + bounded payloads | `tengu trace runs` · `show` | `docs/runtime-2026-09-30.md` § Trace |
-| A2A (Agent2Agent 1.0.1): agents call other agent harnesses; other harnesses call this sandbox's planner / chosen agents (JSON-RPC 1.0 + 0.3, SSE, bearer token) | tool `a2a`, `tengu a2a serve` (default build), sandbox `a2a-lab` | `docs/a2a-2026-10-10.md` |
-| Seal proxy: provider keys live only as secrets of the `tengu-seal` Cloudflare Worker; tengu calls them through a route-scoped ssh-agent session; the Solana write tools sign with a Privy wallet through it. Worker not deployed yet (operator step) | `[keys]` / `[keys.env]`, `tengu keys`, `[solana] privy_wallet_id`, sandbox `sealed-check` | `docs/sealed-keys-2026-10-09.md`, `docs/cloudflare-secrets-setup.html`, `docs/sealed-check-2026-10-09.md` |
+| Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loops.md` |
+| Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime.md` |
+| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); the drag-and-drop **builder** (`tengu sandbox new`, `--allow-edit`) composes a sandbox on a canvas and writes its `config.toml` | `tengu studio` (default build), `tengu studio graph`, `tengu sandbox new`, sandbox `control-loop-lab` | `docs/studio.md`, `docs/builder.md`, `docs/control-loop-lab.md` |
+| Execution trace: one JSONL file per recording (`tengu run`, `tengu decide`, `tengu webhooks`, Studio; chat / telegram / eval plans with `[orchestrator]`), correlated events, redacted + bounded payloads | `tengu trace runs` · `show` | `docs/runtime.md` § Trace |
+| A2A (Agent2Agent 1.0.1): agents call other agent harnesses; other harnesses call this sandbox's planner / chosen agents (JSON-RPC 1.0 + 0.3, SSE, bearer token) | tool `a2a`, `tengu a2a serve` (default build), sandbox `a2a-lab` | `docs/a2a.md` |
+| Seal proxy: provider keys live only as secrets of the `tengu-seal` Cloudflare Worker; tengu calls them through a route-scoped ssh-agent session; the Solana write tools sign with a Privy wallet through it. Worker not deployed yet (operator step) | `[keys]` / `[keys.env]`, `tengu keys`, `[solana] privy_wallet_id`, sandbox `sealed-check` | `docs/sealed-keys.md`, `docs/cloudflare-secrets-setup.html`, `docs/sealed-check.md` |
 | Paper desk: `[risk]` gate inside every order tool, paper ledger, kill switch, exit rules, weekend fade | sandboxes `xmarket`, `xmarket-weekend` | § Paper desk (xmarket) |
 | History-first research: `market.db` warehouse (+ SEC EDGAR filing events), strategy specs, deterministic backtests, Jev replayed on history | `tengu history`, `tengu backtest`, sandboxes `xlab` (W1), `xlab-w2` | § History-first research (xlab) |
-| Research lineage: `lineage/` registry (one TOML per record), generation W1 frozen + bound by `[generation]`, read-only evidence vault, forward grading | `tengu lineage`, `tengu evidence` | `docs/lineage-2026-10-06.md` |
-| Scheduled strategy ranking: sealed contracts, deterministic ranker + publisher, no LLM | `tengu ranking`, tool `strategy_ranking`, `tengu run --sandbox xlab-w2` | `docs/strategy-ranking-automation-2026-10-08.md` |
-| Source evidence (SOE O2): SEC EDGAR + EU TED records with provenance in `sources.db`, as-of view without lookahead | `tengu sources`, tool `source_evidence`, sandbox `soe` | `docs/source-evidence-2026-10-08.md` |
+| Research lineage: `lineage/` registry (one TOML per record), generation W1 frozen + bound by `[generation]`, read-only evidence vault, forward grading | `tengu lineage`, `tengu evidence` | `docs/lineage.md` |
+| Scheduled strategy ranking: sealed contracts, deterministic ranker + publisher, no LLM | `tengu ranking`, tool `strategy_ranking`, `tengu run --sandbox xlab-w2` | `docs/ranking.md` |
+| Source evidence (SOE O2): SEC EDGAR + EU TED records with provenance in `sources.db`, as-of view without lookahead | `tengu sources`, tool `source_evidence`, sandbox `soe` | `docs/source-evidence.md` |
 | Software Opportunity Engine (O0–O4): offline checks (scenarios, hard gates, rank keys on a signed private profile); the weekly cycle (Architect + Critic stage agents write drafts through tools, the pure domain decides, frozen run dirs), replay with counted holdout reads, grades, forecast resolution, the Operator Review #2 packet — no contact, spend, publish or deploy | `tengu soe`, tools `soe_view` / `soe_propose` / `soe_challenge`, feed `kind = "job"` (`soe_cycle`), sandbox `soe` | `docs/soe-2026-10-08.md` |
 
 ## Prerequisites
@@ -158,8 +158,8 @@ Paper only — no key, no order leaves the process. The `[risk]` gate runs insid
 
 | Sandbox | Runs | Runbook |
 |---|---|---|
-| `xmarket` (M0) | `tengu run --sandbox xmarket`: HL contexts + a starter set of books recorded, exit rules every 15 s, daily risk roll; no planner: `xm_architect` default + routable (read-only, Claude CLI Opus), private `xm_executor` (Claude CLI Sonnet). Entries wait for later tracker items | top of `sandboxes/xmarket/config.toml`; `docs/runtime-2026-09-30.md` § xmarket sandbox |
-| `xmarket-weekend` | `tengu run --sandbox xmarket-weekend`: rule W (weekend fade) on 75 Hyperliquid xyz stock perps — capped + shadow ledgers, no LLM, no Jev; bound to W1 (`[generation]`) | top of `sandboxes/xmarket-weekend/config.toml`; `docs/runtime-2026-09-30.md` § Weekend run; `docs/forward-evidence-runbook-2026-10-08.md` |
+| `xmarket` (M0) | `tengu run --sandbox xmarket`: HL contexts + a starter set of books recorded, exit rules every 15 s, daily risk roll; no planner: `xm_architect` default + routable (read-only, Claude CLI Opus), private `xm_executor` (Claude CLI Sonnet). Entries wait for later tracker items | top of `sandboxes/xmarket/config.toml`; `docs/runtime.md` § xmarket sandbox |
+| `xmarket-weekend` | `tengu run --sandbox xmarket-weekend`: rule W (weekend fade) on 75 Hyperliquid xyz stock perps — capped + shadow ledgers, no LLM, no Jev; bound to W1 (`[generation]`) | top of `sandboxes/xmarket-weekend/config.toml`; `docs/runtime.md` § Weekend run; `docs/forward-evidence-runbook-2026-10-08.md` |
 
 | Operator action | Command |
 |---|---|
@@ -168,7 +168,7 @@ Paper only — no key, no order leaves the process. The `[risk]` gate runs insid
 | Halt | `touch <kill_switch_file>` or `tengu risk halt --sandbox <s>` (TTY) |
 | Resume | remove the kill-switch file, then `tengu risk resume --sandbox <s>` (TTY; type the account name) |
 
-Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper-2026-09-30.md`. Plan and backlog: `docs/xmarket-tracker-2026-09-29.md` § 0.
+Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper.md`. Plan and backlog: `docs/xmarket-tracker.md` § 0.
 
 ## Orchestration
 
@@ -200,7 +200,7 @@ export TENGU_MEMORY_DATABASE_URL=postgres://tengu:tengu@localhost:5432/tengu_mem
 cargo run --features postgres_memory -- chat --sandbox lping
 ```
 
-Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embedding-3-small`); the `compile_wiki` operation builds the Karpathy LLM Wiki. To check a write landed, query Postgres directly via `TENGU_MEMORY_DATABASE_URL`. Spec: `docs/agentic-memory-prd-2026-05-13.md`, `-implementation-`, `-examples-`.
+Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embedding-3-small`); the `compile_wiki` operation builds the Karpathy LLM Wiki. To check a write landed, query Postgres directly via `TENGU_MEMORY_DATABASE_URL`. Spec: `docs/memory-prd.md`, `-implementation-`, `-examples-`.
 
 ### Webhooks
 
@@ -208,7 +208,7 @@ Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embeddin
 cargo run -- webhooks --sandbox lping
 ```
 
-`[webhooks.endpoints.<name>]` blocks bind `/webhooks/<name>` to the planner (`agent` is informational) or a decision loop (`loop = "<name>"`). Operator doc: `docs/webhooks-2026-05-11.md`.
+`[webhooks.endpoints.<name>]` blocks bind `/webhooks/<name>` to the planner (`agent` is informational) or a decision loop (`loop = "<name>"`). Operator doc: `docs/webhooks.md`.
 
 ## Engines
 
@@ -241,7 +241,7 @@ One `catalog()` row per always-on group or opt-in name (`src/adapters/outbound/t
 | soe (weekly cycle stages) | `soe_view` (read a run: head, packet, candidates, proposals, challenges, history); `soe_propose` (Architect draft), `soe_challenge` (Critic draft) — into the open run dir only, through `application::soe::submit` | opt-in; state root = the `[sources]` state dir; with `[soe]`: `soe_propose` only as `[soe] architect`, `soe_challenge` only as `[soe] critic` |
 | a2a | `a2a` (`list` / `card` / `send` / `get` / `cancel` on another agent harness) | opt-in; only `[a2a.remotes.<name>]` hosts (+ the scope's `net_hosts`) |
 
-Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, keys, TTLs: `docs/typed-observations-2026-09-24.md`.
+Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, keys, TTLs: `docs/observations.md`.
 
 ## Feature flags
 
@@ -269,12 +269,12 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 
 | Sandbox | Network | Purpose |
 |---|---|---|
-| `a2a-lab` | `open` | A2A both ways on one machine: `tengu a2a serve` serves the planner + `helper`; `liaison` calls it back with the `a2a` tool (remote `self`) — header of `sandboxes/a2a-lab/config.toml`, `docs/a2a-2026-10-10.md` |
-| `control-loop-lab` | `open` (Jev only; no tool host) | Safe reference run of the control loop (tick → Jev → tool → audit → health): one loop `demo`, feeds `tick` + `probe`, private agent `lab` with `read_file` / `write_file` / `list_directory` inside `~/tengu-lab/control-loop-lab`; `[studio] control = true` — runbook `docs/control-loop-lab-2026-10-08.md` |
+| `a2a-lab` | `open` | A2A both ways on one machine: `tengu a2a serve` serves the planner + `helper`; `liaison` calls it back with the `a2a` tool (remote `self`) — header of `sandboxes/a2a-lab/config.toml`, `docs/a2a.md` |
+| `control-loop-lab` | `open` (Jev only; no tool host) | Safe reference run of the control loop (tick → Jev → tool → audit → health): one loop `demo`, feeds `tick` + `probe`, private agent `lab` with `read_file` / `write_file` / `list_directory` inside `~/tengu-lab/control-loop-lab`; `[studio] control = true` — runbook `docs/control-loop-lab.md` |
 | `jev-exec` | `open` | Experiment: a Claude Code architect (built-ins off, only `run_command` → `tengu`) drives Jev through `tengu decide --loop executor` |
-| `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch`, `hedge_exec`, `lp_exec` over 11 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
-| `sealed-check` | `open`, `allow_hosts = ["127.0.0.1", "*.workers.dev"]` (Jev via the seal proxy only) | Proves the seal proxy end to end: Jev, loop `check`, `tengu run`, Studio (`--allow-control`) reach OpenRouter only through the `tengu-seal` Worker; one tool `hex_to_uint256` (deny-all scope), own root `~/tengu-sealed-check` — runbook `docs/sealed-check-2026-10-09.md` |
-| `soe` | `open`, `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]` | Software Opportunity Engine — source layer (O2) + weekly cycle (O3): `[sources]` registry `sec_edgar`, `ted_search` (both ship `enabled = false` until the operator's reviewed terms); read-only `soe_reader` (`source_evidence` only); `[soe]` stage agents `soe_architect` · `soe_critic` (`claude_code`, built-ins off) and the `soe_week` job; closed world, bound to SOE-G0 — `docs/source-evidence-2026-10-08.md`, `docs/soe-2026-10-08.md` |
+| `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch`, `hedge_exec`, `lp_exec` over 11 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping.md` |
+| `sealed-check` | `open`, `allow_hosts = ["127.0.0.1", "*.workers.dev"]` (Jev via the seal proxy only) | Proves the seal proxy end to end: Jev, loop `check`, `tengu run`, Studio (`--allow-control`) reach OpenRouter only through the `tengu-seal` Worker; one tool `hex_to_uint256` (deny-all scope), own root `~/tengu-sealed-check` — runbook `docs/sealed-check.md` |
+| `soe` | `open`, `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]` | Software Opportunity Engine — source layer (O2) + weekly cycle (O3): `[sources]` registry `sec_edgar`, `ted_search` (both ship `enabled = false` until the operator's reviewed terms); read-only `soe_reader` (`source_evidence` only); `[soe]` stage agents `soe_architect` · `soe_critic` (`claude_code`, built-ins off) and the `soe_week` job; closed world, bound to SOE-G0 — `docs/source-evidence.md`, `docs/soe-2026-10-08.md` |
 | `storage-test` | tor | `persistent_store` file storage + vector indexing; agent `storage` (`claude_code`, skill `telegram-rag-ingest`) |
 | `tor-check` | tor | Minimal probe of the egress path over Tor (Arti + lyrebird-rs) |
 | `unlimited` | `open` | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |
@@ -282,7 +282,7 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 | `xmarket` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Paper desk stage M0 ($100 `[risk]` budget) — § Paper desk |
 | `xmarket-weekend` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Rule W weekend run, floor profile (no LLM, no Jev); bound to W1 — § Paper desk |
 | `xlab` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]` | History-first harness (operator PRD v0.5); bound to W1 — § History-first research |
-| `xlab-w2` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com", "www.sec.gov", "data.sec.gov"]` | W2 research: `xlab` without the W1 binding, same state dir; + SEC EDGAR events, + `[strategy_ranking]` contracts `rank.xlab-w2.daily.v1`, `rank.xlab-w2.weekend.v1` (committed unsealed: nothing publishes until `tengu lineage seal ranking:<id>`) run by `[feeds.*]` under `tengu run`, private agent `xl_ranker` — `docs/strategy-ranking-automation-2026-10-08.md` |
+| `xlab-w2` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com", "www.sec.gov", "data.sec.gov"]` | W2 research: `xlab` without the W1 binding, same state dir; + SEC EDGAR events, + `[strategy_ranking]` contracts `rank.xlab-w2.daily.v1`, `rank.xlab-w2.weekend.v1` (committed unsealed: nothing publishes until `tengu lineage seal ranking:<id>`) run by `[feeds.*]` under `tengu run`, private agent `xl_ranker` — `docs/ranking.md` |
 
 The `open` market sandboxes stay switchable to Tor: every transport goes through `egress.rs`.
 
@@ -351,11 +351,11 @@ Restart=on-failure
 | `[scaffold]` | workspace root, directories and seed files `tengu telegram` creates at start |
 | `[claude_code]` | `cli_path`, `timeout_secs` |
 | `[default_scopes.<tool>]` | per-tool fallback scope (`fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`); an agent's own `scopes.<tool>` replaces it wholesale |
-| `[egress]` | `network = "tor"` (default) or `"open"`, proxy, host ceiling, shell isolation, JSONL audit — `docs/egress-2026-09-16.md` |
+| `[egress]` | `network = "tor"` (default) or `"open"`, proxy, host ceiling, shell isolation, JSONL audit — `docs/egress.md` |
 | `[[mcp_servers]]` | external MCP servers; tools appear as `<server>__<tool>` |
 | `[solana]` | `privy_wallet_id` — the Privy wallet the Solana write tools' `mode = "send"` signs with, through the seal proxy (`[keys]`); hardens the sandbox |
-| `[keys]` (+ `.env`) | seal proxy: `proxy` (Worker origin), `client`, `agent_socket`, `strip` (local key copies removed at load); `[keys.env]` = env var → `<route>[/path][?query]` or `@session` — `docs/sealed-keys-2026-10-09.md` |
-| `[a2a]` (`.remotes.<name>`, `.server`) | remote agent harnesses the `a2a` tool may call · what `tengu a2a serve` exposes (bind, token, planner, agents, limits) — `docs/a2a-2026-10-10.md` |
+| `[keys]` (+ `.env`) | seal proxy: `proxy` (Worker origin), `client`, `agent_socket`, `strip` (local key copies removed at load); `[keys.env]` = env var → `<route>[/path][?query]` or `@session` — `docs/sealed-keys.md` |
+| `[a2a]` (`.remotes.<name>`, `.server`) | remote agent harnesses the `a2a` tool may call · what `tengu a2a serve` exposes (bind, token, planner, agents, limits) — `docs/a2a.md` |
 | `[xmarket]` (+ `.calendars.<id>`, `.weekend_fade`) | state dir `<TENGU_HOME>/state/<state>`, session calendars, rule W |
 | `[risk]` (+ `.exits`, `.max_data_age_ms`) · `[paper]` | every limit of the gate inside the exec tools (all required) · the paper fill engine |
 | `[rate_limits.<name>]` | request budgets (`hyperliquid`, `geckoterminal`, `sec`, `ted`) |
@@ -363,7 +363,7 @@ Restart=on-failure
 | `[recorder]` | observation history into `<state dir>/history/<YYYYMMDD>.db` |
 | `[backtest]` (+ `.costs`, `.universes`, `.strategies`, `.splits`; `notional_usd`, `bootstrap`, `seed`, `gate`, `max_candidates`, `keep_runs`) | xlab: costs per id prefix, universes, the strategy library, share splits, the Jev gate loop, run guards |
 | `[feeds.<n>]` | scheduled work of `tengu run`: `kind = "tool"` / `"tick"` / `"job"` (a named application job: `soe_cycle`) on `every_secs` / `windows` / `at` |
-| `[generation]` | `id`, `registry` (relative to the config file): binds the sandbox to a frozen lineage generation — every load checks its tools, feeds, loop actions, strategy kinds and `config:` / `spec:` pins (a drifted pin fails it); `xlab`, `xmarket-weekend` = W1 — `docs/lineage-2026-10-06.md` § 4 |
+| `[generation]` | `id`, `registry` (relative to the config file): binds the sandbox to a frozen lineage generation — every load checks its tools, feeds, loop actions, strategy kinds and `config:` / `spec:` pins (a drifted pin fails it); `xlab`, `xmarket-weekend` = W1 — `docs/lineage.md` § 4 |
 | `[strategy_ranking]` | `registry`, `contracts` (`<registry>/rankings/<id>.toml`): the ranking contracts `tengu ranking` and the `strategy_ranking` tool run (`xlab-w2`) |
 | `[sources]` (+ `.registry.<id>`) | `state` (`<TENGU_HOME>/state/<state>/sources.db`) and one row per approved source (`sec_edgar`, `ted_search`): hosts, auth, rate limit, retention, reviewed terms (`soe`) |
 | `[soe]` | `architect`, `critic`, `max_proposals`, `forecast_max_weeks` (+ optional `token_prices`): the weekly cycle's stage agents and limits; closed world — tools inside `SOE_ALLOWED`, only `kind = "job"` feeds, no loops, `[risk]`, `[xmarket]`, signer, Telegram or webhooks; hardened (`soe`) |
@@ -379,31 +379,31 @@ Restart=on-failure
 | `docs/tutorial/index.html` | Visual tutorial: one animated page per feature, built from the code; every code change updates its pages (`docs/tutorial/sources.toml`, `cargo test --test tutorial_map`, `docs/tutorial/AUTHORING.md`) |
 | `docs/archive/2026-10/changes-2026-09-29-to-10-02.html` | What changed 2026-09-29 → 2026-10-02 |
 | `docs/archive/2026-10/xmarket-2026-10-02.html` · `docs/archive/2026-10/xlab-2026-10-02.html` | xmarket paper desk · xlab history-first harness (visual) |
-| `docs/architecture-2026-04-27.md` (+ `.svg`, `.html`) | **Canonical** — seven steps from prompt to reply, file map per subsystem |
+| `docs/architecture.md` (+ `.svg`, `.html`) | **Canonical** — seven steps from prompt to reply, file map per subsystem |
 | `docs/code-map.md` · `docs/code-map.html` | Where every file lives + how to add tools / engines / config / channels |
 | `docs/SESSION_HANDOFF.md` | Running state log, open items, gotchas |
 | `docs/configuration.md` · `docs/tools.md` · `docs/skills.md` | Config schema + env vars · tools · skills |
 | `docs/engine-backends.md` · `docs/mcp-bridge.md` | Engines (`openrouter`, `local`, `claude_code`, `codex`) + engine matrix · the MCP bridge the CLI engines use |
-| `docs/egress-2026-09-16.md` · `docs/webhooks-2026-05-11.md` | Tor / host allowlist / audit · webhook listener |
-| `docs/context-management-2026-04-27.md` (+ `.svg`, `.html`) | Every mechanism that shapes what an LLM sees |
-| `docs/agentic-memory-*-2026-05-13.md` | Open Brain + LLM Wiki spec |
-| `docs/typed-observations-2026-09-24.md` | Observation envelope, cache, recorder; Solana, Hyperliquid, xm, xlab rows |
-| `docs/decision-loop-plan-2026-09-24.md` · `docs/lping-2026-09-24.md` | Jev decision loops · the lping sandbox |
-| `docs/runtime-2026-09-30.md` | `tengu run`: lease, feeds, health, state layout, the xmarket sandboxes |
-| `docs/xmarket-prd-2026-09-29.md` · `docs/xmarket-tracker-2026-09-29.md` · `docs/archive/2026-09/xmarket-gaps-2026-09-29.md` | xmarket PRD (+ operator addendum) · tracker (§ 0 rules, W1 notes, backlog) · per-item detail |
+| `docs/egress.md` · `docs/webhooks.md` | Tor / host allowlist / audit · webhook listener |
+| `docs/context.md` (+ `.svg`, `.html`) | Every mechanism that shapes what an LLM sees |
+| `docs/memory-*.md` | Open Brain + LLM Wiki spec |
+| `docs/observations.md` | Observation envelope, cache, recorder; Solana, Hyperliquid, xm, xlab rows |
+| `docs/decision-loops.md` · `docs/lping.md` | Jev decision loops · the lping sandbox |
+| `docs/runtime.md` | `tengu run`: lease, feeds, health, state layout, the xmarket sandboxes |
+| `docs/xmarket-prd-2026-09-29.md` · `docs/xmarket-tracker.md` · `docs/archive/2026-09/xmarket-gaps-2026-09-29.md` | xmarket PRD (+ operator addendum) · tracker (§ 0 rules, W1 notes, backlog) · per-item detail |
 | `docs/archive/2026-09/xmarket-build-plan-2026-09-30.md` · `docs/xmarket-feasibility-2026-09-30.md` | Waves, gates, engine matrix · edge evidence after costs |
-| `docs/xmarket-risk-paper-2026-09-30.md` | `[risk]` gate, paper ledger, exits, weekend fade, halts, `tengu risk` |
+| `docs/xmarket-risk-paper.md` | `[risk]` gate, paper ledger, exits, weekend fade, halts, `tengu risk` |
 | `docs/xlab-2026-10-01.md` | xlab: `market.db`, spec DSL, backtest engine, Jev gate arm, tools, results |
 | `docs/plans/TENGU_HANDOFF.md` · `docs/plans/TENGU_ROADMAP.md` | Operator intent: W1 → W2 → evolution, gated phases, operator reviews |
-| `docs/lineage-2026-10-06.md` | `lineage/` registry, `tengu evidence` (vault, grade, regrade), `tengu lineage`, `[generation]` binding |
-| `docs/w1-review-2026-10-06.md` · `docs/p{6,7,8,9,10}-*-2026-10-08.md` | Operator Review #1 (verdict APPROVE) · Phases 6–11 reports (no W2 candidate built; W1 kept) |
+| `docs/lineage.md` | `lineage/` registry, `tengu evidence` (vault, grade, regrade), `tengu lineage`, `[generation]` binding |
+| `docs/archive/2026-10/w1-review-2026-10-06.md` · `docs/p{6,7,8,9,10}-*-2026-10-08.md` | Operator Review #1 (verdict APPROVE) · Phases 6–11 reports (no W2 candidate built; W1 kept) |
 | `docs/forward-evidence-runbook-2026-10-08.md` | Rule W forward weekend #2: start, stop, snapshot, grade, regrade |
-| `docs/strategy-ranking-automation-2026-10-08.md` | Scheduled strategy ranking: contracts, ranker, publisher, `tengu ranking`, xlab-w2 feeds |
-| `docs/soe-2026-10-08.md` · `docs/source-evidence-2026-10-08.md` | Software Opportunity Engine contract, `tengu soe`, the weekly cycle, replay, grades, the Review #2 packet · the source layer (SEC EDGAR, EU TED, as-of view, `tengu sources`) |
-| `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` · `docs/plans/TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-90; ST-50 = the builder) |
-| `docs/studio-builder-2026-10-10.md` · `docs/studio-editor-design-2026-10-08.md` | Studio builder (`tengu sandbox new`, `--allow-edit`: cards → TOML, wires, secret stores, Finalise) · its design (ST-40; built as the builder after the operator's 2026-10-10 request) |
-| `docs/a2a-2026-10-10.md` | A2A: the `a2a` tool, `tengu a2a serve`, `[a2a]`, interop, `sandboxes/a2a-lab` |
-| `docs/sealed-keys-2026-10-09.md` · `docs/cloudflare-secrets-setup.html` · `docs/sealed-check-2026-10-09.md` | Seal proxy: Worker, routes, clients, sessions, `[keys]`, `tengu keys` · the operator's step-by-step setup (deploy, secrets, `[keys]`) · the `sealed-check` proof runbook |
+| `docs/ranking.md` | Scheduled strategy ranking: contracts, ranker, publisher, `tengu ranking`, xlab-w2 feeds |
+| `docs/soe-2026-10-08.md` · `docs/source-evidence.md` | Software Opportunity Engine contract, `tengu soe`, the weekly cycle, replay, grades, the Review #2 packet · the source layer (SEC EDGAR, EU TED, as-of view, `tengu sources`) |
+| `docs/studio.md` · `docs/control-loop-lab.md` · `docs/plans/TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-90; ST-50 = the builder) |
+| `docs/builder.md` · `docs/archive/2026-10/studio-editor-design-2026-10-08.md` | Studio builder (`tengu sandbox new`, `--allow-edit`: cards → TOML, wires, secret stores, Finalise) · its design (ST-40; built as the builder after the operator's 2026-10-10 request) |
+| `docs/a2a.md` | A2A: the `a2a` tool, `tengu a2a serve`, `[a2a]`, interop, `sandboxes/a2a-lab` |
+| `docs/sealed-keys.md` · `docs/cloudflare-secrets-setup.html` · `docs/sealed-check.md` | Seal proxy: Worker, routes, clients, sessions, `[keys]`, `tengu keys` · the operator's step-by-step setup (deploy, secrets, `[keys]`) · the `sealed-check` proof runbook |
 
 ## Module map
 

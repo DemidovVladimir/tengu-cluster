@@ -1,5 +1,5 @@
 //! Ranking contract — `lineage/rankings/<id>.toml`
-//! (`docs/strategy-ranking-automation-2026-10-08.md` SR-1): the preregistered
+//! (`docs/ranking.md` SR-1): the preregistered
 //! policy a strategy ranking follows — which strategies, which runs compare
 //! (cohort), who is eligible, how rows are rated and ordered (ascending:
 //! weakest first). Sealed with `tengu lineage seal ranking:<id>` before any

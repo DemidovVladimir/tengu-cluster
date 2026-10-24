@@ -1,7 +1,7 @@
 # Tengu Cluster — Docker Compose (base file: tengu + optional Postgres)
 #
 # Usage (prefer the Makefile — it picks the right file set):
-#   make up                     # ./config.toml; Tor unless its [egress] network = "open" (docs/egress-2026-09-16.md)
+#   make up                     # ./config.toml; Tor unless its [egress] network = "open" (docs/egress.md)
 #   make up SANDBOX=unlimited   # sandboxes/unlimited/config.toml instead, mounted at its own path (TENGU_CONFIG_FILE / TENGU_CONTAINER_CONFIG below)
 #   make up-memory              # + Postgres/pgvector (image built with postgres_memory)
 #   docker compose --profile postgres-memory up -d postgres-memory   # DB only (native binary)

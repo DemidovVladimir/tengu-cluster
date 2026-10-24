@@ -300,7 +300,7 @@ impl Case {
         self
     }
     /// Solana tools: store, mock RPC host, `SOLANA_RPC_URL` → the mock
-    /// (`docs/typed-observations-2026-09-24.md`).
+    /// (`docs/observations.md`).
     fn solana(self) -> Self {
         self.scoped("SOLANA_RPC_URL")
     }

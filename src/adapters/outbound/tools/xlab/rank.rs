@@ -1,5 +1,5 @@
 //! `strategy_ranking` — strategy rankings of a `[strategy_ranking]` sandbox
-//! (`docs/strategy-ranking-automation-2026-10-08.md` SR-4): `run` one ranking
+//! (`docs/ranking.md` SR-4): `run` one ranking
 //! date of a sealed contract through the coordinator (`application/ranking/`,
 //! as `tengu ranking run` runs it), or read a published one (`latest`). No
 //! network, no LLM; xlab-w2's `[feeds.strategy_ranking_*]` call it under

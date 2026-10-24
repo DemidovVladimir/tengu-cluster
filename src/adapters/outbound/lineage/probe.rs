@@ -1,5 +1,5 @@
 //! `ContractProbe` over the repo and the tool catalog
-//! (`docs/lineage-2026-10-06.md` § 2 pin targets; hashes `domain/lineage/pins.rs`).
+//! (`docs/lineage.md` § 2 pin targets; hashes `domain/lineage/pins.rs`).
 //!
 //! | Target | Read |
 //! |---|---|

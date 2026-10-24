@@ -3,7 +3,7 @@
 > **Read this first** when touching anything that affects what an LLM sees.
 > This is the unified map. Two focused companion docs cover slices in more
 > depth: `context-cutting-flow-2026-04-27.{svg,html}` (in-turn cuts) and
-> `compression-flow-2026-04-27.{md,svg}` (durable step summarisation).
+> `compression-flow.{md,svg}` (durable step summarisation).
 
 ---
 
@@ -346,7 +346,7 @@ leak unbounded context into the CLI's model. Layer 3's `truncate_tool_result` an
 ## Layer 5 — Subagent IPC
 
 `subprocess_runner.rs`, `adapters/inbound/cli/run_agent.rs::run_agent_subprocess`, plus the
-`compress_and_store` protocol. See `compression-flow-2026-04-27.svg` for
+`compress_and_store` protocol. See `compression-flow.svg` for
 the picture.
 
 ### 20. Subprocess gets fresh context (`subprocess_runner.rs:26`)
@@ -621,9 +621,9 @@ Comparison points for future sessions:
 
 ## Companion docs
 
-- **[`context-management-2026-04-27.svg`](./context-management-2026-04-27.svg)** — the full layered diagram (this doc's picture).
+- **[`context.svg`](./context.svg)** — the full layered diagram (this doc's picture).
 - **[`tutorial/tool-loop.html`](./tutorial/tool-loop.html)** — focused view: Layer 3 (the inner tool loop), animated. Most useful when debugging something inside `collect_engine_response`.
-- **[`compression-flow-2026-04-27.{md,svg}`](./compression-flow-2026-04-27.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
+- **[`compression-flow.{md,svg}`](./compression-flow.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
 
 *Last updated 2026-10-08 (checked against the code: line refs, headings
 numbered as the summary table, recall / fencing / skill-cap / bridge-cap

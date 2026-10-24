@@ -1,6 +1,6 @@
 # Lineage — experiments, variants, Experience, capabilities, generations (2026-10-06)
 
-`docs/plans/TENGU_ROADMAP.md` P0–P5 as built: the foundation that lets Tengu prove whether its next generation (W2) is better than the current one (W1). Product intent: `docs/plans/TENGU_HANDOFF.md`. Review package: [`w1-review-2026-10-06.md`](w1-review-2026-10-06.md).
+`docs/plans/TENGU_ROADMAP.md` P0–P5 as built: the foundation that lets Tengu prove whether its next generation (W2) is better than the current one (W1). Product intent: `docs/plans/TENGU_HANDOFF.md`. Review package: [`w1-review-2026-10-06.md`](archive/2026-10/w1-review-2026-10-06.md).
 
 | Rule | Applied as |
 |---|---|
@@ -22,7 +22,7 @@
 | `families/<id>.toml` · `variants/<id>.toml` | hypothesis family · one variant (spec or hand analysis) | P3 |
 | `episodes/<id>.toml` | Experience episode | P4 |
 | `capabilities/<id>.toml` | decision-relevant capability | P5 |
-| `rankings/<id>.toml` | strategy-ranking contract: the preregistered policy a ranking follows ([`strategy-ranking-automation-2026-10-08.md`](strategy-ranking-automation-2026-10-08.md)) | SR-1 (2026-10-08) |
+| `rankings/<id>.toml` | strategy-ranking contract: the preregistered policy a ranking follows ([`ranking.md`](ranking.md)) | SR-1 (2026-10-08) |
 
 Ids `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$`; the file stem is the id. Every record: `id`, `title` (≤ 160 chars), optional `notes`. Every table `deny_unknown_fields`.
 

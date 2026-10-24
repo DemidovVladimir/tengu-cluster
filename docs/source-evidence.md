@@ -97,7 +97,7 @@ One `commit` = snapshots + records + coverage + cursor in one transaction: every
 | Coverage · cursor key | `cik:<cik10>` · newest accession (moves only when the CIK read is complete) | `query:<sha256 of the template>` · newest day read whole |
 | On failure | what was read is committed, coverage incomplete, the cursor stays; next CIK | same; later days are not read; `--from` omitted resumes after the cursor |
 
-Hosts, audit (`sec_edgar` / `ted_search`) and attribution: [`egress-2026-09-16.md`](egress-2026-09-16.md) § Source hosts.
+Hosts, audit (`sec_edgar` / `ted_search`) and attribution: [`egress.md`](egress.md) § Source hosts.
 
 ## 7. Operator CLI — `tengu sources` (`src/adapters/inbound/cli/sources.rs`)
 

@@ -1,7 +1,7 @@
 //! Decision loop — a System One model (Jev) picks the next action and its
 //! arguments; existing tools execute it. One `[decision_loops.<name>]` block
 //! per loop (`config/decision_loop.rs`); design and probes in
-//! `docs/decision-loop-plan-2026-09-24.md`.
+//! `docs/decision-loops.md`.
 //!
 //! Per incoming event, up to `max_steps` times:
 //!

@@ -9,7 +9,7 @@
 # No money, signer, memory, skills, MCP, planner, Telegram, webhooks, [generation].
 # Guard test: config::keys::tests::sealed_check_sandbox_is_harmless.
 #
-# SET-UP — runbook docs/sealed-check-2026-10-09.md (terminal + Studio, ~15 min):
+# SET-UP — runbook docs/sealed-check.md (terminal + Studio, ~15 min):
 #   1. Deploy the Worker + add its secrets: docs/cloudflare-secrets-setup.html
 #   2. Below: set [keys] proxy to your Worker origin (not a secret; commit it)
 #   3. Allow-list the agent key (`tengu keys setup`), routes must include "openrouter"

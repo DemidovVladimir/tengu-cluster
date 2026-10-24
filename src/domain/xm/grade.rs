@@ -1,4 +1,4 @@
-//! Forward grade (`tengu evidence grade`, `docs/lineage-2026-10-06.md` § 3):
+//! Forward grade (`tengu evidence grade`, `docs/lineage.md` § 3):
 //! a paper ledger's raw rows ([`LedgerRows`], read-only, any schema since
 //! binary 6fcb455) → per account the trades, totals, risk verdicts and the
 //! reconciliation checks ([`grade_account`]). Pure; the reader is

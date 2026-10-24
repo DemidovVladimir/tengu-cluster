@@ -4,8 +4,8 @@
 # with their contexts and order books recorded around it. Floor profile: no LLM,
 # no X, no Jev — `tengu run` feeds call tools directly. Paper only: no key, no
 # order leaves this Mac. Build plan § The weekend investigation sandbox; rule W:
-# docs/xmarket-risk-paper-2026-09-30.md § Weekend fade; runtime:
-# docs/runtime-2026-09-30.md § Weekend run.
+# docs/xmarket-risk-paper.md § Weekend fade; runtime:
+# docs/runtime.md § Weekend run.
 #
 # RUNBOOK — commands run from the repo root (`--sandbox` resolves
 # sandboxes/<name>/ from the cwd; the repo-root .env sets TENGU_HOME=~/.tengu). Each tengu
@@ -40,7 +40,7 @@
 #          replaced: the risk policy, kept — the shadow ledger measures every name at the 100 bps IOC
 #          bound. Until 18:10 a fill rejection that may pass later (no mid, no liquidity, a stale book,
 #          missing data) is placed again as <id>:2, <id>:3 …; an unknown OI-cap state is denied and
-#          judged again (rule W: docs/xmarket-risk-paper-2026-09-30.md § Weekend fade)
+#          judged again (rule W: docs/xmarket-risk-paper.md § Weekend fade)
 #   stop   Ctrl-C in the pane (or kill -TERM <pid>): drains ≤ 20 s, exit 0, lease released,
 #          ~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json state "stopped"
 #   P&L    sqlite3 ~/xmarket-weekend-ws/.tengu/observations.db "select body from observations where key = 'xm_weekend/1:2026-10-02'" | jq .features
@@ -69,7 +69,7 @@ enabled = false          # no LLM, no embeddings
 # Every load checks it against lineage/generations/W1.toml: the tools, feeds and
 # strategy kinds must be W1 capabilities and the pinned sections (strategies,
 # costs, risk, rule W, Jev, models) must equal their pins — a change is a new
-# generation (docs/lineage-2026-10-06.md § 4), never an edit of W1.
+# generation (docs/lineage.md § 4), never an edit of W1.
 [generation]
 id = "W1"
 registry = "../../lineage"

@@ -1,5 +1,5 @@
 //! `tengu ranking` — strategy rankings of a `[strategy_ranking]` sandbox
-//! (`docs/strategy-ranking-automation-2026-10-08.md` SR-4 / SR-5): `run` one
+//! (`docs/ranking.md` SR-4 / SR-5): `run` one
 //! ranking date of a sealed contract through the coordinator
 //! (`application/ranking/`), `show` a published one. No LLM, no network: the
 //! deterministic entry for an external cron.

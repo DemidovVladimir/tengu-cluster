@@ -2,10 +2,10 @@
 
 > **This is a focused slice — Layer 5 only.** For the full picture across
 > all 7 layers and 31 mechanisms, read
-> [`context-management-2026-04-27.md`](./context-management-2026-04-27.md)
+> [`context.md`](./context.md)
 > (or the interactive `.html`).
 >
-> Companion to `compression-flow-2026-04-27.svg`. Open both together.
+> Companion to `compression-flow.svg`. Open both together.
 >
 > **Different axis: in-turn context cutting** — see
 > `tutorial/tool-loop.html`. That page covers Layer 3 —
@@ -129,7 +129,7 @@ no summarisation pass — oldest turns simply drop off the end.
 
 - `CLAUDE.md` § "Key gotchas" — `compress_and_store is appended IMPLICITLY`
   and the Phase 5c degradation path.
-- `docs/architecture-2026-04-27.md` § 1 step 7 — narrative of the full
+- `docs/architecture.md` § 1 step 7 — narrative of the full
   per-turn flow.
 - `TENGU_PLANNER_REGISTRY.md` — root file-backed planner roster generated from
   agents, skills, and tools.

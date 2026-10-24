@@ -1,5 +1,5 @@
 //! `[runtime]` — knobs of the `tengu run` process (`bootstrap/runtime.rs`;
-//! operator doc `docs/runtime-2026-09-30.md`). `deny_unknown_fields`; every
+//! operator doc `docs/runtime.md`). `deny_unknown_fields`; every
 //! key has a default, so a sandbox without `[runtime]` runs as-is.
 //!
 //! | Key | Default | Effect |

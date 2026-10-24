@@ -1,6 +1,6 @@
 # Tengu Studio — operator doc (2026-10-08)
 
-`tengu studio --sandbox <s>`: a local browser page over one sandbox — the validated workflow graph, every recorded run (live or replayed), the `doctor --live` health and, where allowed, Play / Stop of the sandbox's runtime. The page draws; Rust decides everything (graph, colours, legality, health, control verdicts). On main since #44 (`f7ac9a5636e2493e3839e896cba9951a2d41aefb`, 2026-10-09); in the default build (feature `studio`, the Docker image too) since 2026-10-09. Plan + tracker: `docs/plans/TENGU_STUDIO_PLAN.md`. Event envelope + coverage: `docs/runtime-2026-09-30.md` § Trace. Tutorial: `docs/tutorial/studio.html`. Editor (not built): `docs/studio-editor-design-2026-10-08.md`.
+`tengu studio --sandbox <s>`: a local browser page over one sandbox — the validated workflow graph, every recorded run (live or replayed), the `doctor --live` health and, where allowed, Play / Stop of the sandbox's runtime. The page draws; Rust decides everything (graph, colours, legality, health, control verdicts). On main since #44 (`f7ac9a5636e2493e3839e896cba9951a2d41aefb`, 2026-10-09); in the default build (feature `studio`, the Docker image too) since 2026-10-09. Plan + tracker: `docs/plans/TENGU_STUDIO_PLAN.md`. Event envelope + coverage: `docs/runtime.md` § Trace. Tutorial: `docs/tutorial/studio.html`. Editor (not built): `docs/archive/2026-10/studio-editor-design-2026-10-08.md`.
 
 ## Quick start (the safe lab)
 
@@ -14,7 +14,7 @@ target/release/tengu studio --sandbox control-loop-lab [--port <n>] [--bind 127.
 # stdout: Studio: http://127.0.0.1:<port>/#t=<64 hex>   — open exactly this URL; logs go to stderr + $TENGU_HOME/logs/tengu.log (as tengu run)
 ```
 
-`OPENROUTER_API_KEY` (name only) is needed only for Play / events (real Jev); viewing works without it. `tengu studio graph --sandbox <s> [--map <file>]` prints the graph as JSON in every build. CLI-only path + acceptance matrix: `docs/control-loop-lab-2026-10-08.md`.
+`OPENROUTER_API_KEY` (name only) is needed only for Play / events (real Jev); viewing works without it. `tengu studio graph --sandbox <s> [--map <file>]` prints the graph as JSON in every build. CLI-only path + acceptance matrix: `docs/control-loop-lab.md`.
 
 | Page region | Shows |
 |---|---|
@@ -32,7 +32,7 @@ target/release/tengu studio --sandbox control-loop-lab [--port <n>] [--bind 127.
 | a plan (`tengu chat`, `tengu telegram`, an eval row, a planner webhook, an escalation) | `planner` from `plan.*`, `agent:<a>` from `step.*`, the step's `run-agent` tool calls on `tool:<a>/<t>`; lit `planner → agent` and `agent → tool` |
 | run kinds | `tengu trace runs` / the runs list: `run` · `decide` · `studio` · `webhooks` · `chat` · `telegram` · `eval`; the header's runtime shows `none (tengu <kind>)` for all but `run` |
 
-A `tengu chat` / `telegram` / `eval` run is recorded only with `[orchestrator]`, under sandbox `default` for a `-c` config. Event list + live check: `docs/runtime-2026-09-30.md` § Trace.
+A `tengu chat` / `telegram` / `eval` run is recorded only with `[orchestrator]`, under sandbox `default` for a `-c` config. Event list + live check: `docs/runtime.md` § Trace.
 
 ## Routes (`src/adapters/inbound/studio/mod.rs`)
 
@@ -73,7 +73,7 @@ A `tengu chat` / `telegram` / `eval` run is recorded only with `[orchestrator]`,
 | POST `event` `{"scenario", "loop"?}` | `sandboxes/<s>/scenarios/<name>.json` (not `*.map.json`) into the owned loop; session `studio-<scenario>-<uuid>` | 202 · 409 nothing running · 422 · 429 queue full |
 | Studio SIGINT / SIGTERM | drains its runtime first, then exits 0; a second signal exits 130 | — |
 
-States: `idle` · `attached` · `starting` · `running` · `stopping` · `stopped` · `failed`. Play runs the config this Studio loaded and serves (its `config_hash`): after editing the sandbox, restart Studio. A CLI `tengu run` is refused while Studio runs one, and the reverse. Each request + verdict lands in Studio's own recording (`kind = "studio"`, `tengu trace runs`). Recorded run: `docs/studio-acceptance-2026-10-08.md`. curl helper (start Studio with stdout to `studio.out`):
+States: `idle` · `attached` · `starting` · `running` · `stopping` · `stopped` · `failed`. Play runs the config this Studio loaded and serves (its `config_hash`): after editing the sandbox, restart Studio. A CLI `tengu run` is refused while Studio runs one, and the reverse. Each request + verdict lands in Studio's own recording (`kind = "studio"`, `tengu trace runs`). Recorded run: `docs/archive/2026-10/studio-acceptance-2026-10-08.md`. curl helper (start Studio with stdout to `studio.out`):
 
 ```bash
 URL=$(sed -n 's/^Studio: //p' studio.out); BASE=${URL%%/#t=*}; TOK=${URL##*#t=}
@@ -121,4 +121,4 @@ Coordinator's run, on `control-loop-lab`, of a build with the `studio` feature (
 | old page after a `web/studio/` edit | assets are compiled in | rebuild |
 | run shows `config changed` | recorded under another config hash | expected: drawn on the current graph, unknown nodes listed |
 
-Cleanup: the guarded block in `docs/control-loop-lab-2026-10-08.md` § Cleanup (lab paths only; never `tengu prune`, never `~/.tengu`). Smoke 2026-10-09 (release build with the `studio` feature, lab home, no Play): `--bind 0.0.0.0` exit 1 · URL token 64 hex · `meta` control on · `graph` 16 nodes / 17 edges · health not live · no token 401 · POST without `Origin` / `Sec-Fetch-Site` 403 · foreign `Host` 421 · unknown scenario 422 · SIGINT exit 0 · one `kind = "studio"` run of 5 events ending `studio.stopped`.
+Cleanup: the guarded block in `docs/control-loop-lab.md` § Cleanup (lab paths only; never `tengu prune`, never `~/.tengu`). Smoke 2026-10-09 (release build with the `studio` feature, lab home, no Play): `--bind 0.0.0.0` exit 1 · URL token 64 hex · `meta` control on · `graph` 16 nodes / 17 edges · health not live · no token 401 · POST without `Origin` / `Sec-Fetch-Site` 403 · foreign `Host` 421 · unknown scenario 422 · SIGINT exit 0 · one `kind = "studio"` run of 5 events ending `studio.stopped`.

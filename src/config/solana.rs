@@ -1,6 +1,6 @@
 //! `[solana]` — who signs the Solana write tools' `mode = "send"` (phase 6b)
 //! and the sandbox rules that keep that signer private. Doc:
-//! `docs/typed-observations-2026-09-24.md` § Write tools.
+//! `docs/observations.md` § Write tools.
 //!
 //! ```toml
 //! [solana]
@@ -11,7 +11,7 @@
 //! ```
 //!
 //! The wallet is a Privy server wallet; Privy signs through the seal
-//! proxy's `privy` route (`docs/sealed-keys-2026-10-09.md`), so no key and
+//! proxy's `privy` route (`docs/sealed-keys.md`), so no key and
 //! no app secret is on this machine (`outbound/solana/privy.rs`).
 //!
 //! | Rule (load time — any violation fails `Config::load`) | Why |

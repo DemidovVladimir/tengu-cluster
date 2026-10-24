@@ -1,4 +1,4 @@
-//! Evidence IO adapters (`ports/evidence.rs`, `docs/lineage-2026-10-06.md`
+//! Evidence IO adapters (`ports/evidence.rs`, `docs/lineage.md`
 //! § 3). Read-only by construction: SQLite through [`open_read_only`]
 //! (`file:<path>?immutable=1`, `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI` —
 //! no `-wal` / `-shm` created, no migration, no retention sweep; a database

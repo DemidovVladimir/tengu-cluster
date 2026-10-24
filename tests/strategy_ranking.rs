@@ -1,5 +1,5 @@
 //! Strategy ranking end to end on the built binary
-//! (`docs/strategy-ranking-automation-2026-10-08.md` SR-7): `tengu ranking`
+//! (`docs/ranking.md` SR-7): `tengu ranking`
 //! on the fixture sandbox `tests/fixtures/strategy_ranking/config.toml`,
 //! copied to `<tmp>/sandboxes/rank-test/config.toml` beside a copy of its
 //! registry (`lineage/`: the contract `rank.test.v1`, sealed), `TENGU_HOME`

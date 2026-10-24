@@ -1,4 +1,4 @@
-//! Evidence — what an experiment's figures rest on (`docs/lineage-2026-10-06.md`
+//! Evidence — what an experiment's figures rest on (`docs/lineage.md`
 //! § 1, § 3): the class of a piece of evidence, where it came from, and the
 //! snapshot record (`lineage/evidence/<id>.toml`) that pins a read-only vault
 //! copy (`<TENGU_HOME>/state/evidence/<vault>/`) by sha256. Pure: the copy,

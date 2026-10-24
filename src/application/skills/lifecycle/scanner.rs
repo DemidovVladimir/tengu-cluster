@@ -1,6 +1,6 @@
 //! Tengu-scoped threat scanner for skill directories.
 //!
-//! Scope (per `docs/skill-research-2026-04-28.md` §"Decisions" #2 and #3):
+//! Scope (per `docs/skill-research.md` §"Decisions" #2 and #3):
 //! Tengu's actual code-execution surface is narrow — `MetricSpec::Script`
 //! (`*.sh` files) and `MetricSpec::ShellCheck` (cmd strings in SKILL.md
 //! frontmatter). This scanner targets those surfaces with ~12-15 patterns

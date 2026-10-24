@@ -1,4 +1,4 @@
-//! `lineage/locks.toml` (`docs/lineage-2026-10-06.md` § 2): frozen
+//! `lineage/locks.toml` (`docs/lineage.md` § 2): frozen
 //! generations and sealed preregistrations — append-only rows.
 //!
 //! | Row | Fields | Rule (`Registry::validate`) |

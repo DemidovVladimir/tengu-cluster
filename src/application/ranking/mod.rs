@@ -1,4 +1,4 @@
-//! Strategy ranking coordinator (`docs/strategy-ranking-automation-2026-10-08.md`
+//! Strategy ranking coordinator (`docs/ranking.md`
 //! SR-5): one ranking date of one sealed contract — freshness → backtest →
 //! evaluate → rank → publish — under a lease, resumable from its manifest.
 //! The contract is `domain/lineage/ranking.rs`, selection and rating

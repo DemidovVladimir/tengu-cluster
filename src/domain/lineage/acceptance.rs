@@ -1,4 +1,4 @@
-//! Rule-W acceptance (handoff § 57, `docs/lineage-2026-10-06.md` § 5): the 21
+//! Rule-W acceptance (handoff § 57, `docs/lineage.md` § 5): the 21
 //! questions answered from record fields only — each answer names the fields
 //! it read; one with nothing to say is `UNKNOWN` with the reason.
 //!

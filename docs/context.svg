@@ -38,7 +38,7 @@
 
   <!-- ============== HEADER ============== -->
   <text x="40" y="50" class="title">Tengu-Cluster · Context Management — All 7 Layers</text>
-  <text x="40" y="74" class="sub">31 mechanisms, none LLM-driven · canonical reference for context-management-2026-04-27.md · checked against the code 2026-10-08</text>
+  <text x="40" y="74" class="sub">31 mechanisms, none LLM-driven · canonical reference for context.md · checked against the code 2026-10-08</text>
   <text x="40" y="92" class="sub">Companion: context-cutting-flow-...html (Layer 3 deep-dive) · compression-flow-...md (Layer 5 deep-dive)</text>
 
   <!-- Top arrow indicating data flow -->

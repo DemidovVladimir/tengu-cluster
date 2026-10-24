@@ -1,5 +1,5 @@
 # Test-only fixture (never a sandbox): the live check of `tengu webhooks`
-# recording requests (docs/runtime-2026-09-30.md § Trace). No model is ever
+# recording requests (docs/runtime.md § Trace). No model is ever
 # reached: the loop's Jev call and the `local` agents point at loopback ports.
 #   export TENGU_HOME="$HOME/tengu-lab/home"            # never ~/.tengu
 #   export OPENROUTER_API_KEY=not-a-key OPENROUTER_BASE_URL=http://127.0.0.1:9

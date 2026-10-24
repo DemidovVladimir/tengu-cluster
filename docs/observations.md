@@ -1,6 +1,6 @@
 # Typed observations + Solana LP tools (2026-09-24)
 
-Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 11 Solana LP observation/planning tools and 5 live-capable write tools (§ Write tools), merged in #18 (`feature/decision-loop`); later the Hyperliquid, xmarket, xlab, source and SOE rows below. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
+Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 11 Solana LP observation/planning tools and 5 live-capable write tools (§ Write tools), merged in #18 (`feature/decision-loop`); later the Hyperliquid, xmarket, xlab, source and SOE rows below. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loops.md`.
 
 ## Envelope
 
@@ -27,7 +27,7 @@ Typed tool results that one envelope serves to the LLM (text), decision loops (`
 | `acct/1:<pubkey>` | raw account rows (`outbound/solana/accounts.rs::fetch_accounts`, 60 s): reused when fresh, one `getMultipleAccounts` for the rest. **Phase-5 seam**: a stream writing these rows makes builders RPC-free |
 | `dlmm_discovery/1:<wallet>:<pool>` | position discovery (gPA): 60 s found / 10 s empty, and an empty row is reused only within the caller's max age (the bot's 300 s is safe only for the process that opens the positions) / errors never stored. Position reads pinned ≥ the discovery's slot; a discovered key that does not value ⇒ exposure `Error`, never 0 (`outbound/solana/plan.rs`, `dlmm::flag_unvalued`) |
 | `lp_state/1:<wallet>:<pool>` | controller state (regime, timers, re-entry anchor, last hedge action); 7 days; written only with `commit = true`, compare-and-swap on the version read (changed since ⇒ NOT committed, `features.commit = conflict`); unreadable ⇒ the decide tools block `invalid_read`, never overwrite |
-| `loop/1:<loop>` | `tengu run` health of a decision loop (`domain/runtime.rs::LoopHealth`), in the loop agent's store every `[runtime] heartbeat_secs`: queue depth, in flight, counts, `last_decision_age_s` (`docs/runtime-2026-09-30.md`) |
+| `loop/1:<loop>` | `tengu run` health of a decision loop (`domain/runtime.rs::LoopHealth`), in the loop agent's store every `[runtime] heartbeat_secs`: queue depth, in flight, counts, `last_decision_age_s` (`docs/runtime.md`) |
 | `feed/1:<feed>` | `tengu run` health of a feed (`FeedHealth`): state connecting \| live \| backoff \| stalled \| down, `required`, `last_item_age_s`, reconnects, dropped, `last_error_class`. `observed_at_ms` = the feed's last item, so `requires = { feed = N }` gates on data age; no row before the first item |
 
 ## History recorder (`ops-history-recorder`, 2026-09-30)
@@ -53,7 +53,7 @@ Append-only time series of observations (xmarket tracker conventions 3 + 5): res
 | slot `{ observation = alias, items, value, top }` | candidates from a fresh world entry (`FromObservation`) |
 | typed result | history gets `decision_value` (or the reducer over `decision_root`: `/data/...`, `/features/...`), `ok = status != error`, `obs = {key, status, source, age_s, slot}` |
 | executor | loop tools run through `SanitizedToolExecutor` with the process `SecretRegistry`, then `trace_exec::TracedExecutor` (`tool.*` trace events: typed `observation` key / status / headline), then `egress::AttributedExecutor` (`bootstrap/decision.rs`) |
-| trace | each `world` alias read per step = one `observation.read` event (ok · stale · missing · failed, `key`, `age_ms`; node `world:<loop>/<alias>`) — `docs/runtime-2026-09-30.md` § Trace |
+| trace | each `world` alias read per step = one `observation.read` event (ok · stale · missing · failed, `key`, `age_ms`; node `world:<loop>/<alias>`) — `docs/runtime.md` § Trace |
 
 ## Solana tools (`adapters/outbound/tools/solana/`, opt-in, one `solana` plugin)
 
@@ -105,7 +105,7 @@ Opt-in, one catalog row each. Runner `tools/solana/write_common.rs`; pipeline `o
 
 | Send rule | Detail |
 |---|---|
-| Signer (2026-10-09) | `[solana] privy_wallet_id` — a Privy Solana wallet; no key on this machine. `outbound/solana/privy.rs` POSTs `<proxy>/privy/v1/wallets/<id>/rpc` `signTransaction` (message with zeroed slots) with the seal-proxy session + `privy-app-id`; the Worker adds the Privy app secret (`docs/sealed-keys-2026-10-09.md`). Reply: message unchanged, only the wallet's slot taken, ed25519-verified for `wallet` — else nothing is sent. Needs `[keys.env] PRIVY_API_URL = "privy"` (+ `strip` `PRIVY_APP_SECRET`) and the tool's scope `wallets = ["<full pubkey>"]` on ONE agent, `env_reads` `PRIVY_API_URL` + `PRIVY_APP_ID`, `net_hosts` the Worker host. A new DLMM position's one-shot key is made in memory, never stored. Was a local key file (`signer_key_file`, removed) |
+| Signer (2026-10-09) | `[solana] privy_wallet_id` — a Privy Solana wallet; no key on this machine. `outbound/solana/privy.rs` POSTs `<proxy>/privy/v1/wallets/<id>/rpc` `signTransaction` (message with zeroed slots) with the seal-proxy session + `privy-app-id`; the Worker adds the Privy app secret (`docs/sealed-keys.md`). Reply: message unchanged, only the wallet's slot taken, ed25519-verified for `wallet` — else nothing is sent. Needs `[keys.env] PRIVY_API_URL = "privy"` (+ `strip` `PRIVY_APP_SECRET`) and the tool's scope `wallets = ["<full pubkey>"]` on ONE agent, `env_reads` `PRIVY_API_URL` + `PRIVY_APP_ID`, `net_hosts` the Worker host. A new DLMM position's one-shot key is made in memory, never stored. Was a local key file (`signer_key_file`, removed) |
 | Signing sandbox (`config/solana.rs`, `config/hardening.rs` — the hardened rules a `[risk]` / `[soe]` sandbox shares) | `claude_code` agents only with `builtin_tools_profile = "none"` (the CLI always runs `--strict-mcp-config`), no `engine = "codex"` agent, no `[a2a.server] allow_unauthenticated`, no `[[mcp_servers]]`, no scope with `shell_bins` (fallback runs no shell), `<TENGU_HOME>/state` and the config file outside every fs root / workspace; no scope's `env_reads` names the session (`TENGU_KEYS_SESSION_TOKEN`, a `[keys.env]` `@session` var) or `"*"` — the session can sign through the proxy; a wallet grant only on an agent with no `description`, not `default`, no webhook `agent`, never in `[default_scopes]`; a `read_only` write action must set `mode = "simulate"` |
 | Lease | `<TENGU_HOME>/state/solana-writes.db`, `wallet:<address>`, 150 s, renewed per tx; held ⇒ `lease_held`. The TS bot is invisible to it — never sign with a wallet the bot runs |
 | Pending record | written before submit; the next send resolves it first: landed ⇒ fence, expired ⇒ cleared, in flight ⇒ refused `pending_unresolved` |
@@ -125,7 +125,7 @@ Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`tes
 
 ## Market rows (xmarket, `domain/market.rs`, 2026-09-30)
 
-Instrument id = `<venue>:<native id verbatim>` (`docs/xmarket-tracker-2026-09-29.md` conventions 1–2): venues `hyperliquid`, `robinhood`, `binance-spot`, `binance-usdm`, `bybit-spot`, `bybit-linear`, `okx-spot`, `okx-swap`, `coinbase`, `coinbase-intx`, `ref:<MIC>`. Never shortened: `hyperliquid:xyz:TSLA`, `hyperliquid:@151`, `robinhood:0x322F0929c4625eD5bAd873c95208D54E1c003b2d`, `ref:XNAS:TSLA` (`InstrumentId` rejects unknown venues).
+Instrument id = `<venue>:<native id verbatim>` (`docs/xmarket-tracker.md` conventions 1–2): venues `hyperliquid`, `robinhood`, `binance-spot`, `binance-usdm`, `bybit-spot`, `bybit-linear`, `okx-spot`, `okx-swap`, `coinbase`, `coinbase-intx`, `ref:<MIC>`. Never shortened: `hyperliquid:xyz:TSLA`, `hyperliquid:@151`, `robinhood:0x322F0929c4625eD5bAd873c95208D54E1c003b2d`, `ref:XNAS:TSLA` (`InstrumentId` rejects unknown venues).
 
 | Key | Row | Status |
 |---|---|---|
@@ -225,7 +225,7 @@ Text: line 1, features and errors as `render_text` gives them (without `data`) �
 
 ## Source evidence (O2, 2026-10-08)
 
-Tool `source_evidence` (opt-in, `sources` plugin, `adapters/outbound/tools/sources/`); row = the packet `domain/source/packet.rs::EvidencePacket`, built by `application/sources.rs::evidence_as_of` over `<TENGU_HOME>/state/<sources.state>/sources.db` (`docs/source-evidence-2026-10-08.md`). Read-only: no network, no fetch argument.
+Tool `source_evidence` (opt-in, `sources` plugin, `adapters/outbound/tools/sources/`); row = the packet `domain/source/packet.rs::EvidencePacket`, built by `application/sources.rs::evidence_as_of` over `<TENGU_HOME>/state/<sources.state>/sources.db` (`docs/source-evidence.md`). Read-only: no network, no fetch argument.
 
 | Key | TTL | Row | Status |
 |---|---|---|---|
@@ -248,11 +248,11 @@ Tool `soe_view` (opt-in, `soe` plugin, `adapters/outbound/tools/soe/view.rs`; `d
 | Other SOE / ranking tools | Row |
 |---|---|
 | `soe_propose` · `soe_challenge` (writes through `application::soe::submit`) | none: text only (the stamped id + a preview) |
-| `strategy_ranking` (xlab-w2) | none: the ranking is its files (`<state dir>/strategy-rankings/`, `docs/runtime-2026-09-30.md` § State layout) |
+| `strategy_ranking` (xlab-w2) | none: the ranking is its files (`<state dir>/strategy-rankings/`, `docs/runtime.md` § State layout) |
 
 ## Risk + paper rows (xmarket, 2026-09-30)
 
-Operator reference: [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md) (gate rules, ledger, halts, `tengu risk`). Subject = the ledger account (`[risk] account`, `[A-Za-z0-9._-]`), in full.
+Operator reference: [`xmarket-risk-paper.md`](xmarket-risk-paper.md) (gate rules, ledger, halts, `tengu risk`). Subject = the ledger account (`[risk] account`, `[A-Za-z0-9._-]`), in full.
 
 | Key | Written by | Row | Status |
 |---|---|---|---|
@@ -264,7 +264,7 @@ Operator reference: [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026
 | `xm_weekend/1:<anchor date>` | `xm_weekend_fade` (exec, `x-weekend-fade-strategy`); TTL 120 s — the window's entry snapshot lives here (written by compare-and-swap before any order, never recomputed); `domain/xm/weekend_fade.rs::WeekendFade`; anchor date = the window's last trading day, local `YYYY-MM-DD` | features `phase` (`waiting` · `entered` · `missed_entry` · `closing` · `closed`), `closed_days`, `anchor_ms`, `entry_ms`, `exit_ms`, `next_entry_s` (waiting), `n_universe`, `n_excluded`, `late_s`; with a snapshot `n_eligible`, `n_missing_anchor`, `n_missing_entry`, `n_stale`, `n_flat`, `n_capped`, `n_capped_filled`, `n_capped_failed`, `n_shadow_filled`, `n_shadow_failed`, `n_capped_open`, `n_shadow_open`; `n_shadow_exits`, `n_shadow_exits_failed` (closes this call); closed: `shadow_pnl_usd`, `shadow_mean_net_bps`, `capped_pnl_usd`, `capped_mean_net_bps`; `data` = per universe name (full id) both prices (or why not), s, side, skip reason (`stale`: no entry row fresher than `entry_max_age_secs`, waited for until entry + 120 s), capped, ledger bases, the two entry orders (each its latest attempt, `<id>:<n>` from the second), open quantities, P&L | `error` an entry with no eligible name, or still waiting for a name's fresh entry row (not kept; the next call tries again) · `partial` a missed entry, a missing or stale price, a fade or shadow exit not filled in full (one error per kind, every id in full) · else `ok` |
 | `xm_weekend_signal/1:<anchor date>:<full id>` | `xm_weekend_fade`, per name it places; stamped at the snapshot, TTL = `entry_lateness_max_secs`; `domain/xm/weekend_fade.rs::FadeSignal` | features `s_bps`, `abs_s_bps`, `side` (the fade's), `strategy` (`overreaction`), `anchor_px`, `entry_px`, `capped`, `edge_after_costs_bps` (= `[xmarket.weekend_fade] expected_edge_bps`), `max_notional_usd` (= `capped_notional_usd`) — the opportunity row the capped fade names (`min_edge`); it backs that fade only (review #8) | `ok` |
 
-Opportunity rows (what an entry's `opportunity` names — `xm_weekend_signal/1`, `xm_compare/1` once `risk-calc-tools` lands) carry `edge_after_costs_bps`, `side` (`buy` · `sell`) and `strategy` (§21 type), optionally `max_notional_usd`: the `[risk]` gate's `min_edge` needs the order's side, its strategy when it names one, the edge and the size (`missing:opportunity_side` · `missing:opportunity_strategy` without them) — [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md) § gate rules.
+Opportunity rows (what an entry's `opportunity` names — `xm_weekend_signal/1`, `xm_compare/1` once `risk-calc-tools` lands) carry `edge_after_costs_bps`, `side` (`buy` · `sell`) and `strategy` (§21 type), optionally `max_notional_usd`: the `[risk]` gate's `min_edge` needs the order's side, its strategy when it names one, the edge and the size (`missing:opportunity_side` · `missing:opportunity_strategy` without them) — [`xmarket-risk-paper.md`](xmarket-risk-paper.md) § gate rules.
 
 | Tool | Args | Returns | Reads | Writes |
 |---|---|---|---|---|
@@ -275,11 +275,11 @@ Opportunity rows (what an entry's `opportunity` names — `xm_weekend_signal/1`,
 | `xm_exits` (exec) | `max_slippage_bps` (default `[risk] max_slippage_bps`) | `xm_exits/1:<account>` | the ledger (positions, exit deadlines), `mkt_ctx/1` rows of the open positions (never fetched), `[risk.exits]`; per due position what `paper_close` reads | per due position one `run_exec` close under `exit:<account>:<instrument>:<reason>:<opened_ms>` (`…:<n>` once that id is stored and the position still open) |
 | `xm_weekend_fade` (exec) | none (time from the `Clock` port) | `xm_weekend/1:<anchor date>` | `[xmarket.weekend_fade]` + its calendar; anchor `mkt_ctx/1` rows from the history as of the anchor, entry `mkt_ctx/1` rows from the store (never fetched); both ledgers; per order what `paper_order` reads | the window row; at the entry a `xm_weekend_signal/1` row per name, then `run_exec` capped fades (`[risk]` gate, `fade:<account>:<full id>:<anchor date>`) and shadow fades (shadow gate, `fade-shadow:<shadow account>:<full id>:<anchor date>`); after the exit the shadow closes (`exit:<shadow account>:<full id>:deadline:<opened_ms>`); funding owed on both accounts |
 
-Exec tools (`paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade`) run only for a private agent (no `description`, not `default`, no webhook `agent` — load rule and call-time check); scope `fs_roots` = the workspace, `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]`. Arguments parse strictly (an unknown key is an error). Operator reference: [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md) § Exec tools.
+Exec tools (`paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade`) run only for a private agent (no `description`, not `default`, no webhook `agent` — load rule and call-time check); scope `fs_roots` = the workspace, `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]`. Arguments parse strictly (an unknown key is an error). Operator reference: [`xmarket-risk-paper.md`](xmarket-risk-paper.md) § Exec tools.
 
 ## Paper fills (xmarket `risk-paper-fill-engine`, 2026-09-30)
 
-Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.rs::fill_with_latency` · book port `ports/book.rs::BookSource` (tracker convention 16) · live source `tools/hyperliquid/book.rs::HlBookSource` and the gate + fill + ledger path `tools/xm/exec_common.rs::run_exec` (`risk-gate-enforcement`, row `paper_fill/1:<account>:<client_order_id>`); the replay source lands with `ops-replay-harness`. Here until `risk-docs` moves it into [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md).
+Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.rs::fill_with_latency` · book port `ports/book.rs::BookSource` (tracker convention 16) · live source `tools/hyperliquid/book.rs::HlBookSource` and the gate + fill + ledger path `tools/xm/exec_common.rs::run_exec` (`risk-gate-enforcement`, row `paper_fill/1:<account>:<client_order_id>`); the replay source lands with `ops-replay-harness`. Here until `risk-docs` moves it into [`xmarket-risk-paper.md`](xmarket-risk-paper.md).
 
 | Piece | Rule |
 |---|---|

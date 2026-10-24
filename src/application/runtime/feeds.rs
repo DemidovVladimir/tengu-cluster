@@ -1,7 +1,7 @@
 //! `[feeds.<n>]` runner (xmarket `rt-scheduler`): one supervised task per
 //! feed under `tengu run` (wiring `bootstrap/runtime.rs`; config
 //! `config/feeds.rs`; fire times `domain/schedule.rs`; operator doc
-//! `docs/runtime-2026-09-30.md` § Feeds).
+//! `docs/runtime.md` § Feeds).
 //!
 //! | Rule | How |
 //! |---|---|

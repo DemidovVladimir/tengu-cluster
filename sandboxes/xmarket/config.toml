@@ -5,7 +5,7 @@
 # Paper only: no key, no order leaves the process; the $100 budget is [risk].
 # Rule W (the weekend fade) lives in sandboxes/xmarket-weekend, never here —
 # both may run at once (own state dir, workspace, lease, ledger).
-# Runtime: docs/runtime-2026-09-30.md § xmarket sandbox.
+# Runtime: docs/runtime.md § xmarket sandbox.
 #
 # RUNBOOK — from the repo root (`--sandbox` resolves sandboxes/<name>/ from the
 # cwd; the repo-root .env sets TENGU_HOME=~/.tengu and OPENROUTER_API_KEY). At a

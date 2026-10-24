@@ -43,7 +43,7 @@ jobs:
       - name: Studio tests (without the studio feature)
         run: cargo test --no-default-features --features telegram --lib studio
 
-      # Sealed keys (docs/sealed-keys-2026-10-09.md): the shared formats crate
+      # Sealed keys (docs/sealed-keys.md): the shared formats crate
       # `crates/tengu-seal` is a workspace member (its tests run in `Tests`
       # above); the Worker ships for wasm32 outside the workspace, its
       # reply-body glue tests run on the host.

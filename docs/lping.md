@@ -1,6 +1,6 @@
 # lping sandbox — plan (2026-09-24)
 
-`sandboxes/lping/config.toml`: crypto research + guarded Solana LP / hedge execution over atomic observe, plan and `simulate | send` tools (`docs/typed-observations-2026-09-24.md`). Every loop runs as the private `lp_executor`; `lp_watch` / `hedge_watch` stay `dry_run`, `hedge_exec` / `lp_exec` run `dry_run = false` with `mode = "simulate"` — nothing can `send` until a dedicated signer/wallet grant is configured (end of the config file).
+`sandboxes/lping/config.toml`: crypto research + guarded Solana LP / hedge execution over atomic observe, plan and `simulate | send` tools (`docs/observations.md`). Every loop runs as the private `lp_executor`; `lp_watch` / `hedge_watch` stay `dry_run`, `hedge_exec` / `lp_exec` run `dry_run = false` with `mode = "simulate"` — nothing can `send` until a dedicated signer/wallet grant is configured (end of the config file).
 
 ## Status
 
@@ -47,8 +47,8 @@ An LLM turn per on-chain event is unaffordable; filter + gate first.
 | # | Gap | Fix |
 |---|---|---|
 | 1 | ~~Webhooks are HMAC-only~~ | ✅ `auth_header_env` + endpoint `loop` (2026-09-24) |
-| 2 | No long-running stream consumer | `tengu run` (2026-09-30) is the long-running process; the seam is a `[feeds.<n>] kind = "stream"` (Yellowstone gRPC client) writing `acct/1:<pubkey>` rows or loop events — refused at load until built (`config/feeds.rs`, `docs/runtime-2026-09-30.md` § Feeds) |
-| 3 | ~~Jev can't run as an engine~~ | ✅ `[decision_loops.*]` — see `docs/decision-loop-plan-2026-09-24.md` |
+| 2 | No long-running stream consumer | `tengu run` (2026-09-30) is the long-running process; the seam is a `[feeds.<n>] kind = "stream"` (Yellowstone gRPC client) writing `acct/1:<pubkey>` rows or loop events — refused at load until built (`config/feeds.rs`, `docs/runtime.md` § Feeds) |
+| 3 | ~~Jev can't run as an engine~~ | ✅ `[decision_loops.*]` — see `docs/decision-loops.md` |
 | 4 | ~~No Solana LP tools~~ (observe / plan) | ✅ 11 typed read / pure-decision tools (2026-10-06) |
 | 5 | ~~No Solana signing / write tools~~ | ✅ 6b (2026-09-29): local key signer, per-agent wallet grant, lease + pending record + fence, simulate by default; no approval gate (not wired) |
 

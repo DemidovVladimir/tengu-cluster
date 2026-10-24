@@ -1,5 +1,5 @@
 //! Send pipeline of the Solana write tools (phase 6b). Doc:
-//! `docs/typed-observations-2026-09-24.md` § Write tools.
+//! `docs/observations.md` § Write tools.
 //!
 //! `simulate` needs no key: the plan is compiled with a 1.4M CU limit and
 //! simulated as the wallet (`sigVerify = false`, cluster blockhash).

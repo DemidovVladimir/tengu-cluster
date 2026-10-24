@@ -1,4 +1,4 @@
-//! Decision evaluation (roadmap Phase 6, gate G6; `docs/w1-review-2026-10-06.md`
+//! Decision evaluation (roadmap Phase 6, gate G6; `docs/archive/2026-10/w1-review-2026-10-06.md`
 //! § 16): one row per candidate of a gated backtest run — the rule's choice
 //! (take every candidate), Jev's (its class, p(take), latency, cost) and
 //! HOLD (take none) — joined with the candidate's outcome, then the three

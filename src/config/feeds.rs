@@ -1,6 +1,6 @@
 //! `[feeds.<name>]` — scheduled work of `tengu run` (xmarket `rt-scheduler`;
 //! fire times `domain/schedule.rs`, runner `application/runtime/feeds.rs`,
-//! operator doc `docs/runtime-2026-09-30.md` § Feeds). `deny_unknown_fields`.
+//! operator doc `docs/runtime.md` § Feeds). `deny_unknown_fields`.
 //!
 //! | Key | Kind | Default | Meaning |
 //! |---|---|---|---|

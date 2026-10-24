@@ -22,7 +22,7 @@
 #   target/release/tengu decide --sandbox control-loop-lab --map sandboxes/control-loop-lab/scenarios/uncertain.map.json
 #   target/release/tengu run --sandbox control-loop-lab          # Ctrl-C = graceful stop
 #   target/release/tengu doctor --sandbox control-loop-lab --live
-# Runbook + acceptance matrix (A0–A15): docs/control-loop-lab-2026-10-08.md.
+# Runbook + acceptance matrix (A0–A15): docs/control-loop-lab.md.
 # Audit: $TENGU_HOME/logs/decisions.jsonl · heartbeat: $TENGU_HOME/state/run-control-loop-lab.json
 
 # Open: the Jev decisions endpoint (OpenRouter) only — no lab tool makes a network

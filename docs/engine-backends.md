@@ -1,6 +1,6 @@
 # Engine Backends
 
-Tengu supports four engine backends (`openrouter`, `local`, `claude_code`, `codex`). Each `[agents.<name>]` block selects its backend via `engine = "..."` in [[configuration]]; the planner runs on the `[orchestrator] agent`'s engine, subagents on their own block's engine (`run-agent` reads the same block). Backends are plug-and-play — switching an agent between backends requires only a config change. All LLM traffic follows `[egress]` (`docs/egress-2026-09-16.md`): Tor by default, `network = "open"` for direct.
+Tengu supports four engine backends (`openrouter`, `local`, `claude_code`, `codex`). Each `[agents.<name>]` block selects its backend via `engine = "..."` in [[configuration]]; the planner runs on the `[orchestrator] agent`'s engine, subagents on their own block's engine (`run-agent` reads the same block). Backends are plug-and-play — switching an agent between backends requires only a config change. All LLM traffic follows `[egress]` (`docs/egress.md`): Tor by default, `network = "open"` for direct.
 
 ## OpenRouter (`engine = "openrouter"`)
 
@@ -20,7 +20,7 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 - `manages_own_workspace()` = `false` — Tengu handles all workspace operations
 - `supports_tool_use()` = `true` — tool definitions passed to model
 - One API key (`OPENROUTER_API_KEY`) for all models; `OPENROUTER_BASE_URL` overrides the endpoint
-- Seal proxy (`[keys]`, `docs/sealed-keys-2026-10-09.md`): `[keys.env] OPENROUTER_BASE_URL = "openrouter"` + `OPENROUTER_API_KEY = "@session"` send every call to the `tengu-seal` Worker with the session token; the key is a Worker secret, never on this machine — no engine code change
+- Seal proxy (`[keys]`, `docs/sealed-keys.md`): `[keys.env] OPENROUTER_BASE_URL = "openrouter"` + `OPENROUTER_API_KEY = "@session"` send every call to the `tengu-seal` Worker with the session token; the key is a Worker secret, never on this machine — no engine code change
 - HTTP client from `egress::policy().llm_api_client` — proxied iff `[egress] route_llm_api` (default `true` under `network = "tor"`)
 - The system prompt goes out once: a system message equal to the context's `system_prompt` (`run-agent`, `tool turn`, doctor, webhooks send both) is skipped, as on `local`
 - Timeouts from `[agents.<id>.limits]`: `request_timeout_secs`, `stream_event_timeout_secs`, `max_output_tokens_per_turn`
@@ -172,7 +172,7 @@ Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, w
 
 | Rule | State |
 |---|---|
-| Every tengu tool works 100 % under every engine — `openrouter`, `local` (in-process), `claude_code` and `codex` (through the bridge, exactly as in-process) — no exceptions | Rule in CLAUDE.md / AGENTS.md step 4; milestone E0 in `docs/xmarket-tracker-2026-09-29.md` closed 2026-10-01 (`x-engine-parity-audit`: every catalog tool, a shell skill and an `[[mcp_servers]]` proxy live on OpenRouter and the Claude CLI; the `local` legs wait for the operator's PC) — what stays open: [[mcp-bridge]] § Parity rule |
+| Every tengu tool works 100 % under every engine — `openrouter`, `local` (in-process), `claude_code` and `codex` (through the bridge, exactly as in-process) — no exceptions | Rule in CLAUDE.md / AGENTS.md step 4; milestone E0 in `docs/xmarket-tracker.md` closed 2026-10-01 (`x-engine-parity-audit`: every catalog tool, a shell skill and an `[[mcp_servers]]` proxy live on OpenRouter and the Claude CLI; the `local` legs wait for the operator's PC) — what stays open: [[mcp-bridge]] § Parity rule |
 | Where money or signing is involved (a `[risk]` sandbox, a Solana signer), `claude_code` agents are allowed only hardened: `builtin_tools_profile = "none"` + `--strict-mcp-config` | Done (`x-claude-code-hardening`, `risk-gate-enforcement`): `--strict-mcp-config` on every run; load rules in `src/config/hardening.rs` for a signer and `[risk]` alike (replaced the signer's blanket `claude_code` refusal); 2026-10-01: profile `none` also runs without settings files, hooks, plugins, skills, CLAUDE.md and auto-memory; 2026-10-09: `[soe]` (agents read untrusted source text) hardened by the same path; 2026-10-10: `engine = "codex"` refused there outright (`hardening.rs::codex_errors` — its built-in shell cannot be switched off for good); 2026-10-13: the Solana signer is `[solana] privy_wallet_id` (Privy through the seal proxy) — the local key file is gone |
 
 ### MCP Bridge
@@ -274,7 +274,7 @@ Results 2026-10-01, final pass of `x-engine-parity-audit` (Mac; Claude CLI 2.1.2
 | xlab set + `backtest` (2026-10-01, `xlab-backtest-tool`: library strategy + inline spec object) | gemini-2.5-flash-lite ✅ 3.6 s (9 281 / 510 tokens) · claude-haiku-4.5 ✅ 15.2 s (13 175 / 605) · Claude CLI `claude-haiku-4-5` ✅ 21.4 s; the free-form `spec` object accepted by all three; local skipped (offline `offline_local_xlab` passes) |
 | xlab + xlab_holdout sets (2026-10-01 evening, `xlab-fix-tools`: hidden split, `holdout: true`, `run_id` + `view` read) | claude-haiku-4.5 ✅ both · Claude CLI `claude-haiku-4-5` ✅ both (17.0 s, 21.2 s) · gemini-2.5-flash-lite: every call runs, but its answers misquote numbers this evening (`xlab` ≈ 1 in 3, `xlab_holdout` 0 of ~10; the unchanged `hyperliquid` set failed too, `xlab` was 3 / 3 at 18:37 UTC) — re-run; local skipped (offline `offline_local_xlab`, `offline_local_xlab_holdout` pass) |
 | xlab_rank, sources, soe sets (`strategy_ranking`, `source_evidence`, `soe_*`; landed 2026-10-08 / 10-09) | live legs not run yet on any engine — offline `offline_local_xlab_rank`, `offline_local_sources`, `offline_local_soe` and their bridge conformance cases pass |
-| a2a set (2026-10-10, `docs/a2a-2026-10-10.md` § 4) | gemini-2.5-flash-lite ✅ · claude-haiku-4.5 ✅ · Claude CLI `claude-haiku-4-5` ✅; offline `offline_local_a2a` passes; local on the operator's PC |
+| a2a set (2026-10-10, `docs/a2a.md` § 4) | gemini-2.5-flash-lite ✅ · claude-haiku-4.5 ✅ · Claude CLI `claude-haiku-4-5` ✅; offline `offline_local_a2a` passes; local on the operator's PC |
 | `codex_*` legs (11 open sets, `codex_a2a` included) | not run live yet; a `tengu tool turn` on a codex agent passed (§ Codex) |
 | local · `gemma4:latest` | 14 legs skipped (`TENGU_MATRIX_LOCAL_BASE_URL` not set) — run on the operator's PC (below); offline mock legs pass |
 | `tengu doctor --engines` | `claude_code.toml`: claude ✅ 5.6 s, xm_claude ✅ 6.2 s (bridge grant via `StepOpts`, no process-wide env); `openrouter.toml`: gemini ✅ 1.8 s, haiku ✅ 4.9 s, xm_gemini ✅ 1.5 s, xm_haiku ✅ 3.3 s |

@@ -1,4 +1,4 @@
-//! Pin hashes, pure (`docs/lineage-2026-10-06.md` § 2): what a generation's
+//! Pin hashes, pure (`docs/lineage.md` § 2): what a generation's
 //! `[[pins]]`, a frozen manifest and a seal hash. The adapters read the files
 //! (`adapters/outbound/lineage/probe.rs`, `config/lineage.rs`) and hand the
 //! text here.

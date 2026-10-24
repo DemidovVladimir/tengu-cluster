@@ -1,4 +1,4 @@
-//! Hexagonal layering lint — `docs/hexagonal-plan-2026-09-23.md`.
+//! Hexagonal layering lint — `docs/archive/2026-09/hexagonal-plan-2026-09-23.md`.
 //!
 //! Every `crate::<layer>` reference in a layer's non-test code must point at
 //! a layer it may depend on:

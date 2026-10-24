@@ -1,4 +1,4 @@
-//! `EvidenceResolver` on the filesystem (`docs/lineage-2026-10-06.md` § 1
+//! `EvidenceResolver` on the filesystem (`docs/lineage.md` § 1
 //! locators). Read-only; hashes are sha256 of the bytes, a dir's is the tree
 //! hash (`domain/evidence.rs::tree_hash`).
 //!

@@ -3,7 +3,7 @@
 # sandbox shares its state dir (market.db, backtests/) and adds what W2 research
 # needs: SEC EDGAR filings (Phase 7, `tengu history events`) and the daily +
 # weekend strategy rankings ([strategy_ranking], [feeds.*]: `tengu run --sandbox
-# xlab-w2`; docs/strategy-ranking-automation-2026-10-08.md). It stays unbound:
+# xlab-w2`; docs/ranking.md). It stays unbound:
 # P10 built no W2 candidate (docs/p10-w2-candidate-2026-10-08.md). Everything
 # below the [xmarket] section is xlab's as of 2026-10-08 unless marked W2.
 #
@@ -881,7 +881,7 @@ fs_roots = ["~/xlab-w2-ws"]
 [default_scopes.strategy_ranking]
 fs_roots = ["~/xlab-w2-ws"]
 
-# --- W2: strategy rankings (docs/strategy-ranking-automation-2026-10-08.md) ----
+# --- W2: strategy rankings (docs/ranking.md) ----
 # The preregistered contracts (lineage/rankings/<id>.toml): which strategies,
 # window, eligibility and rating order. Both are committed UNSEALED: the
 # publisher refuses an unsealed contract, so the feeds below publish nothing

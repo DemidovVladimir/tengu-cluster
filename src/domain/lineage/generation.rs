@@ -1,4 +1,4 @@
-//! Generation — `lineage/generations/<id>.toml` (`docs/lineage-2026-10-06.md`
+//! Generation — `lineage/generations/<id>.toml` (`docs/lineage.md`
 //! § 2, § 4, handoff § 33–34; roadmap P1 / P5): a frozen, measurable
 //! configuration of Tengu (W1, W2-CANDIDATE …), and the scope a sandbox bound
 //! to it may use ([`GenerationScope`]).

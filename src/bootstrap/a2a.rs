@@ -61,7 +61,7 @@ pub(crate) fn server_config(config: &Config) -> Result<&A2aServerConfig> {
         .ok_or_else(|| {
             anyhow!(
                 "no [a2a.server] in this sandbox config — add one (orchestrator = true and / or \
-                 agents = [...], token_env = \"…\"); see docs/a2a-2026-10-10.md"
+                 agents = [...], token_env = \"…\"); see docs/a2a.md"
             )
         })
 }

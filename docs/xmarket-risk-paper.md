@@ -8,7 +8,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 |---|---|
 | A `[risk]` sandbox is hardened like a Solana signer (`config/hardening.rs`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"`; no `[[mcp_servers]]`; no scope grants `shell_bins` (tools without a scope run no shell, in-process and in the bridge) | nothing outside tengu scopes runs (convention 12) |
 | `<TENGU_HOME>/state` (no overlap either way), `kill_switch_file` and the config file itself outside every `fs_roots` and agent `workspace` (symlinks resolved) | `read_file` / `write_file` cannot edit `ledger.db`, delete the kill-switch file or lift a limit for the next load |
-| `[xmarket]` present; every agent sets `workspace` (absolute or `~/…`); feed, loop and xmarket-tool agents share one (`config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout) | the ledger lives in the state dir; an agent without a workspace works in the process cwd, which may hold `<TENGU_HOME>/state` |
+| `[xmarket]` present; every agent sets `workspace` (absolute or `~/…`); feed, loop and xmarket-tool agents share one (`config/xmarket.rs`, `docs/runtime.md` § State layout) | the ledger lives in the state dir; an agent without a workspace works in the process cwd, which may hold `<TENGU_HOME>/state` |
 | Exec tools (`paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
 | `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing stays off (a tool without a scope gets the fallback's `default` wallet outside a hardened sandbox; xmarket is hardened, so nothing since 2026-10-22) |
 
@@ -119,7 +119,7 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 | Claim | every write (`open_account`, `place`, `update_risk_state`, `accrue_funding`) claims an account with no owner yet — new, or stored before the column — inside its transaction |
 | Refuse | an account another sandbox owns: `account_owner_mismatch`, nothing written (replays, `risk_status` rolls and funding included); reads never check |
 | Operator | `tengu risk` opens the ledger without an owner: status, halt and resume always work and claim nothing; `risk status` prints each account's owner |
-| First line | the `state:<dir>` lease (`docs/runtime-2026-09-30.md` § Single-runner lease): two sandboxes on one `[xmarket] state` never run at once |
+| First line | the `state:<dir>` lease (`docs/runtime.md` § Single-runner lease): two sandboxes on one `[xmarket] state` never run at once |
 | Same sandbox, other path | the name comes from the file's directory: a config mounted elsewhere (Docker's `/opt/tengu/config.toml`) writes as `default` and is refused on accounts a `--sandbox <name>` run owns — run the sandbox's own file (`--sandbox <name>`; the image carries `/opt/tengu/sandboxes/`), or, as the operator with the run stopped, `sqlite3 <state dir>/ledger.db "UPDATE accounts SET sandbox = '<name>' WHERE account = '<account>'"` |
 | Older binaries | a binary from before 2026-10-01 (the frozen weekend `tengu-6fcb455`) neither checks nor claims; a newer one adds the column on open (additive) and claims on its first write |
 

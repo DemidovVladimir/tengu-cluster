@@ -4,7 +4,7 @@
 //! `domain/calendar.rs`) and the weekend fade `[xmarket.weekend_fade]`
 //! ([`WeekendFadeConfig`], its own load rules). Later milestones add venues
 //! and lifecycle knobs. `deny_unknown_fields`. Operator doc:
-//! `docs/runtime-2026-09-30.md` § State layout.
+//! `docs/runtime.md` § State layout.
 //!
 //! State layout — one state dir per sandbox, `<TENGU_HOME>/state/<state>`,
 //! shared by every process of the install; `tengu prune` never deletes it.
@@ -199,7 +199,7 @@ impl XmarketConfig {
 
 /// `[xmarket.weekend_fade]` — the weekend-fade rule W, run by the exec tool
 /// `xm_weekend_fade` (`domain/xm/weekend_fade.rs`,
-/// `docs/xmarket-risk-paper-2026-09-30.md` § Weekend fade). Every key is
+/// `docs/xmarket-risk-paper.md` § Weekend fade). Every key is
 /// required, unknown keys are refused.
 ///
 /// | Load rule | Why |

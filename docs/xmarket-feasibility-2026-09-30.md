@@ -1,6 +1,6 @@
 # xmarket — feasibility study (2026-09-30)
 
-Does the PRD's opportunity exist, and what is it worth? Answered before building, from public data only. Inputs: 22 Hyperliquid xyz stock perps (hourly bars since 2026-03-06, 5-minute for 17 days, 1-minute for 3.6 days, 30 days of funding, order books), Robinhood Chain pools (1,199 real swaps via GeckoTerminal), the underlying stocks (Robinhood public history — Yahoo rate-limited this IP), EDGAR 8-K / 6-K since March. Method: one collector, four analysts, a critic that re-computed every load-bearing number from the raw data (all held; two were corrected downward). Plan and backlog: [`xmarket-tracker-2026-09-29.md`](xmarket-tracker-2026-09-29.md); PRD: [`xmarket-prd-2026-09-29.md`](xmarket-prd-2026-09-29.md).
+Does the PRD's opportunity exist, and what is it worth? Answered before building, from public data only. Inputs: 22 Hyperliquid xyz stock perps (hourly bars since 2026-03-06, 5-minute for 17 days, 1-minute for 3.6 days, 30 days of funding, order books), Robinhood Chain pools (1,199 real swaps via GeckoTerminal), the underlying stocks (Robinhood public history — Yahoo rate-limited this IP), EDGAR 8-K / 6-K since March. Method: one collector, four analysts, a critic that re-computed every load-bearing number from the raw data (all held; two were corrected downward). Plan and backlog: [`xmarket-tracker.md`](xmarket-tracker.md); PRD: [`xmarket-prd-2026-09-29.md`](xmarket-prd-2026-09-29.md).
 
 ## Verdict: re-scope
 

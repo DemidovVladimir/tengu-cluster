@@ -1,4 +1,4 @@
-//! Registry queries (`docs/lineage-2026-10-06.md` § 5): answered from record
+//! Registry queries (`docs/lineage.md` § 5): answered from record
 //! fields only, `UNKNOWN` where nothing says — never a guess.
 //!
 //! | Query | Returns |

@@ -42,10 +42,10 @@ Every API client below except `http_request`, the crypto tools and A2A sends thr
 | Agent-facing read tools over local stores: `source_evidence` (`sources.db`), `strategy_ranking`, `backtest`, `soe_view` / `soe_propose` / `soe_challenge` | no HTTP client: no request, no audit line (agents never fetch sources — `tengu sources fetch` is the operator's) | n/a |
 | Tengu Studio (`tengu studio`, default build, `adapters/inbound/studio/`) | inbound only: one listener on loopback (`127.x` · `::1` · `localhost`, anything else refused before binding — `guard.rs::loopback`), no outbound client; page assets embedded (CSP `default-src 'self'`). A Play runs `tengu run`'s runtime (`inbound::run::start_session`) in the Studio process under the sandbox's installed policy — its requests are the runtime's, audited as above | enforced |
 | MCP `http` servers | proxy (loopback exempt) | enforced |
-| A2A remotes (`outbound/a2a/`: the `a2a` tool, `tengu a2a card\|send\|get\|cancel`, 2026-10-10) | `peer_client`: proxy (loopback exempt — another harness on this host), redirects off · `check_url` + the tool's `net_hosts` on every request · only the hosts of the remote's `url` / `endpoint_url` (a card naming another host is refused before any request; the credential never leaves them) · credential variable only through `env_reads` · audit per request (`tool = "a2a"`, `remote`, `op`, `host`, `status`) — `docs/a2a-2026-10-10.md` | enforced |
+| A2A remotes (`outbound/a2a/`: the `a2a` tool, `tengu a2a card\|send\|get\|cancel`, 2026-10-10) | `peer_client`: proxy (loopback exempt — another harness on this host), redirects off · `check_url` + the tool's `net_hosts` on every request · only the hosts of the remote's `url` / `endpoint_url` (a card naming another host is refused before any request; the credential never leaves them) · credential variable only through `env_reads` · audit per request (`tool = "a2a"`, `remote`, `op`, `host`, `status`) — `docs/a2a.md` | enforced |
 | A2A server (`tengu a2a serve`, `adapters/inbound/a2a.rs`) | inbound only: binds `[a2a.server] bind:port` (default loopback); bearer token required unless loopback `allow_unauthenticated`; the turns it runs make their requests under the sandbox's policy, audited as above | enforced |
 | LLM API (OpenRouter, embeddings, wiki compiler, Jev decisions `outbound/decisions.rs`) | proxy iff `route_llm_api` | enforced |
-| Seal proxy (`[keys] proxy`, the `tengu-seal` Worker — `docs/sealed-keys-2026-10-09.md`; provider keys are its Cloudflare secrets): `/healthz`, `/session`, `/whoami` (`outbound/keys`, `tengu keys`), and every client whose URL `[keys.env]` points at `<proxy>/<route>` | LLM-API client: proxy iff `route_llm_api`; its host must be in `allow_hosts` when a sandbox sets them (config load fails otherwise); the session goes to that origin only; the Worker forwards only to the route's `upstream` (`wrangler.toml` `ROUTES`), with the key only at that route's one header / path / query spot, for routes the session was granted; redirects not followed | enforced |
+| Seal proxy (`[keys] proxy`, the `tengu-seal` Worker — `docs/sealed-keys.md`; provider keys are its Cloudflare secrets): `/healthz`, `/session`, `/whoami` (`outbound/keys`, `tengu keys`), and every client whose URL `[keys.env]` points at `<proxy>/<route>` | LLM-API client: proxy iff `route_llm_api`; its host must be in `allow_hosts` when a sandbox sets them (config load fails otherwise); the session goes to that origin only; the Worker forwards only to the route's `upstream` (`wrangler.toml` `ROUTES`), with the key only at that route's one header / path / query spot, for routes the session was granted; redirects not followed | enforced |
 | Claude Code CLI's own API traffic | `HTTPS_PROXY` = HTTP CONNECT on the proxy port iff `route_llm_api` (`claude_cli_env`) | advisory — the CLI honours the env |
 | Codex CLI's own API traffic (`engine = "codex"`, `engines/codex.rs`) | the same `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` iff `route_llm_api` (`claude_cli_env`) | advisory — the CLI honours the env |
 | Codex built-in shell / patch tool | `-s read-only` \| `workspace-write`: no network in either; apps, plugins, browser / computer use off (`-c features.<f>=false`); refused in a hardened sandbox | Codex's own sandbox (outside tengu scopes) |
@@ -65,7 +65,7 @@ Fail-closed: proxy down → request errors (never falls back to direct). Invalid
 
 ## Solana LP tool hosts (2026-09-24)
 
-`docs/typed-observations-2026-09-24.md` has the per-tool list. Each host must be in the tool's `net_hosts` scope (and `allow_hosts` if set).
+`docs/observations.md` has the per-tool list. Each host must be in the tool's `net_hosts` scope (and `allow_hosts` if set).
 
 | Host | Tools | State |
 |---|---|---|
@@ -114,7 +114,7 @@ Fail-closed: proxy down → request errors (never falls back to direct). Invalid
 
 ## Source hosts (O2, 2026-10-08)
 
-`tengu sources fetch` (`src/adapters/inbound/cli/sources.rs` → `src/adapters/outbound/sources/`) reads one `[sources.registry.<id>]` row under the installed policy. `sandboxes/soe` sets `network = "open"` with the ceiling `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]`; every row's `hosts` must sit inside it (load rule). Doc: `docs/source-evidence-2026-10-08.md`; page: `docs/tutorial/source-evidence.html`.
+`tengu sources fetch` (`src/adapters/inbound/cli/sources.rs` → `src/adapters/outbound/sources/`) reads one `[sources.registry.<id>]` row under the installed policy. `sandboxes/soe` sets `network = "open"` with the ceiling `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]`; every row's `hosts` must sit inside it (load rule). Doc: `docs/source-evidence.md`; page: `docs/tutorial/source-evidence.html`.
 
 | Host | Requests | Budget | Audit `tool` |
 |---|---|---|---|
@@ -134,7 +134,7 @@ Fail-closed: proxy down → request errors (never falls back to direct). Invalid
 |---|---|
 | Native | `make tor` (builds + starts Arti + lyrebird-rs, waits until `IsTor=true`; needs lyrebird-rs at `../lyrebird-rs` or `LYREBIRD_RS_DIR=<dir or git URL>`) → `tengu chat --sandbox <name>` → `tengu doctor --sandbox <name> --tor`. Stop: `make tor-down`. |
 | Docker | `make up` (adds `docker-compose.tor.yml`: tengu on `tor-front`, `TENGU_TOR_PROXY=socks5h://tor:9050`). `make doctor` runs the live check inside the container. Webhook port is not published in this mode. |
-| Open internet | `[egress] network = "open"` in the sandbox (no ceiling: `sandboxes/lping`, `jev-exec`, `unlimited`, `control-loop-lab` — Jev only, `a2a-lab` — its A2A self-call is loopback; Privy blocks Tor exits). With an `allow_hosts` ceiling + `https_only`: `xmarket` + `xmarket-weekend` (`api.hyperliquid.xyz`), `xlab` (+ `api.geckoterminal.com`), `xlab-w2` (+ `www.sec.gov`, `data.sec.gov`), `soe` (`www.sec.gov`, `data.sec.gov`, `api.ted.europa.eu`), `sealed-check` (`127.0.0.1`, `*.workers.dev` — the seal proxy only: Jev reaches OpenRouter through the `tengu-seal` Worker, `docs/sealed-check-2026-10-09.md`) — LLM API traffic is outside the ceiling (proxy only). Tor: the base config, `tor-check`, `storage-test`. All must stay switchable to Tor: every new HTTP / WS / SSE client goes through this module (operator decision 2026-09-30, `docs/xmarket-tracker-2026-09-29.md` convention 17). Docker: `make up NETWORK=open`. |
+| Open internet | `[egress] network = "open"` in the sandbox (no ceiling: `sandboxes/lping`, `jev-exec`, `unlimited`, `control-loop-lab` — Jev only, `a2a-lab` — its A2A self-call is loopback; Privy blocks Tor exits). With an `allow_hosts` ceiling + `https_only`: `xmarket` + `xmarket-weekend` (`api.hyperliquid.xyz`), `xlab` (+ `api.geckoterminal.com`), `xlab-w2` (+ `www.sec.gov`, `data.sec.gov`), `soe` (`www.sec.gov`, `data.sec.gov`, `api.ted.europa.eu`), `sealed-check` (`127.0.0.1`, `*.workers.dev` — the seal proxy only: Jev reaches OpenRouter through the `tengu-seal` Worker, `docs/sealed-check.md`) — LLM API traffic is outside the ceiling (proxy only). Tor: the base config, `tor-check`, `storage-test`. All must stay switchable to Tor: every new HTTP / WS / SSE client goes through this module (operator decision 2026-09-30, `docs/xmarket-tracker.md` convention 17). Docker: `make up NETWORK=open`. |
 
 ## Tor stack (`deploy/tor/`)
 
@@ -198,7 +198,7 @@ jq -r 'select(.tool=="http_request") | .host' ~/.tengu/logs/egress.jsonl | sort 
 | Claude Code CLI proxying | env-based (`HTTPS_PROXY`); network-enforced only under Docker `make up` |
 | No `User-Agent` on `http_request` | some sites (Wikipedia) return 403 — the LLM can set the header |
 | Bridge speed | obfs4 bootstraps in ~30 s; snowflake is slower (minutes) and is the fallback when obfs4 bridges are blocked |
-| Paid APIs | OpenRouter works over Tor; Privy blocks Tor exits — a sandbox calling it directly needs `network = "open"`. Through the seal proxy (`[keys.env] PRIVY_API_URL = "privy"`) tengu only reaches the Worker, which calls Privy; Tor reach of `workers.dev` is not tested live yet (`docs/sealed-keys-2026-10-09.md` § Verified · open) |
+| Paid APIs | OpenRouter works over Tor; Privy blocks Tor exits — a sandbox calling it directly needs `network = "open"`. Through the seal proxy (`[keys.env] PRIVY_API_URL = "privy"`) tengu only reaches the Worker, which calls Privy; Tor reach of `workers.dev` is not tested live yet (`docs/sealed-keys.md` § Verified · open) |
 
 ## Verified
 

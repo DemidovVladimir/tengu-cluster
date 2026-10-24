@@ -1,6 +1,6 @@
 //! `[egress]` — network policy schema and validation. The runtime policy
 //! (clients, proxy env, audit log) lives in `adapters/egress.rs`; see
-//! `docs/egress-2026-09-16.md`.
+//! `docs/egress.md`.
 
 use std::path::PathBuf;
 

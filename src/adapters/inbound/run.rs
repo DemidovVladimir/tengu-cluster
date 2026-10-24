@@ -4,7 +4,7 @@
 //! `--features webhooks` and `[webhooks] enabled`,
 //! graceful shutdown on SIGINT / SIGTERM (a second signal exits at once,
 //! code 130). Composition `bootstrap/runtime.rs`; operator doc
-//! `docs/runtime-2026-09-30.md`. Logs go to `<TENGU_HOME>/logs/tengu.log` +
+//! `docs/runtime.md`. Logs go to `<TENGU_HOME>/logs/tengu.log` +
 //! stderr (`cli/mod.rs`).
 //!
 //! | Piece | Who uses it |

@@ -1,6 +1,6 @@
 //! `[decision_loops.<name>]` — a System One (Jev) control loop over existing
 //! tools. Behaviour lives here in TOML; the loop itself is
-//! `application::decision_loop`. Design: `docs/decision-loop-plan-2026-09-24.md`.
+//! `application::decision_loop`. Design: `docs/decision-loops.md`.
 //!
 //! ```toml
 //! [decision_loops.lp_watch]

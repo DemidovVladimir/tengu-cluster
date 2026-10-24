@@ -1,6 +1,6 @@
 //! The inner tool loop — run engine rounds, execute the model's tool calls
 //! through a `ToolExecutor`, feed results back, until a final answer.
-//! See `docs/context-management-2026-04-27.md` Layer 3.
+//! See `docs/context.md` Layer 3.
 //!
 //! | Engine | Tool result entering the context (`tool_result_content`) |
 //! |---|---|

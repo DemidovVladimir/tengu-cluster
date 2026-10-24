@@ -1,4 +1,4 @@
-//! Blueprint — the Studio builder's canvas document (`docs/studio-builder-2026-10-10.md`):
+//! Blueprint — the Studio builder's canvas document (`docs/builder.md`):
 //! cards (`nodes`) and the wires between them (`edges`), saved as
 //! `sandboxes/<name>/builder.json`. Pure data: the palette, the compiler to
 //! `config.toml` and the load check live in `config/builder/`; the page only

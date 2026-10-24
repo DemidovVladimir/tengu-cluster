@@ -86,7 +86,7 @@ metrics:                    # optional: accuracy metrics (below)
 | `commands` | registry | slash commands the skill declares |
 | `metrics` | lifecycle | `tengu eval` / `skill evolve` / `skill doctor` |
 | `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
-| `learner_facing` | written by `skill seed` / `manage_skill create` | marker only: no per-learner state exists (G12, `docs/skill-research-2026-04-28.md`) |
+| `learner_facing` | written by `skill seed` / `manage_skill create` | marker only: no per-learner state exists (G12, `docs/skill-research.md`) |
 
 `requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading of frontmatter skills (2026-10-08, `registry.rs::SkillGate`, checked on every `reload`): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
 
@@ -121,7 +121,7 @@ Fields and load checks (`lifecycle/metrics.rs::MetricSpec` + `validate_metrics`;
 | Tool (opt-in unless noted) | Does |
 |---|---|
 | `skill_distill` | Authors a new skill mid-conversation: `skills/<name>/{SKILL.md, evals/prompts.yaml, evals/config.toml, metrics/<scaffolds>}` atomically (`evals/config.toml` mirrors the calling agent's engine + model). Loads on the next session (stable tool / skill inventory per conversation). Refuses a call with no conversation (a bridged call gets the run's transcript) |
-| `manage_skill` | `create \| edit_body \| patch \| add_resource \| remove_resource \| delete` — the unified write API (`docs/skill-redesign-2026-04-29.md`) |
+| `manage_skill` | `create \| edit_body \| patch \| add_resource \| remove_resource \| delete` — the unified write API (`docs/archive/2026-04/skill-redesign-2026-04-29.md`) |
 | `view_skill` (always) | `list \| read \| read_resource` |
 | `skill_resource` (always), `apply_improver_proposal` | back-compat aliases |
 
@@ -163,4 +163,4 @@ Its command is gated by `shell_bins` in its scope (first command word only — a
 - `docs/configuration.md` — `skill_packages`, `[skill_lifecycle]`
 - `docs/mcp-bridge.md` — how skill tools reach Claude Code
 - `docs/engine-backends.md` — engines
-- `docs/skill-redesign-2026-04-29.md` · `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (history)
+- `docs/archive/2026-04/skill-redesign-2026-04-29.md` · `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (history)

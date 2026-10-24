@@ -1,5 +1,5 @@
 //! The lineage registry loader and `[generation]` — a sandbox bound to one
-//! generation (`docs/lineage-2026-10-06.md` § 1, § 4; roadmap P5). Hard
+//! generation (`docs/lineage.md` § 1, § 4; roadmap P5). Hard
 //! enforcement: `Config::load` (every surface) refuses a config that could
 //! reach a capability outside its generation.
 //!

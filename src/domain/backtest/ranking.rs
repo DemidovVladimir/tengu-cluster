@@ -1,4 +1,4 @@
-//! Strategy ranking (`docs/strategy-ranking-automation-2026-10-08.md` SR-2 /
+//! Strategy ranking (`docs/ranking.md` SR-2 /
 //! SR-3): the runs of one ranking date under a ranking contract
 //! (`domain/lineage/ranking.rs`) in, one ranking out — per cohort, weakest
 //! to strongest. Pure: the coordinator (`application/ranking/`, SR-5) reads

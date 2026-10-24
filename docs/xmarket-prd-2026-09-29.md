@@ -1,5 +1,5 @@
 > Operator PRD, stored verbatim on 2026-09-29. Working sandbox name: `xmarket` (`sandboxes/xmarket/config.toml`).
-> Gap tracker (what Tengu must add): [`xmarket-tracker-2026-09-29.md`](xmarket-tracker-2026-09-29.md) — rules in its **§ 0 Start here**. How to execute: [`xmarket-build-plan-2026-09-30.md`](archive/2026-09/xmarket-build-plan-2026-09-30.md) (kickoff prompt at its end).
+> Gap tracker (what Tengu must add): [`xmarket-tracker.md`](xmarket-tracker.md) — rules in its **§ 0 Start here**. How to execute: [`xmarket-build-plan-2026-09-30.md`](archive/2026-09/xmarket-build-plan-2026-09-30.md) (kickoff prompt at its end).
 > The operator addendum below (2026-09-30) is not part of the v0.4 text; it extends it and wins where the two differ.
 
 ## Operator addendum — decisions and rules (2026-09-30)

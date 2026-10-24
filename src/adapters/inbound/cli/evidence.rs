@@ -1,5 +1,5 @@
 //! `tengu evidence …` — preserve and grade forward evidence
-//! (`docs/lineage-2026-10-06.md` § 3, roadmap Phase 0); no config, no LLM,
+//! (`docs/lineage.md` § 3, roadmap Phase 0); no config, no LLM,
 //! no network. Every reader is read-only (`adapters/outbound/evidence/`);
 //! the only write is a new vault + the record file `snapshot` fills.
 //!

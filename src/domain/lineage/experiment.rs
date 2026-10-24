@@ -1,4 +1,4 @@
-//! Experiment — `lineage/experiments/<id>.toml` (`docs/lineage-2026-10-06.md`
+//! Experiment — `lineage/experiments/<id>.toml` (`docs/lineage.md`
 //! § 2, roadmap P2): hypothesis → configuration → evidence → result →
 //! verdict, referencing the original artifacts, never copying them.
 //!

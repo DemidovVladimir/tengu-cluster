@@ -1,5 +1,5 @@
 //! `tengu sandbox` — make and compose sandboxes with the Studio builder
-//! (`docs/studio-builder-2026-10-10.md`). The same use cases as the page
+//! (`docs/builder.md`). The same use cases as the page
 //! (`application/builder.rs`), so every step can be run and debugged
 //! without a browser. Messages go to stderr; `compile` / `palette` print
 //! their result on stdout.

@@ -3,7 +3,7 @@
 //! the heartbeat file, the `loop/1` /
 //! `feed/1` health rows and the `tengu doctor --live` verdict. No IO;
 //! `now_ms` is always an input. Composition `bootstrap/runtime.rs`; operator
-//! doc `docs/runtime-2026-09-30.md`.
+//! doc `docs/runtime.md`.
 
 use std::collections::BTreeMap;
 

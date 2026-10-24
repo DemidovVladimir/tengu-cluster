@@ -572,4 +572,4 @@ Total cost for a full validation pass: **~$1.00**, ~5 minutes wall time.
 - Plan (phase 2): `docs/archive/2026-04/superpowers/plans/2026-04-21-skill-metrics-evolution-phase2.md` (Tasks α/β/γ/δ consolidation).
 - `docs/skills.md` — skill authoring + Metrics & Evolution section.
 - `docs/configuration.md` — `[skill_lifecycle]` config reference.
-- `docs/architecture.md` — Skill Lifecycle key-abstraction entry.
+- `docs/archive/2026-03/architecture.md` — Skill Lifecycle key-abstraction entry.

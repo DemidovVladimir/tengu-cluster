@@ -1,5 +1,5 @@
 //! `tengu run` composition (inbound side: `adapters/inbound/run.rs`; operator
-//! doc `docs/runtime-2026-09-30.md`):
+//! doc `docs/runtime.md`):
 //!
 //! | Step | What |
 //! |---|---|

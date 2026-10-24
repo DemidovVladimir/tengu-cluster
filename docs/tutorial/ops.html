@@ -499,7 +499,7 @@ ufw: allow 22/tcp and 7080/tcp
     var proxy = net === "tor" ? "<code>socks5h://tor:9050</code> via <code>TENGU_TOR_PROXY</code>" : "none from compose; the config's <code>[egress]</code> applies";
     var h = [];
     if (s.cc) h.push('<span class="bad">doctor exits 1: ' + s.cc + " <code>claude_code</code> agent" + (s.cc > 1 ? "s" : "") + " but the image has no Claude CLI (<code>claude</code> not on PATH) → unhealthy</span>");
-    if (s.keys) h.push('<span class="bad">doctor exits 1: <code>[keys]</code> needs an ssh-agent key and the seal proxy (<code>127.0.0.1:8787</code> = the container itself); no session → <code>[keys.env]</code> unset → <code>OPENROUTER_API_KEY is required</code>. Run it natively (<code>docs/sealed-check-2026-10-09.md</code>)</span>');
+    if (s.keys) h.push('<span class="bad">doctor exits 1: <code>[keys]</code> needs an ssh-agent key and the seal proxy (<code>127.0.0.1:8787</code> = the container itself); no session → <code>[keys.env]</code> unset → <code>OPENROUTER_API_KEY is required</code>. Run it natively (<code>docs/sealed-check.md</code>)</span>');
     else if (s.or) h.push("needs <code>OPENROUTER_API_KEY</code> in <code>.env</code> (" + s.or + " openrouter agent" + (s.or > 1 ? "s" : "") + ")");
     if (net === "open" && !s.open) h.push('<span class="warn">NETWORK=open but the config still says tor: doctor\'s proxy check fails without a proxy on 127.0.0.1:9050</span>');
     if (net === "tor" && s.open && ov) h.push('<span class="warn">NETWORK=tor but the config says open: tengu goes direct inside a network with no exit</span>');

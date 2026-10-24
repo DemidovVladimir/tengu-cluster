@@ -1,7 +1,7 @@
 //! Privy wallet signer (`ports::solana_signer::SolanaSigner`) — the Solana
 //! write tools' `mode = "send"` signs with the `[solana] privy_wallet_id`
 //! wallet through the seal proxy's `privy` route: the Worker adds the Privy
-//! app secret, this process holds none (`docs/sealed-keys-2026-10-09.md`).
+//! app secret, this process holds none (`docs/sealed-keys.md`).
 //!
 //! | Step | Rule |
 //! |---|---|

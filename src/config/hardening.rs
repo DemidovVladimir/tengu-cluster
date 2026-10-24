@@ -4,7 +4,7 @@
 //! untrusted source text: an `[soe]` section (the Software Opportunity
 //! Engine, `config/soe.rs`). One code path for all three
 //! (`risk-gate-enforcement`). Doc: `docs/engine-backends.md` § Claude
-//! Code, `docs/xmarket-risk-paper-2026-09-30.md` § Load rules.
+//! Code, `docs/xmarket-risk-paper.md` § Load rules.
 //!
 //! | Rule (hardened sandbox; a `validation_errors` violation fails `Config::load`) | Enforced by | Why |
 //! |---|---|---|

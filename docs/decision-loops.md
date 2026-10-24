@@ -1,6 +1,6 @@
 # Decision loop — plan (2026-09-24)
 
-Jev-driven control loop for `sandboxes/lping`. Context + probes: `docs/lping-2026-09-24.md`. Typed tools, `world`, cache: `docs/typed-observations-2026-09-24.md`.
+Jev-driven control loop for `sandboxes/lping`. Context + probes: `docs/lping.md`. Typed tools, `world`, cache: `docs/observations.md`.
 
 ## Status (2026-09-24, merged: phases 1–6b #18, A #27, B #29)
 
@@ -12,10 +12,10 @@ Jev-driven control loop for `sandboxes/lping`. Context + probes: `docs/lping-202
 | 4 Helius trigger | ✅ `auth_header_env` + endpoint `loop` | live listener: wrong header → 401; Helius-shaped POST → 202 → loop → escalated at 0.79 → planner turn started |
 | 5 gRPC feed | ⏳ | — (seam ready: a stream writes `acct/1:<pubkey>` rows) |
 | 6a Typed observe / plan tools + observation cache | ✅ | 11 Solana tools, `world` / `requires` / `FromObservation`, `obs` meta in history; `lp_watch` + `hedge_watch` use them (`sandboxes/lping`) |
-| 6b Write tools + signing | ✅ built, send not exercised live | 5 write tools, simulate by default (`docs/typed-observations-2026-09-24.md` § Write tools); live keyless mainnet simulations of swap / open / close / perps order; `lp_watch.open_position` uses the real schema (`mode = "simulate"`); loops run as `lp_executor` (no `description`) |
+| 6b Write tools + signing | ✅ built, send not exercised live | 5 write tools, simulate by default (`docs/observations.md` § Write tools); live keyless mainnet simulations of swap / open / close / perps order; `lp_watch.open_position` uses the real schema (`mode = "simulate"`); loops run as `lp_executor` (no `description`) |
 | A Bindings + execution chains (2026-10-06, `feature/jev-chains`) | ✅ simulate, live | slots bind one value (`{event = "/x"}`, `{from, path}`, `{observation, path}`) — no question to Jev, unresolved ⇒ action illegal; a dry-run write no longer ends the event; `hedge_decide` `data.order` = `jup_perps_order` args. Live (Jev + mainnet, keyless): `hedge_exec` snapshot → decide_hedge → order (simulated, 1 tx) → hold; `lp_exec` snapshot → plan_swap → swap → refresh, and snapshot → plan_swap → open (simulated, 1 tx) → hold |
 | B Execution maps + `sequence` (2026-10-06, `feature/execution-map`) | ✅ simulate, live | `sequence = ["a", "b?", …]` in a loop (TOML or map): each step offers only the next action + terminals; optional steps that cannot run are skipped; a failed / refused step halts. `tengu decide --map <file\|->`: an Architect's JSON run of one loop that can only narrow it (`config/execution_map.rs`, skill `execution-map`); refused maps list every reason; audit `trigger = "map:<sha256>"`, map kept in `<TENGU_HOME>/logs/maps/`. Live: lp_exec map snapshot → plan_swap → open → hold (twice), swap route → swap → refresh (gate) → Jev declined open (simulated balances unchanged); hedge_exec map snapshot → decide_hedge → hold (no order) and order simulated with forced knobs |
-| Runtime + trace (2026-09-30 `tengu run`; 2026-10-08 #44) | ✅ | `tengu run` builds every loop once behind `LoopDispatch` (tick feeds `kind = "tick"`, webhook loop endpoints, Studio's send-event); each step writes trace events (`observation.read`, `jev.*`, `action.*`, `tool.*`) into the run's recording; reference sandbox `control-loop-lab` (`docs/runtime-2026-09-30.md` § Trace, `docs/control-loop-lab-2026-10-08.md`) |
+| Runtime + trace (2026-09-30 `tengu run`; 2026-10-08 #44) | ✅ | `tengu run` builds every loop once behind `LoopDispatch` (tick feeds `kind = "tick"`, webhook loop endpoints, Studio's send-event); each step writes trace events (`observation.read`, `jev.*`, `action.*`, `tool.*`) into the run's recording; reference sandbox `control-loop-lab` (`docs/runtime.md` § Trace, `docs/control-loop-lab.md`) |
 
 Deviations from the sketch below: history is in-process (not `shared_cache`); a dry-run loop may name write tools not built yet; `tengu decide` never escalates (no orchestrator) — `tengu webhooks` and `tengu run` (a `webhooks` build with `[orchestrator]`) do. 6b: signer = local key file (user decision 2026-09-29); no Telegram approval gate (`TelegramConfig.tool_approvals` is not wired) — the gates are the per-agent wallet grant, `mode` default simulate and the loop's `dry_run`; no devnet run — verified by keyless mainnet simulation instead; `dlmm_claim_fees` dropped (close claims).
 
@@ -117,13 +117,13 @@ Phases 1–3 are the usable core (polling loop, dry-run). 4–6 build on it.
 |---|---|
 | `MetricsKind::Decision` | new variant; tokens + cost + latency per Jev call |
 | `<TENGU_HOME>/logs/decisions.jsonl` | one line per decisions call, written with one `write_all` (concurrent loops / processes never interleave): `ts` (s) + `ts_ms`, `loop`, `sandbox`, `session_id`, `t`, `call_id` (`{loop}:{session_id}:{t}` when the step ran a tool, else null — the key an exec tool's risk verdict carries: `ledger.db` `risk_decisions`, `logs/risk.jsonl`), `decision_id`, `model`, `act_at`, `latency_ms`, answers + probabilities, `usage`, `result` (action taken / skipped / escalated / rejected / `refused` + `rule` when a typed result carries `features.risk = "deny"` — `StepOutcome::Refused`, the loop goes on), `args`, `ok` + `output` (the history value: reduced, redacted); typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`); `trigger` (`map:<sha256>`, `backtest`), `runtime_id` + `run_id` when the process records a trace (`tengu run`, `tengu decide`; not `tengu webhooks`). A failed call (timeout, 402, 5xx) writes `result = {outcome: "error", reason}` with null answers, then the error propagates |
-| Execution trace (2026-10-08) | `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`: per step `observation.read` per `world` alias, `jev.completed` / `jev.failed`, `action.selected` / `.completed` / `.refused` / `.escalated` / `.rejected`, `tool.started` / `.completed` / `.failed` (`TracedExecutor`); read with `tengu trace` or Tengu Studio — `docs/runtime-2026-09-30.md` § Trace |
+| Execution trace (2026-10-08) | `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`: per step `observation.read` per `world` alias, `jev.completed` / `jev.failed`, `action.selected` / `.completed` / `.refused` / `.escalated` / `.rejected`, `tool.started` / `.completed` / `.failed` (`TracedExecutor`); read with `tengu trace` or Tengu Studio — `docs/runtime.md` § Trace |
 | TUI decision feed | `tengu chat` on a config with `[decision_loops]` tails the audit (300 ms) and shows each decision of those loops, from any process, as a System bubble — `decision_loop::render_audit` (+ `call <id>` for a step that ran a tool); a failed call as `jev <loop> #<t> · decide failed → error: <reason>`, a risk refusal as `… → refused by the risk gate: <rule>` |
 | `agentic_memory` | executed actions + escalations (durable, recallable by planner) |
 
 ## Docs to update when landing
 
-Done for phases 1–4, 6a and 6b. Phase 5: `docs/egress-2026-09-16.md` (`grpc_channel`), `docs/typed-observations-2026-09-24.md` (stream rows).
+Done for phases 1–4, 6a and 6b. Phase 5: `docs/egress.md` (`grpc_channel`), `docs/observations.md` (stream rows).
 
 ## Open questions
 

@@ -2,7 +2,7 @@
 //! sandbox's agents may call (`[a2a.remotes.<name>]`, the opt-in `a2a` tool)
 //! and the server that exposes its agents to other harnesses
 //! (`[a2a.server]`, `tengu a2a serve`). Absent = no A2A. `deny_unknown_fields`
-//! throughout. Doc: `docs/a2a-2026-10-10.md`.
+//! throughout. Doc: `docs/a2a.md`.
 //!
 //! `[a2a.remotes.<name>]` (name: `[a-z0-9][a-z0-9_-]*`)
 //!

@@ -2,7 +2,7 @@
 //! default): serves this sandbox's planner and / or agents to other agent
 //! harnesses over A2A (JSON-RPC 1.0 and 0.3, SSE streaming). The protocol
 //! lives in `application/a2a/`, the runner and cards in `bootstrap/a2a.rs`,
-//! the section in `config/a2a.rs`. Doc: `docs/a2a-2026-10-10.md`.
+//! the section in `config/a2a.rs`. Doc: `docs/a2a.md`.
 //!
 //! | Route | Answer |
 //! |---|---|

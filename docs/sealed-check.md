@@ -1,6 +1,6 @@
 # sealed-check — prove Jev, the decision loop and Studio run through the seal proxy (2026-10-09)
 
-Sandbox `sandboxes/sealed-check/` · guard test `config::keys::tests::sealed_check_sandbox_is_harmless` · seal proxy: `docs/sealed-keys-2026-10-09.md` · set-up: `docs/cloudflare-secrets-setup.html`.
+Sandbox `sandboxes/sealed-check/` · guard test `config::keys::tests::sealed_check_sandbox_is_harmless` · seal proxy: `docs/sealed-keys.md` · set-up: `docs/cloudflare-secrets-setup.html`.
 
 | What it proves | How |
 |---|---|
@@ -60,7 +60,7 @@ Jev answers vary call to call: a scenario passes on 2 of 3 tries.
 | S4 | Stop → Replay | runtime `stopped`, health `not live`, run closed; Replay slides through it |
 | S5 | Ctrl-C Studio | exit 0; `trace runs` shows kinds `decide`, `run`, `studio` |
 
-Headless alternative: the curl helper in `docs/studio-2026-10-08.md` § Play / Stop.
+Headless alternative: the curl helper in `docs/studio.md` § Play / Stop.
 
 ## Leak + isolation checks, then clean up
 

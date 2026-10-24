@@ -35,7 +35,7 @@ Concrete scenario driving every batch below:
 | # | Decision |
 |---|---|
 | A1 | Per-user state → **sidecar JSON** at `skills/<name>/state/<learner>.json`. Body shared, state per-user, no reindex cost. |
-| A2 | Resource fetcher → **new `resource-finder` agent** (TOML). `skill-improver-inline` dispatches it via the orchestrator. **Superseded 2026-04-29**: folded into the single `[agents.learning-agent]` block — `docs/skill-redesign-2026-04-29.md`. |
+| A2 | Resource fetcher → **new `resource-finder` agent** (TOML). `skill-improver-inline` dispatches it via the orchestrator. **Superseded 2026-04-29**: folded into the single `[agents.learning-agent]` block — `docs/archive/2026-04/skill-redesign-2026-04-29.md`. |
 | A3 | Teacher/learner permissions → **frontmatter flag** `editable_by_learner: bool`. Per-skill declarative. |
 
 ---
@@ -256,7 +256,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 | "fix it" / "apply the fix" / "improve the skill" | plan | `skill-improver-inline` | `apply_proposal_to_skill_md` on the named skill |
 | "rollback" | direct | — | `git checkout skills/<name>/SKILL.md` (one shell-out) |
 
-**Shipped shape (2026-04-29)**: rows 22–26 collapsed into ONE `[agents.learning-agent]` block (`view_skill` + `manage_skill`); phrase → plan table lives in `skills/orchestrator/SKILL.md` "Lifecycle verbs" — `docs/skill-redesign-2026-04-29.md`.
+**Shipped shape (2026-04-29)**: rows 22–26 collapsed into ONE `[agents.learning-agent]` block (`view_skill` + `manage_skill`); phrase → plan table lives in `skills/orchestrator/SKILL.md` "Lifecycle verbs" — `docs/archive/2026-04/skill-redesign-2026-04-29.md`.
 
 **Cache discipline still holds**: distilled / improved skills don't activate in the current conversation. The user gets a confirmation message ("Saved to `skills/<name>/`. Available next session.") not a hot-swap.
 

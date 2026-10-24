@@ -1,6 +1,6 @@
 # Phase 6 — decision evaluation (2026-10-08)
 
-`docs/plans/TENGU_ROADMAP.md` Phase 6, gate G6: the same candidate evidence must fairly evaluate the deterministic baseline, Jev and HOLD; Jev stays `UNPROVEN` until evidence shows value. Review #1 = APPROVE (`docs/w1-review-2026-10-06.md` § Verdict).
+`docs/plans/TENGU_ROADMAP.md` Phase 6, gate G6: the same candidate evidence must fairly evaluate the deterministic baseline, Jev and HOLD; Jev stays `UNPROVEN` until evidence shows value. Review #1 = APPROVE (`docs/archive/2026-10/w1-review-2026-10-06.md` § Verdict).
 
 ## Built
 

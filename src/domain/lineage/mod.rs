@@ -1,5 +1,5 @@
 //! Lineage registry — experiments, variants, Experience, capabilities,
-//! generations (`docs/lineage-2026-10-06.md`, `docs/plans/TENGU_ROADMAP.md` P2–P5). Pure:
+//! generations (`docs/lineage.md`, `docs/plans/TENGU_ROADMAP.md` P2–P5). Pure:
 //! the record types, the [`Registry`] of every record with its checks
 //! ([`Registry::validate`]), the queries (`trace`, `family_report`,
 //! `acceptance`) and the pin hashes. The files are read by `config/lineage.rs`;

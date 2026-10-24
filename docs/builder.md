@@ -1,6 +1,6 @@
 # Studio builder — drag-and-drop sandboxes (2026-10-10)
 
-n8n-style canvas inside Tengu Studio: drag agents, tools, skills, workspaces, secrets and channels, wire them, **Finalise** → `sandboxes/<name>/config.toml`. Rust decides every verdict (palette, wire colour, TOML, load check); the page draws. Built from the ST-40 design (`docs/studio-editor-design-2026-10-08.md`). Tutorial: `docs/tutorial/builder.html`. Code: `docs/code-map.md` § Studio builder.
+n8n-style canvas inside Tengu Studio: drag agents, tools, skills, workspaces, secrets and channels, wire them, **Finalise** → `sandboxes/<name>/config.toml`. Rust decides every verdict (palette, wire colour, TOML, load check); the page draws. Built from the ST-40 design (`docs/archive/2026-10/studio-editor-design-2026-10-08.md`). Tutorial: `docs/tutorial/builder.html`. Code: `docs/code-map.md` § Studio builder.
 
 ## Start
 
@@ -53,7 +53,7 @@ Browser check 2026-10-10 (headless Chrome on the real server — the Chrome exte
 | Env / `.env` | the shell or `.env` | `export NAME=<value>` |
 | Cloudflare seal proxy | a Worker secret; tengu gets a route + session | `npx wrangler secret put NAME` |
 
-The Cloudflare store and the seal-proxy card are always offered. A secret card on that store writes `[keys.env]` + `strip` and must be wired to the seal-proxy card, which writes `[keys] proxy` / `client` / `agent_socket` (`docs/sealed-keys-2026-10-09.md`). The composed `[keys]` passes `Config::load`.
+The Cloudflare store and the seal-proxy card are always offered. A secret card on that store writes `[keys.env]` + `strip` and must be wired to the seal-proxy card, which writes `[keys] proxy` / `client` / `agent_socket` (`docs/sealed-keys.md`). The composed `[keys]` passes `Config::load`.
 
 ## Rules
 

@@ -70,7 +70,7 @@ Example call (the as-built tool takes `kind`, `path` or `content`, optional `uri
 {
   "operation": "ingest_source",
   "kind": "file",
-  "path": "docs/webhooks-2026-05-11.md"
+  "path": "docs/webhooks.md"
 }
 ```
 
@@ -129,7 +129,7 @@ Example behavior proposal (planned — `propose_behavior` is not in the as-built
   "project": "tengu-cluster",
   "goal": "Keep docs concise and table-driven",
   "evidence": ["memory_event:preference:..."],
-  "target_files": ["AGENTS.md", "docs/agentic-memory-prd-2026-05-13.md"]
+  "target_files": ["AGENTS.md", "docs/memory-prd.md"]
 }
 ```
 

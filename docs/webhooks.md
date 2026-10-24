@@ -11,7 +11,7 @@
 > background and its final text lands in Open Brain (`agentic_memory`,
 > Postgres table `memory_events`, feature `postgres_memory`) keyed by
 > `session_id`. `tengu run` and Studio's Play serve the same route
-> (`docs/runtime-2026-09-30.md` § Webhooks under `tengu run`).
+> (`docs/runtime.md` § Webhooks under `tengu run`).
 
 ---
 
@@ -101,7 +101,7 @@ endpoint name; the block body configures it.
 | `secret_env` | `string`, optional | — | Name of the environment variable holding the HMAC shared secret. **Mutually exclusive with `secret`.** Preferred — keeps secrets out of TOML on disk. |
 | `secret` | `string`, optional | — | Inline shared secret. **Mutually exclusive with `secret_env`.** Dev-only — `secret_env` is the right choice for any committed config. |
 | `goal_template` | `string`, optional | *"A webhook arrived. Process the payload below."* | Prefix prepended to the synthesized user message. The full message is `"{goal_template}\n\nPayload (raw body, may be JSON):\n{body}"`. |
-| `loop` | `string`, optional | — | (2026-09-24) Send the body (parsed JSON, else string) to `[decision_loops.<loop>]` instead of the planner — Jev picks actions, tools execute; low confidence escalates to the orchestrator. 202 body carries `"loop"`. Events queue per loop (one at a time, arrival order; ≤ `[runtime] max_decisions_in_flight` across loops, 2026-09-30); past `[runtime] max_queued_per_loop` waiting events (default 64) one more gets **429** with the reason (2026-10-01). See `docs/decision-loop-plan-2026-09-24.md`. |
+| `loop` | `string`, optional | — | (2026-09-24) Send the body (parsed JSON, else string) to `[decision_loops.<loop>]` instead of the planner — Jev picks actions, tools execute; low confidence escalates to the orchestrator. 202 body carries `"loop"`. Events queue per loop (one at a time, arrival order; ≤ `[runtime] max_decisions_in_flight` across loops, 2026-09-30); past `[runtime] max_queued_per_loop` waiting events (default 64) one more gets **429** with the reason (2026-10-01). See `docs/decision-loops.md`. |
 | `auth_header_env` | `string`, optional | — | (2026-09-24) Env var holding the exact `Authorization` header value the sender attaches (Helius webhook `authHeader`). Constant-time compare, no body signature. **Mutually exclusive with `secret_env` / `secret`.** Mismatch → 401 `Authorization header mismatch`. |
 
 The listener validates every endpoint at startup. Misconfiguration —
@@ -309,7 +309,7 @@ Every request to a configured endpoint is recorded in the runtime's run — `ten
 | planner endpoint: `plan.created` → `step.*` (+ each step's `run-agent` `tool.*`) → `plan.completed` (+ `metrics.recorded`) | the turn (owned by the process; always before the run's `run.closed` / `runtime.stopped`) | steps, agents, sizes; never the goal or the answer; a turn aborted at the shutdown deadline: `plan.completed` dropped, `cancelled: true` |
 | `webhook.responded` | the answer | `status_code` (2xx ok · 401 / 429 / 503 refused · 500 failed), `error` line 1 |
 
-Never recorded: the body (size only), a header, a secret; an unknown endpoint (404) is logged only. Full list: `docs/runtime-2026-09-30.md` § Trace; test fixture for a local check: `tests/fixtures/webhooks/trace.toml`.
+Never recorded: the body (size only), a header, a secret; an unknown endpoint (404) is logged only. Full list: `docs/runtime.md` § Trace; test fixture for a local check: `tests/fixtures/webhooks/trace.toml`.
 
 ---
 
@@ -372,12 +372,12 @@ psql "$TENGU_MEMORY_DATABASE_URL" -c \
 
 | Piece | Value |
 |---|---|
-| Leases | the ones `tengu run` takes (`bootstrap::runtime::LeasePlan`, `docs/runtime-2026-09-30.md` § Single-runner lease): `runtime:<sandbox>`, plus `state:<dir>` for an `[xmarket]` state dir, plus `state:<dir>` for an `[soe]` sandbox's `[sources] state` — never beside `tengu run` (or Studio's Play) of the sandbox, nor beside any process of a sandbox naming the same state dir; held ⇒ exit 1 naming the holder `<host>:<pid>:<uuid>` |
+| Leases | the ones `tengu run` takes (`bootstrap::runtime::LeasePlan`, `docs/runtime.md` § Single-runner lease): `runtime:<sandbox>`, plus `state:<dir>` for an `[xmarket]` state dir, plus `state:<dir>` for an `[soe]` sandbox's `[sources] state` — never beside `tengu run` (or Studio's Play) of the sandbox, nor beside any process of a sandbox naming the same state dir; held ⇒ exit 1 naming the holder `<host>:<pid>:<uuid>` |
 | Loops | one `DecisionLoop` per loop an endpoint names, built once; events queue on a `LoopDispatch` (`[runtime] max_decisions_in_flight`, `max_queued_per_loop`) |
 | SIGINT / SIGTERM | stop accepting; loop events and every accepted orchestrator turn (planner endpoints, loop escalations — owned by the `LoopDispatch`, `application::runtime::loops::Turns`) drain ≤ `[runtime] shutdown_grace_secs`; a turn still running then is aborted (`plan.completed` dropped, `cancelled: true`); then the leases are freed and `runtime.stopped` is written, exit 0; a second signal exits 130 (the leases free themselves ≤ 30 s) |
 | Lost lease | the runtime stops, exit 1 |
 | Heartbeat | `<state dir>/run-<sandbox>.json` + `loop/1` rows, as `tengu run` (`tengu doctor --sandbox <s> --live` reads it) |
-| Execution trace | the runtime's run (`kind = "run"`, `runtime.*` lifecycle; `decisions.jsonl` lines carry its `runtime_id` / `run_id`; `docs/runtime-2026-09-30.md` § Trace). Recordings from before 2026-10-23 are `kind = "webhooks"`, ending in `run.closed` |
+| Execution trace | the runtime's run (`kind = "run"`, `runtime.*` lifecycle; `decisions.jsonl` lines carry its `runtime_id` / `run_id`; `docs/runtime.md` § Trace). Recordings from before 2026-10-23 are `kind = "webhooks"`, ending in `run.closed` |
 
 ### Expected listener stderr (one webhook turn)
 
@@ -419,7 +419,7 @@ INFO webhook output persisted to agentic_memory entry_id=<uuid> session_id=webho
 | Idempotency keys / replay protection | First-cut listener; senders that retry will trigger duplicate runs. | When a sender starts double-firing in practice. |
 | Mid-payload routing (`X-GitHub-Event` → different agents) | The planner routes from `goal_template` + payload; `agent` is informational. Agents inspect the payload themselves. | Only if multiple senders pile onto one endpoint in a way that's awkward to route inside the planner. |
 | Rate limiting | Should live in the reverse proxy (nginx / caddy / cloudflare). | Adding it inside tengu adds attack surface for no real win over an HTTP-layer rate limit. |
-| Listener inside chat / telegram | Less coupling — run each surface as its own process. `tengu run` (2026-09-30, `docs/runtime-2026-09-30.md`) and Studio's Play (the same `start_session`, 2026-10-08) serve the same route next to their loops, with graceful shutdown. | If deployment ergonomics push back. |
+| Listener inside chat / telegram | Less coupling — run each surface as its own process. `tengu run` (2026-09-30, `docs/runtime.md`) and Studio's Play (the same `start_session`, 2026-10-08) serve the same route next to their loops, with graceful shutdown. | If deployment ergonomics push back. |
 | `secret` rotation without restart | `secret_env` is re-read per request, so updating the env var works for the *next* request. `secret` literal requires a config reload — out of scope. | Probably never; secrets manager + env var covers this. |
 
 ---
@@ -437,7 +437,7 @@ INFO webhook output persisted to agentic_memory entry_id=<uuid> session_id=webho
 | `src/adapters/inbound/cli/mod.rs` (`Commands::Webhooks`) | CLI dispatch → `webhooks::run_webhooks` (a `--no-default-features` build without `webhooks`: an error naming the feature). |
 
 For the per-turn flow inside the orchestrator itself, see
-[`architecture-2026-04-27.md`](architecture-2026-04-27.md) §1 — the
+[`architecture.md`](architecture.md) §1 — the
 webhook listener calls into the same machinery that powers TUI and
 Telegram from step 2 onwards.
 

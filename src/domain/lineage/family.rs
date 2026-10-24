@@ -1,4 +1,4 @@
-//! Hypothesis family — `lineage/families/<id>.toml` (`docs/lineage-2026-10-06.md`
+//! Hypothesis family — `lineage/families/<id>.toml` (`docs/lineage.md`
 //! § 2, roadmap P3): one idea (Rule W, its placebo, each rejected idea) and
 //! how much searching happened outside the registry.
 //!

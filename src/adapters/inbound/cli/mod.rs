@@ -97,7 +97,7 @@ enum Commands {
         #[arg(long)]
         sandbox: Option<String>,
     },
-    /// A2A (Agent2Agent, docs/a2a-2026-10-10.md): `serve` this sandbox's
+    /// A2A (Agent2Agent, docs/a2a.md): `serve` this sandbox's
     /// planner / agents to other agent harnesses (`[a2a.server]`, feature
     /// `a2a`, on by default), `cards` it would publish, `remotes`; talk to a
     /// remote as the `a2a` tool does: `card`, `send`, `get`, `cancel`
@@ -112,7 +112,7 @@ enum Commands {
     /// Run the sandbox's long-running process: every `[decision_loops.*]`
     /// built once, the webhook routes (with `--features webhooks` and
     /// `[webhooks] enabled`), one runner per sandbox (lease), graceful
-    /// shutdown on SIGINT / SIGTERM. See docs/runtime-2026-09-30.md.
+    /// shutdown on SIGINT / SIGTERM. See docs/runtime.md.
     Run {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
@@ -157,7 +157,7 @@ enum Commands {
     /// Make and compose sandboxes with the Studio builder: `new` asks a name,
     /// writes sandboxes/<name>/ from a template and opens the drag-and-drop
     /// builder; `compile` / `finalise` / `palette` run the same steps without a
-    /// browser (docs/studio-builder-2026-10-10.md).
+    /// browser (docs/builder.md).
     Sandbox {
         #[command(subcommand)]
         action: sandbox::SandboxAction,
@@ -220,7 +220,7 @@ enum Commands {
         #[command(subcommand)]
         action: ranking::RankingAction,
     },
-    /// Preserve and grade forward evidence (docs/lineage-2026-10-06.md § 3):
+    /// Preserve and grade forward evidence (docs/lineage.md § 3):
     /// `snapshot` a record into a read-only vault, `verify` it, recorder
     /// `coverage`, `grade` a paper ledger, `regrade` rule W from recorded
     /// books. No config, no network; every reader is read-only.
@@ -231,7 +231,7 @@ enum Commands {
     /// The lineage registry (`lineage/`): verify it, trace a record, a
     /// family's search accounting, the Rule-W acceptance report,
     /// capabilities, generations, seal a preregistration. No config needed.
-    /// See docs/lineage-2026-10-06.md § 5.
+    /// See docs/lineage.md § 5.
     Lineage(lineage::LineageArgs),
     /// Software Opportunity Engine (docs/soe-2026-10-08.md). Offline: `init`
     /// writes the UNSIGNED private profile template; `check` an opportunity
@@ -257,7 +257,7 @@ enum Commands {
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
     /// account name, and for the content of `TENGU_RISK_RESUME_SECRET_FILE`
-    /// when that names a 0600 file). See docs/xmarket-risk-paper-2026-09-30.md.
+    /// when that names a 0600 file). See docs/xmarket-risk-paper.md.
     Risk {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long, global = true)]
@@ -311,7 +311,7 @@ enum Commands {
         action: SecretAction,
     },
     /// Sealed keys: provider keys live only inside blobs the tengu-seal
-    /// Cloudflare Worker opens (docs/sealed-keys-2026-10-09.md).
+    /// Cloudflare Worker opens (docs/sealed-keys.md).
     Keys {
         #[command(subcommand)]
         action: keys::KeysAction,

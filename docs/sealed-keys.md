@@ -1,6 +1,6 @@
 # Sealed keys — no provider key on this machine (2026-10-09)
 
-Operator decision 2026-10-09 (local k8s / Helm, VPS cluster and encrypted USB rejected). Provider keys are secrets of the `tengu-seal` Cloudflare Worker, set by the operator; tengu names a route, the Worker adds the key and forwards. Operator walkthrough: `docs/cloudflare-secrets-setup.html`. Tutorial: `docs/tutorial/sealed-keys.html`. End-to-end proof: `sandboxes/sealed-check` (`docs/sealed-check-2026-10-09.md`).
+Operator decision 2026-10-09 (local k8s / Helm, VPS cluster and encrypted USB rejected). Provider keys are secrets of the `tengu-seal` Cloudflare Worker, set by the operator; tengu names a route, the Worker adds the key and forwards. Operator walkthrough: `docs/cloudflare-secrets-setup.html`. Tutorial: `docs/tutorial/sealed-keys.html`. End-to-end proof: `sandboxes/sealed-check` (`docs/sealed-check.md`).
 
 | Piece | Lives | Code |
 |---|---|---|
@@ -89,7 +89,7 @@ Dropped before forwarding: `authorization` (the session), `cookie`, `host`, hop-
 | Clients | OpenRouter engine, embeddings, Jev, wiki compiler: no code change. Solana RPC, Privy, HL, SEC, Gecko, TED, JSON fetches (`http_class::GatedHttp`) / EVM receipt poll: `auth_header_for` (proxy origin only; never over a header the client set). Telegram: `header_mode` (`<proxy>/` + `Tengu-Route`), placeholder token; with `TELEGRAM_API_URL` in `[keys.env]` and no session `tengu telegram` refuses to start — never a local token. Privy wallet tools (`tools/crypto/helpers.rs::privy_request`): `PRIVY_API_URL` on the proxy → the session, no app secret (`PRIVY_APP_ID` / `PRIVY_WALLET_ID` stay local, not secrets); `[keys.env] PRIVY_API_URL` without `PRIVY_APP_SECRET` in `strip` is a load error (`config/keys.rs::FALLBACK_KEYS`), so no session = `Missing environment variable PRIVY_APP_SECRET`, never a local secret. Solana write tools (`outbound/solana/privy.rs`): `[solana] privy_wallet_id` signs on the same `privy` route (`signTransaction`; message checked unchanged, the wallet's slot ed25519-verified) — the local key file is gone; with a signer no scope may `env_reads` the session (`config/solana.rs`) |
 | `tengu keys` (no vault unlock) | `setup [--proxy] [--agent-socket]` → `CLIENTS` lines with the routes this config uses (none: `["openrouter"]`) + `[keys]` block · `status` → routes, `[keys.env]` vs routes, session for `KeysConfig::routes()`, `/whoami`, `granted …` · `check <route> [--path p]` → a session for that one route, one GET: status, type, size, ms. All take `--sandbox` |
 | Not moved | local Postgres; Claude Code login; Codex login (`engine = "codex"`, ChatGPT subscription); A2A remote credentials (`[a2a.remotes.*] bearer_env` / `header_env`) and webhook HMAC secrets (local env); public HL / Gecko |
-| Studio builder | a secret card with the Cloudflare store writes `[keys.env]` + `strip`; the seal-proxy card writes `[keys] proxy` / `client` / `agent_socket` (`docs/studio-builder-2026-10-10.md` § Secrets) |
+| Studio builder | a secret card with the Cloudflare store writes `[keys.env]` + `strip`; the seal-proxy card writes `[keys] proxy` / `client` / `agent_socket` (`docs/builder.md` § Secrets) |
 
 ## Set up (once) · revoke
 

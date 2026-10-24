@@ -1,5 +1,5 @@
 # Tengu Cluster — "a2a-lab" sandbox (2026-10-10)
-# A2A both ways in one sandbox (docs/a2a-2026-10-10.md): it serves its planner
+# A2A both ways in one sandbox (docs/a2a.md): it serves its planner
 # and its `helper` agent to other agent harnesses, and its `liaison` agent
 # calls remote harnesses with the `a2a` tool — here its own `helper`, so the
 # loop runs on one machine:

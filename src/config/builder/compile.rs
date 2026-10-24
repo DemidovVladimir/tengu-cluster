@@ -1,4 +1,4 @@
-//! Blueprint → `config.toml` (`docs/studio-builder-2026-10-10.md` § Compile).
+//! Blueprint → `config.toml` (`docs/builder.md` § Compile).
 //! Pure: no file, no env. The real loader (`Config::load` on a temp copy,
 //! `adapters/outbound/builder_store.rs`) has the last word; the checks here
 //! pin a problem to the card or wire that causes it, so the page can colour

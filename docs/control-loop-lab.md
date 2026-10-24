@@ -84,7 +84,7 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 | G7 | A3 / A4 runs, same command | A3: `tool.failed` (`tool:lab/read_file`, `payload.error` `Cannot read file 'in/absent.txt' …`) → `action.completed` **failed** · A4: `trigger.map` (`trigger:map/<sha256>`) → `jev.completed` → `action.escalated` (`gate:demo/act_at`, `confidence` < `act_at` 1.0) |
 | G8 | after A7 (≥ 1 tick): the `run` recording | `runtime.starting` → `runtime.running` · per tick `feed.fired` (`feed:tick`) → `loop.queued` → `feed.tick_sent` → `loop.started` → step events → `loop.completed` (`payload.stats`) · per probe `feed.fired` → `tool.failed` → `feed.failed` (`fatal`, `retrying: false`) · Ctrl-C: `runtime.stopping` → `runtime.stopped` (`lease_released: true`) · A12 = a new `run_id` and `runtime_id` · tasks run concurrently, so `loop.started` may come before `feed.tick_sent`, probe events interleave, and the first tick's `observation.read` is `stale` (no `feed/1` row yet) |
 
-Every event's fields, parents and the Studio visual it drives: `docs/runtime-2026-09-30.md` § Trace. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below). Recorded run: `docs/studio-trace-evidence-2026-10-08.md`.
+Every event's fields, parents and the Studio visual it drives: `docs/runtime.md` § Trace. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below). Recorded run: `docs/archive/2026-10/studio-trace-evidence-2026-10-08.md`.
 
 ## Studio server + page (ST-20 / ST-21 / ST-22, the default build)
 
@@ -98,7 +98,7 @@ Every event's fields, parents and the Studio visual it drives: `docs/runtime-202
 | S6 | Replay, A2 (act) · A4 (`uncertain.map.json`) | act: `action:demo/write_marker` + `tool:lab/write_file` green, edges `jev → write_marker → write_file` lit; map: drawn on the map's graph (`trigger:map/<sha256>`, `act_at 1.0`, dry run on), `gate:demo/act_at` amber (`action.escalated`), the picked action's `chooses` edge amber |
 | S7 | click a node · an event | node: the validated config section (`decision_loops.demo`, defaults filled in), edges, evidence files + store key (`feed/1:tick`, `loop/1:demo`), its events; event: answers + probabilities, args, result, duration, `call_id`, `decision_id`, payload |
 
-Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22. Play / Stop / send-event (ST-30 / ST-31; the lab sets `[studio] control = true`): `docs/studio-2026-10-08.md` § Play / Stop, recorded run `docs/studio-acceptance-2026-10-08.md`; browser screenshots of a real-Jev Play → `act` → `tool-error` → Stop (run `cbd8cd05-30fb-4177-aa99-0b978f0e83e5`, 2026-10-09): `docs/studio-2026-10-08.md` § Live validation, `docs/studio-evidence/`.
+Recorded: `docs/archive/2026-10/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22. Play / Stop / send-event (ST-30 / ST-31; the lab sets `[studio] control = true`): `docs/studio.md` § Play / Stop, recorded run `docs/archive/2026-10/studio-acceptance-2026-10-08.md`; browser screenshots of a real-Jev Play → `act` → `tool-error` → Stop (run `cbd8cd05-30fb-4177-aa99-0b978f0e83e5`, 2026-10-09): `docs/studio.md` § Live validation, `docs/studio-evidence/`.
 
 ## Troubleshooting
 
