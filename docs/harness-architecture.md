@@ -93,7 +93,7 @@ Each step dispatch:
 | File | What it does |
 |---|---|
 | `mod.rs` | `Orchestrator` struct. Public API: `new`, `handle`, `subscribe`, `cancel`. |
-| `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/mod.rs`. |
+| `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/agent.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
 | `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `leaves` (the executor joins parallel leaves). `single_leaf` is test-only; `validate` (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles) runs in `replan::drive` before any step — an invalid plan replans. |
 | `planner.rs` | `RegistryPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
@@ -576,7 +576,7 @@ Each interface is ≤10 methods and documented in its defining file.
 | memory subsystem | `src/application/memory/*` inline | 19 |
 | memory plugin tools | `src/adapters/outbound/tools/memory/*` inline | 17 |
 | scope_lint | `tests/scope_lint.rs` | 2 |
-| config | `src/config/mod.rs` inline | 12 |
+| config | `src/config/tests.rs` | 12 |
 | eval runner | `src/adapters/inbound/eval/` (+ `application/skills/lifecycle/eval.rs`) inline | ~25 |
 
 All pass under `cargo test --bin tengu <filter>` with narrow filters (per project rule: ≤30s test runs, no blind full `cargo test`).

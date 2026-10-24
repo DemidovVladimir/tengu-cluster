@@ -459,7 +459,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
         <tr><td><code>src/domain/token.rs</code></td><td>bytes / 4 estimate, the 1/8 window budget</td></tr>
         <tr><td><code>src/domain/untrusted.rs</code></td><td>the one fence for outside text: <code>fence</code>, the fixpoint <code>clean</code>, <code>tool_origin</code></td></tr>
         <tr><td><code>src/domain/session.rs</code> · <code>usage.rs</code> · <code>message.rs</code></td><td>loop state, usage totals, <code>StreamEvent</code></td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>LimitsConfig</code>, <code>FlowConfig</code>, <code>PromptBudgetConfig</code></td></tr>
+        <tr><td><code>src/config/{agent,memory}.rs</code></td><td><code>LimitsConfig</code>, <code>FlowConfig</code> (<code>agent.rs</code>), <code>PromptBudgetConfig</code> (<code>memory.rs</code>)</td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>executor build, scope resolution, fallback scope</td></tr>
         <tr><td><code>src/adapters/outbound/secrets.rs</code></td><td><code>SanitizedToolExecutor</code></td></tr>
       </tbody>

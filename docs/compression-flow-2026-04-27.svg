@@ -229,7 +229,7 @@
   <g transform="translate(40,1550)">
     <rect class="panel" width="650" height="120"/>
     <text x="20" y="28" class="small mono">src/adapters/outbound/tools/memory/persistent_store.rs::chunk_text</text>
-    <text x="20" y="50" class="small">Char-window splitter. Defaults: <tspan class="mono">chunk_size=1000, overlap=200</tspan> ([memory], config/mod.rs).</text>
+    <text x="20" y="50" class="small">Char-window splitter. Defaults: <tspan class="mono">chunk_size=1000, overlap=200</tspan> ([memory], config/memory.rs).</text>
     <text x="20" y="70" class="small">Used by the <tspan class="mono">persistent_store</tspan> tool when an agent saves a file:</text>
     <text x="20" y="88" class="small">extract text (PDF/DOCX/XLSX/raw) → chunk → embed each chunk → upsert manifest + chunks.</text>
     <text x="20" y="108" class="small muted">Mechanical chunking — NOT LLM summarisation. Different layer entirely from compress_and_store.</text>

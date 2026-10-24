@@ -231,7 +231,7 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">17</text>
       <text x="52" y="32" class="mech">max_tool_rounds hard stop</text>
-      <text x="20" y="56" class="small mono">tool_loop.rs:93 · config/mod.rs:622</text>
+      <text x="20" y="56" class="small mono">tool_loop.rs:93 · config/agent.rs</text>
       <text x="20" y="76" class="small">Default 70 rounds.</text>
       <text x="20" y="92" class="small">After exhaust: forces tools=[] turn</text>
       <text x="20" y="108" class="small">at L231 to extract closing message.</text>

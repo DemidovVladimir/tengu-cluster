@@ -33,6 +33,7 @@ sources = [
   "src/bootstrap/orchestrator.rs",
   "src/bootstrap/sandbox.rs",
   "src/config/mod.rs",
+  "src/config/load.rs",
   "sandboxes/lping/config.toml",
 ]
 
@@ -50,7 +51,7 @@ sources = [
   "src/bootstrap/a2a.rs",
   "src/ports/orchestration.rs",
   "src/domain/plan.rs",
-  "src/config/mod.rs",
+  "src/config/agent.rs",
   "skills/orchestrator/",
 ]
 
@@ -66,7 +67,7 @@ sources = [
   "src/application/chat/tool_loop.rs",
   "src/application/chat/tool_loop_tests.rs",
   "src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs",
-  "src/config/mod.rs",
+  "src/config/agent.rs",
   "tests/run_agent_ipc.rs",
 ]
 
@@ -79,7 +80,8 @@ sources = [
   "src/domain/untrusted.rs",
   "src/domain/session.rs",
   "src/domain/usage.rs",
-  "src/config/mod.rs",
+  "src/config/agent.rs",
+  "src/config/memory.rs",
 ]
 
 [pages.engines]
@@ -108,6 +110,9 @@ sources = [
 [pages.sandboxes]
 sources = [
   "src/config/mod.rs",
+  "src/config/agent.rs",
+  "src/config/load.rs",
+  "src/config/tests.rs",
   "src/config/paths.rs",
   "src/config/sections.rs",
   "src/config/hardening.rs",
@@ -166,6 +171,7 @@ sources = [
 sources = [
   "src/adapters/inbound/tui/",
   "src/adapters/inbound/telegram/",
+  "src/config/channels.rs",
   "src/adapters/inbound/webhooks.rs",
   "src/adapters/inbound/run.rs",
   "src/adapters/inbound/channel.rs",
@@ -203,7 +209,7 @@ sources = [
   "src/adapters/inbound/mcp_bridge.rs",
   "src/bootstrap/one_shot.rs",
   "src/adapters/inbound/cli/run_agent.rs",
-  "src/config/mod.rs",
+  "src/config/memory.rs",
 ]
 
 [pages.local-memory]
@@ -226,7 +232,8 @@ sources = [
   "src/config/hardening.rs",
   "src/config/readers.rs",
   "src/adapters/outbound/tools/args.rs",
-  "src/config/mod.rs",
+  "src/config/load.rs",
+  "src/config/agent.rs",
   "src/bootstrap/tools.rs",
   "src/adapters/outbound/tools/workspace/",
   "src/adapters/inbound/mcp_bridge.rs",

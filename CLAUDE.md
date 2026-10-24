@@ -252,7 +252,7 @@ flow, audit these for staleness **before declaring done**:
 | `docs/tutorial/<slug>.html` + `docs/tutorial/sources.toml` | **Every code change** (rule above): pages whose `sources` cover the changed paths; `sources.toml` when files move; `cargo test --test tutorial_map`. |
 | `tests/layering_lint.rs` | If you added a layer or changed who may import whom (`RULES` / `FORBIDDEN`). |
 | `docs/tools.md` | If you changed the tool catalog, tool gating, `[[mcp_servers]]` handling, or how agents get tools. |
-| `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/mod.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
+| `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/agent.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
 | `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, a Solana tool's args, key, TTL, hosts or knobs, or a write tool's send rules (signer, `config/solana.rs`, lease / pending / fence). |
 | `docs/xmarket-tracker-2026-09-29.md` (+ PRD addendum) | If you worked on an xmarket item: tick it (✅ + commit), update § 0 "Where to begin" when the next step changes, and keep the conventions, decisions and PRD addendum current when a rule changes. |
@@ -317,8 +317,8 @@ No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (
 | Task | Where | Recipe |
 |---|---|---|
 | New engine (e.g. another provider) | `src/adapters/outbound/engines/<name>.rs` + `build_engine` match in `engines/mod.rs` + the name in `config::ENGINES` + its card in `config/builder/palette.rs::engines` (a test keeps them equal) | `docs/code-map.md` § Add an engine |
-| New config field / section | `src/config/mod.rs` (struct + `#[serde(default)]` + `Default`) → validation in `validation_errors` | `docs/code-map.md` § Extend config |
-| Built-in defaults | `impl Default for Config` + `default_*` fns in `src/config/mod.rs`; commented example `config.example.toml` | — |
+| New config field / section | `src/config/` (`Config` in `mod.rs`, agent blocks in `agent.rs`, a section in its own file: struct + `#[serde(default)]` + `Default`) → validation in `load.rs::validation_errors` | `docs/code-map.md` § Extend config |
+| Built-in defaults | `impl Default for Config` (`src/config/mod.rs`) + `default_*` fns beside their struct; commented example `config.example.toml` | — |
 
 ## How to add a new agent
 
@@ -326,7 +326,7 @@ No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (
    base config) with a `description` — that is what makes it routable.
 2. Restart `tengu chat` — `TENGU_PLANNER_REGISTRY.md` is regenerated on planner turns.
 
-Fields (same `AgentConfig` as every in-process agent, `src/config/mod.rs`):
+Fields (same `AgentConfig` as every in-process agent, `src/config/agent.rs`):
 `engine`, `model`, `description`, `example_queries`, `tools` (allow-list on
 every surface — chat, plan steps, bridge; workspace-tool names opt in),
 `skill_packages` (`skills` alias),

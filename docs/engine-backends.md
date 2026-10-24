@@ -300,7 +300,7 @@ To add a new engine backend:
 2. Optional, for heavy deps only: a feature flag in `Cargo.toml` (no engine has one today: all four are always built)
 3. Declare the module in `src/adapters/outbound/engines/mod.rs`; gate its construction with `#[cfg(feature = …)]` if 2
 4. Add a match arm in `engines/mod.rs` `build_step_engine()` — `build_engine()` delegates to it (the planner uses the `[orchestrator] agent`'s engine; `build_planner_engine()` is dead code)
-5. Add the engine name to `config::ENGINES` in `src/config/mod.rs` (validation reads it)
+5. Add the engine name to `config::ENGINES` in `src/config/agent.rs` (validation reads it)
 6. If the engine manages its own workspace, set `manages_own_workspace() = true` and use `bridge_tools` from `EngineContext`; a CLI that runs its own loop through the bridge also joins `engines::bridges_tools` (run-agent hands it the tools + summary file) and reuses `bridge_env::bridge_env` / `engines/cli_run.rs`
 7. Build its HTTP client with `egress::policy().llm_api_client` (or pass `claude_cli_env()` to a subprocess) — a bare `reqwest::Client` bypasses `[egress]`
 8. Engine matrix: a fixture under `tests/fixtures/engine_matrix/` + its legs in `tests/engine_matrix.rs` (§ Engine matrix); an engine that runs tools itself emits `StreamEvent::ToolRan` per call

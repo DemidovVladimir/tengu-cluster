@@ -239,7 +239,7 @@
     <rect width="224" height="330" rx="6" class="panel" />
     <rect x="0" y="0" width="224" height="22" rx="6" class="pill-agt" />
     <text x="10" y="15" class="pt">[agents.*]  -  agents</text>
-    <text x="10" y="40" class="file">config/mod.rs::AgentConfig</text>
+    <text x="10" y="40" class="file">config/agent.rs::AgentConfig</text>
     <text x="10" y="52" class="small">one struct: in-process agents,</text>
     <text x="10" y="64" class="small">subagents, loop + feed agents</text>
     <text x="10" y="86" class="file">sandboxes/&lt;name&gt;/config.toml</text>

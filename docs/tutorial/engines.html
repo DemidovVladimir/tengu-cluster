@@ -439,7 +439,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI args, env strip, the NDJSON parser (<code>NdjsonRun</code>), transcript</td></tr>
         <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td><code>codex exec</code> args, <code>web_search</code>, env strip, the JSONL parser (<code>JsonRun</code>), the 900 s idle floor</td></tr>
         <tr><td><code>src/adapters/outbound/engines/cli_run.rs</code></td><td>what the two CLI engines share: the run loop <code>drive</code> (stderr drain, keepalive, idle kill, tool cap, step stop, exit → last event), run dir, stdin prompt (tagged turns), transcript</td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>ENGINES</code>, <code>CLAUDE_CODE_PROFILES</code>, <code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, <code>AgentCodexConfig</code>, validation</td></tr>
+        <tr><td><code>src/config/agent.rs</code></td><td><code>ENGINES</code>, <code>CLAUDE_CODE_PROFILES</code>, <code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, <code>AgentCodexConfig</code>, validation</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>profile <code>none</code> in hardened sandboxes; no <code>codex</code> there</td></tr>
         <tr><td><code>src/domain/engine_smoke.rs</code></td><td>smoke prompt and verdict</td></tr>
         <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor --engines</code></td></tr>
