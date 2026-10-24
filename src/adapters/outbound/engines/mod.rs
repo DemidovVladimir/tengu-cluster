@@ -37,7 +37,7 @@ pub(crate) struct StepOpts {
     /// The config the bridge loads (`TENGU_CONFIG`) and takes
     /// `[agents.<agent_id>]` from; `None` = the config in effect
     /// (`config::paths::default_config_path`). `tengu eval` passes its
-    /// expanded eval config (`eval.rs::bridge_config_file`).
+    /// expanded eval config (`inbound/eval/mod.rs::bridge_config_file`).
     pub config_file: Option<std::path::PathBuf>,
 }
 

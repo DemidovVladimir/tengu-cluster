@@ -577,13 +577,13 @@ Each interface is ≤10 methods and documented in its defining file.
 | memory plugin tools | `src/adapters/outbound/tools/memory/*` inline | 17 |
 | scope_lint | `tests/scope_lint.rs` | 2 |
 | config | `src/config/mod.rs` inline | 12 |
-| eval runner | `src/adapters/inbound/eval.rs` inline | ~25 |
+| eval runner | `src/adapters/inbound/eval/` (+ `application/skills/lifecycle/eval.rs`) inline | ~25 |
 
 All pass under `cargo test --bin tengu <filter>` with narrow filters (per project rule: ≤30s test runs, no blind full `cargo test`).
 
 ### 14.1 End-to-end eval dispatch
 
-`tengu eval <skill>` has two dispatch paths in `src/adapters/inbound/eval.rs::run_row`:
+`tengu eval <skill>` has two dispatch paths in `src/adapters/inbound/eval/row.rs::run_row`:
 
 - **Direct** (default): row prompt → default agent's `collect_engine_response`. Used by config files without an `[orchestrator]` block — `skills/<name>/evals/config.toml`.
 - **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle` (`run_row_via_orchestrator`), with a `PlannerLlm` built per row. `build_orchestrator` wires `SubprocessRunner`, so each worker step runs as a real `tengu run-agent` child; row stubs do not reach the steps. The judge's observations are the orchestrator's events (plan, steps, replans) via `RowObserver`; tokens are the row session's `metrics.recorded` records. Used by `skills/orchestration-e2e/evals/config.toml`.

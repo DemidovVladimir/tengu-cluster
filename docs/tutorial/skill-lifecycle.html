@@ -434,7 +434,8 @@ tengu skill remove my-notes --tier project
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/eval.rs</code></td><td><code>tengu eval</code>: rows, stubs, judge, report, exit codes; an orchestrated row's observer and trace close (<code>close_row</code>)</td></tr>
+        <tr><td><code>src/adapters/inbound/eval/</code></td><td><code>tengu eval</code>: discovery, eval config, the row driver (<code>row.rs</code>), report, exit codes; an orchestrated row's observer and trace close (<code>close_row</code>)</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/eval.rs</code></td><td>the eval logic, no IO: rows, stubs, the judge, report types, transcript text</td></tr>
         <tr><td><code>src/adapters/inbound/evolve.rs</code></td><td>the evolve driver: baseline, improver call, cycles, gate, apply</td></tr>
         <tr><td><code>src/application/skills/lifecycle/evolve.rs</code></td><td>target pick, <code>pick_best</code>, proposal apply, <code>editable_by_learner</code></td></tr>
         <tr><td><code>src/application/skills/lifecycle/metrics.rs</code></td><td><code>MetricSpec</code> and its validation</td></tr>

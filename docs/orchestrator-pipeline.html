@@ -206,7 +206,7 @@ flowchart TB
       TG["Telegram<br/>adapters/inbound/telegram.rs"]
       TUI["TUI<br/>tui/mod.rs"]
       WH["Webhooks<br/>adapters/inbound/webhooks.rs"]
-      EV["Eval runner<br/>adapters/inbound/eval.rs"]
+      EV["Eval runner<br/>adapters/inbound/eval/"]
     end
 
     subgraph OR["Orchestrator subsystem"]
@@ -638,7 +638,7 @@ flowchart TB
 <table>
   <thead><tr><th>Artifact</th><th>Knob</th><th>Default</th><th>Code</th></tr></thead>
   <tbody>
-    <tr><td><code>evals/runs/&lt;ts&gt;/</code></td><td><code>--keep-runs N</code> (pruned at start; ignored with <code>--out</code>)</td><td>10</td><td class="file-ref">adapters/inbound/eval.rs::prune_old_run_dirs</td></tr>
+    <tr><td><code>evals/runs/&lt;ts&gt;/</code></td><td><code>--keep-runs N</code> (pruned at start; ignored with <code>--out</code>)</td><td>10</td><td class="file-ref">adapters/inbound/eval/mod.rs::prune_old_run_dirs</td></tr>
     <tr><td><code>skills/&lt;name&gt;/metrics/runs/&lt;ts&gt;/</code></td><td><code>--max-runs N</code> (<code>0</code> = no pruning)</td><td>10</td><td class="file-ref">application/skills/lifecycle/storage.rs::finalize_run (via RunSkillOptions.max_per_run_reports)</td></tr>
     <tr><td><code>metrics.json</code></td><td>always kept (rolling)</td><td>—</td><td>—</td></tr>
     <tr><td><code>history.jsonl</code></td><td>always appended</td><td>—</td><td>—</td></tr>
@@ -657,7 +657,7 @@ flowchart LR
 </pre>
 </div>
 <p class="small">The flag's help text says it also skips <code>report.json</code>; the code does not
-(<code>adapters/inbound/eval.rs</code> <code>run</code>: <code>create_dir_all(&amp;out_dir)</code>, then
+(<code>adapters/inbound/eval/mod.rs</code> <code>run</code>: <code>create_dir_all(&amp;out_dir)</code>, then
 <code>std::fs::write(report_path, …)</code> with no <code>no_persist</code> check).</p>
 
 <h4>100 runs — with vs without retention</h4>
@@ -711,7 +711,7 @@ between retention sweeps.
     <tr><td>Channel dispatch (Telegram)</td><td class="file-ref">adapters/inbound/telegram.rs</td><td><code>planner_llm</code> at startup, <code>orchestrator_for</code> @ 1444, <code>execute_orchestrator_turn</code> @ 1468</td></tr>
     <tr><td>Channel dispatch (TUI)</td><td class="file-ref">adapters/inbound/tui/mod.rs</td><td><code>planner_llm</code> + <code>build_orchestrator</code> @ 242; <code>orch.handle</code> in the engine thread @ 846</td></tr>
     <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">adapters/inbound/webhooks.rs</td><td><code>run_one_shot</code> @ 699: <code>planner_llm</code> + <code>build_orchestrator</code> per POST</td></tr>
-    <tr><td>Eval dispatch + retention</td><td class="file-ref">adapters/inbound/eval.rs</td><td><code>run_row_via_orchestrator</code> (<code>PlannerLlm</code> per row; steps are <code>run-agent</code> children; judge observations from <code>RowObserver</code>), <code>prune_old_run_dirs</code>, <code>RunSkillOptions</code></td></tr>
+    <tr><td>Eval dispatch + retention</td><td class="file-ref">adapters/inbound/eval/</td><td><code>run_row_via_orchestrator</code> (<code>PlannerLlm</code> per row; steps are <code>run-agent</code> children; judge observations from <code>RowObserver</code>), <code>prune_old_run_dirs</code>, <code>RunSkillOptions</code></td></tr>
     <tr><td>Memory manager</td><td class="file-ref">application/memory/manager.rs</td><td><code>MemoryManager::{set_vector_backend,ingest_one,ingest_batch,search,delete_entry,clear_all,stats}</code> — workspace vector backend behind the memory tools (injector / writer / providers removed 2026-10-22)</td></tr>
     <tr><td>Vector store</td><td class="file-ref">ports/memory.rs</td><td><code>VectorStore</code> trait</td></tr>
     <tr><td>Disk backend</td><td class="file-ref">adapters/outbound/memory/disk_vector.rs</td><td><code>DiskVectorStore</code> (only built-in <code>VectorStore</code>)</td></tr>

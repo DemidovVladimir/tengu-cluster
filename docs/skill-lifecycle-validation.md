@@ -109,7 +109,7 @@ Expected:
 
 ```
 test result: ok. N passed; 0 failed ...      (application/skills/lifecycle)
-test result: ok. N passed; 0 failed ...      (adapters/inbound/eval.rs)
+test result: ok. N passed; 0 failed ...      (adapters/inbound/eval/ + application/skills/lifecycle/eval.rs)
 test result: ok. N passed; 0 failed ...      (adapters/outbound/tools — `postgres_memory` adds more)
 ```
 
@@ -313,7 +313,7 @@ Expected: a JSON object with `pass`, `score`, `notes` — the judge's substantiv
 |---------|-------|-----|
 | "`[skill_lifecycle]` config missing" | No `[skill_lifecycle]` block in config | Add per section 0.3 |
 | "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`domain::tools::WORKSPACE_TOOLS`: memory, skill-lifecycle, Solana, Hyperliquid, xm, xlab and sources names — the error lists them all) | Fix the name; checked in `src/config/mod.rs::validate_agent` |
-| "yaml prompts parse failed" | Fixtures file is neither schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}` or the `{schema_version, fixtures: [...]}` file the skill tools write (`eval.rs` reads both) |
+| "yaml prompts parse failed" | Fixtures file is neither schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}` or the `{schema_version, fixtures: [...]}` file the skill tools write (`lifecycle/eval.rs::parse_yaml_prompts` reads both) |
 | Every row fails with "agent only described skill_distill in text" | `skill_distill` not advertised to the LLM | The eval agent must opt in (`skill_distill` in `workspace_tools` or `tools`); the row is the `catalog()` entry in `src/adapters/outbound/tools/mod.rs` (`SkillLifecyclePlugin`) |
 | llm_judge fails with "model does not support assistant prefill" | Old prefill-based judge prompt | Verify commit `6d88028` or later — `LlmJudgeKind::run` should build the prompt with `""` prefill |
 

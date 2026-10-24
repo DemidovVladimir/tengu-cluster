@@ -58,7 +58,7 @@ Concrete scenario driving every batch below:
 | Capability | Status | Code |
 |---|---|---|
 | `skill_distill` LLM tool (the create-skill metaskill) | Shipped | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
-| `tengu eval <skill>` | Shipped | `src/adapters/inbound/eval.rs::run` |
+| `tengu eval <skill>` | Shipped | `src/adapters/inbound/eval/mod.rs::run` |
 | `tengu skill evolve <skill>` (bounded rewrite→rescore) | Shipped | `src/adapters/inbound/evolve.rs` (driver) · `src/application/skills/lifecycle/evolve.rs` (proposal / selection logic) |
 | `tengu skill metrics <skill>` | Shipped | `src/adapters/inbound/cli/skill.rs` (`SkillAction::Metrics`) |
 | `tengu skill accept-proposal` | Placeholder | `src/adapters/inbound/cli/skill.rs` (`SkillAction::AcceptProposal`) |
@@ -362,7 +362,7 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 | Metric kinds | `src/application/skills/lifecycle/metric_kinds/{shell_check,llm_judge,tool_assertion,script,dialog_replay,description_trigger}.rs` |
 | Rolling storage + retention | `src/application/skills/lifecycle/storage.rs` |
 | Fixture YAML + extraction | `src/application/skills/lifecycle/fixtures.rs` |
-| Eval runner | `src/adapters/inbound/eval.rs` |
+| Eval runner | `src/adapters/inbound/eval/` (CLI, rows) + `src/application/skills/lifecycle/eval.rs` (rows, judge, report) |
 | Evolve driver | `src/application/skills/lifecycle/evolve.rs` |
 | Approval gate | `src/application/skills/lifecycle/approval_gate.rs` |
 | Scratch worktree | `src/application/skills/lifecycle/scratch_worktree.rs` |

@@ -159,6 +159,6 @@ List them in an agent's `tools` like any other tool (`tools = ["github__create_i
 | In-process OpenRouter agent (TUI, Telegram) | yes | same executor |
 | In-process Claude Code agent (TUI, Telegram) | yes | servers listed once at agent setup and added to the bridge list; bridge proxies them |
 | Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`bootstrap::tools::bridge_inputs`) |
-| Eval / evolve agent, `engine = "claude_code"` | yes | same (`bridge_inputs`); its bridge loads the expanded eval config (`eval.rs::bridge_config_file`); stubbed rows refused (`docs/mcp-bridge.md` § Known Limitations) |
+| Eval / evolve agent, `engine = "claude_code"` | yes | same (`bridge_inputs`); its bridge loads the expanded eval config (`inbound/eval/mod.rs::bridge_config_file`); stubbed rows refused (`docs/mcp-bridge.md` § Known Limitations) |
 
 Names use `__` because model APIs reject `.` in tool names.

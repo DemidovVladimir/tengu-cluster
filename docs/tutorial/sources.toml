@@ -156,7 +156,7 @@ sources = [
 sources = [
   "src/application/skills/lifecycle/",
   "src/adapters/outbound/tools/skill_lifecycle/",
-  "src/adapters/inbound/eval.rs",
+  "src/adapters/inbound/eval/",
   "src/adapters/inbound/evolve.rs",
   "src/adapters/inbound/cli/skill.rs",
   "src/config/skill_lifecycle.rs",
