@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(c.breaker().failures(), 0);
     }
 
-    /// Live call — costs ~$0.00002. `cargo test --bin tengu jev_live -- --ignored`.
+    /// Live call — costs ~$0.00002. `cargo test --lib jev_live -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn jev_live_choice() {

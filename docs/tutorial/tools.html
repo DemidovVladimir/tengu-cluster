@@ -189,9 +189,9 @@
         <li>An agent block lists <code>tools</code> (the allow-list) and <code>workspace_tools</code> (opt-ins). An empty <code>tools</code> means every default tool.</li>
         <li><code>agent_base_tools</code> walks the catalog: default rows, memory rows when memory is on, opt-in rows that are named (an opt-in memory row, <code>persistent_store</code>, also needs memory on). A non-empty <code>tools</code> keeps only listed names.</li>
         <li><code>register_catalog</code> builds each needed plugin once and registers only allowed tools, none outside a bound <code>[generation]</code>. The in-process executor and the MCP bridge call this same function.</li>
-        <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace. A hardened sandbox drops its shell.</li>
+        <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace with no env var. A hardened sandbox makes it deny-all.</li>
         <li>The model asks for a call. The executor publishes an activity line first; an unknown name fails with the sorted list of this agent's tools.</li>
-        <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, memory, secrets, conversation, agent config, call id.</li>
+        <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, secrets, conversation, agent config, call id (the executor, not the tool, publishes the activity line).</li>
         <li><code>Tool::execute</code> calls <code>ctx.scope.check_*</code> before it touches a file, host, env var, shell or wallet. A denial is an error, never a silent skip.</li>
         <li>The tool returns <code>ToolOutput</code>: text for the model and, for typed tools, an <code>Observation</code> with status, age and features.</li>
         <li><code>SanitizedToolExecutor</code> redacts secret values from the text, the observation and errors. Only then does the model see it.</li>
@@ -294,9 +294,7 @@ ToolEntry {
         <div><b>scope</b>this tool's <code>ToolScope</code>: fs_roots, net_hosts, env_reads, shell_bins, wallets</div>
         <div><b>shell</b>runs commands in the workspace</div>
         <div><b>http</b>the egress client: proxied per <code>[egress]</code>, redirects off</div>
-        <div><b>memory_manager</b>vector memory, when the agent has one</div>
         <div><b>secret_registry</b>vault values for <code>$VAR</code> expansion and redaction</div>
-        <div><b>activity</b>where activity lines go (TUI bubble, log)</div>
         <div><b>conversation</b>read-only view of the messages so far</div>
         <div><b>agent_config</b>the calling agent's block (engine, model, sections)</div>
         <div><b>call_id</b><code>chat:&lt;nonce&gt;:&lt;round&gt;:&lt;i&gt;:&lt;provider id&gt;</code>, <code>mcp:&lt;nonce&gt;:&lt;id&gt;</code>, <code>feed:&lt;name&gt;:&lt;slot ms&gt;:&lt;i&gt;</code> or <code>{loop}:{session}:{t}</code>; exec tools dedupe on it</div>
@@ -344,7 +342,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
     <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 38 fails the config.</span></li>
     <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
-    <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
+    <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace, no env var, deny-all in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
     <li><span><b>Secrets stay out.</b> Text, observations and error messages pass <code>SanitizedToolExecutor</code> before a model sees them.</span></li>
     <li><span><b>Generation-bound.</b> In a sandbox with <code>[generation]</code>, a tool outside it is neither advertised nor registered, with a warning, on top of the load-time refusal (<a href="lineage.html">Lineage and generations</a>).</span></li>
@@ -379,10 +377,10 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
         <tr><td><code>src/adapters/outbound/tools/mod.rs</code></td><td><code>catalog()</code>, <code>advertised_defs</code>, <code>register_catalog</code></td></tr>
         <tr><td><code>src/domain/tools.rs</code></td><td>opt-in names: <code>WORKSPACE_TOOLS</code>, exec and signing lists; the SOE closed world (<code>SOE_ALLOWED</code>, <code>SIDE_EFFECT_TOOLS</code>)</td></tr>
         <tr><td><code>src/ports/tool.rs</code></td><td><code>Tool</code>, <code>ToolPlugin</code>, <code>ToolCtx</code>, <code>ToolOutput</code></td></tr>
-        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>agent_base_tools</code>, <code>build_tool_executor</code>, <code>within_generation</code>, scope map, fallback scope</td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>agent_base_tools</code>, <code>assemble_executor</code> (the one assembly: catalog, shell skills, <code>[[mcp_servers]]</code>, scopes — chat, <code>run-agent</code> and the MCP bridge), <code>build_tool_executor</code> → <code>ToolStack</code> (the tools to advertise, <code>[[mcp_servers]]</code> ones included, + the redacting executor), <code>within_generation</code>, scope map, fallback scope</td></tr>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>ToolRegistry</code>, <code>PluginToolExecutor</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset</td></tr>
-        <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td>argument helpers, workspace path checks</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td>argument helpers (the strict ones xm, xlab, SOE and sources share: unknown key refused, strings trimmed), workspace path checks</td></tr>
         <tr><td class="wrap"><code>src/adapters/outbound/tools/{workspace,http,crypto}/</code></td><td>the default tool families</td></tr>
         <tr><td><code>src/adapters/outbound/shell.rs</code></td><td>the shell runner (300 s cap)</td></tr>
         <tr><td><code>tests/scope_lint.rs</code></td><td>the scope-gate lint</td></tr>
@@ -392,7 +390,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

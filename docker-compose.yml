@@ -1,16 +1,17 @@
 # Tengu Cluster — Docker Compose (base file: tengu + optional Postgres)
 #
 # Usage (prefer the Makefile — it picks the right file set):
-#   make up                     # ./config.toml; Tor unless its [egress] network = "open" (docs/egress-2026-09-16.md)
+#   make up                     # ./config.toml; Tor unless its [egress] network = "open" (docs/egress.md)
 #   make up SANDBOX=unlimited   # sandboxes/unlimited/config.toml instead, mounted at its own path (TENGU_CONFIG_FILE / TENGU_CONTAINER_CONFIG below)
 #   make up-memory              # + Postgres/pgvector (image built with postgres_memory)
 #   docker compose --profile postgres-memory up -d postgres-memory   # DB only (native binary)
 #
 # Agentic memory needs the image built WITH the feature, not just the profile:
-#   TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build
+#   TENGU_FEATURES=postgres_memory docker compose --profile postgres-memory up -d --build
 #
-# Ports: 7080 is the webhook listener (`tengu webhooks`, feature `webhooks`).
-# Nothing listens on [hub].port. Not published under NETWORK=tor.
+# Ports: 7080 is the webhook listener (`tengu run` / `tengu webhooks` — the
+# runtime with no feeds; feature `webhooks`).
+# Not published under NETWORK=tor.
 #
 # Config:
 #   1. cp .env.example .env && edit .env (set API keys)
@@ -24,7 +25,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        FEATURES: "${TENGU_FEATURES:-openrouter,telegram}"
+        FEATURES: "${TENGU_FEATURES:-telegram}"
     image: tengu-cluster:latest
     container_name: tengu
     restart: unless-stopped

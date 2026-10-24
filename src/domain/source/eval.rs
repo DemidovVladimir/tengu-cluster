@@ -31,7 +31,7 @@
 //! the file IO and the tests sit in `tests`.
 //!
 //! Regenerate (only when a case or the packet shape changes; review the
-//! diff): `TENGU_REGEN_SOURCE_EVAL=1 cargo test --bin tengu
+//! diff): `TENGU_REGEN_SOURCE_EVAL=1 cargo test --lib
 //! domain::source::eval` rebuilds every case from the captures above and
 //! [`super::testkit`], checks each hand summary, and rewrites the file.
 
@@ -45,8 +45,8 @@ use super::packet::{AsOfQuery, EvidencePacket};
 use super::record::SourceRecord;
 use super::rules::{Revision, SourcePolicy};
 use super::testkit::World;
-use crate::domain::marketdata::fmt_time;
 use crate::domain::observation::Observed;
+use crate::domain::time::fmt_time;
 
 /// The file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,7 +289,6 @@ mod tests {
 
     use super::*;
     use crate::domain::canonical::{canonical_json, sha256_hex};
-    use crate::domain::marketdata::parse_time;
     use crate::domain::sec::{index_acceptance, submissions};
     use crate::domain::source::asof::as_of;
     use crate::domain::source::checks::{allowed, assert_same, canon, moved, MOVES};
@@ -299,6 +298,7 @@ mod tests {
     use crate::domain::source::sec_records::{filing_record, FilingTime};
     use crate::domain::source::ted::{day_span, decode_page, notice_record, query_key};
     use crate::domain::source::testkit::{copy_of, coverage, edited, rec, Src};
+    use crate::domain::time::parse_time;
 
     const CASES_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),

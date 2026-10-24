@@ -207,11 +207,11 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>You run <code>tengu chat --sandbox lping</code>. With no subcommand at all, <code>tengu</code> runs <code>chat</code>.</li>
+        <li>You run <code>tengu chat --sandbox lping</code>. With no subcommand at all, <code>tengu</code> runs <code>chat</code>. The name must be <code>[a-z0-9][a-z0-9_-]</code>, at most 40 (the one name rule: builder, trace dirs), so it never leaves <code>sandboxes/</code>.</li>
         <li>Base path: <code>-c</code>, else <code>$TENGU_CONFIG</code>, else <code>&lt;TENGU_HOME&gt;/config.toml</code>. It is pinned as <code>TENGU_CONFIG</code>. No file there: built-in defaults, one <code>main</code> agent.</li>
         <li><code>Config::load</code> reads the file and fills every <code>${VAR}</code> from the environment. An unset variable stays as literal text, with a warning naming it (comment lines are skipped).</li>
         <li>Strict parse: an unknown key at the root or inside an <code>[agents.*]</code> block fails the load. A typo never switches a knob off silently.</li>
-        <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, Telegram approvals, a <code>tools</code> name no catalog row or MCP server knows, an <code>a2a</code> tool with no <code>[a2a.remotes.*]</code>) are only logged.</li>
+        <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, a <code>tools</code> name no catalog row or MCP server knows, an <code>a2a</code> tool with no <code>[a2a.remotes.*]</code>, an agent that reads outside text and holds a side effect: <code>config/readers.rs</code>) are only logged.</li>
         <li><code>[default_scopes]</code> is copied into each agent that has no scope for that tool; <code>~</code> is expanded. Every agent gets the same <code>SandboxSections</code>.</li>
         <li><code>--sandbox lping</code> loads <code>sandboxes/lping/config.toml</code> from the current directory, through the same steps. It replaces the base config whole.</li>
         <li><code>TENGU_CONFIG</code> is re-pinned to the sandbox file's absolute path, and that file's <code>[egress]</code> policy is installed. With <code>[keys]</code>, a seal-proxy session is signed (or the parent's reused) and <code>[keys.env]</code> exported as Worker route URLs (<a href="sealed-keys.html">sealed keys</a>).</li>
@@ -233,7 +233,7 @@
         <select id="r-sbx">
           <option value="">(not given)</option>
           <option>a2a-lab</option><option>control-loop-lab</option><option>jev-exec</option><option selected>lping</option><option>sealed-check</option><option>soe</option><option>storage-test</option><option>tor-check</option>
-          <option>unlimited</option><option>xlab</option><option>xlab-w2</option><option>xmarket</option><option>xmarket-weekend</option>
+          <option>unlimited</option><option>venture-scan</option><option>xlab</option><option>xlab-w2</option><option>xmarket</option><option>xmarket-weekend</option>
         </select>
       </label>
       <label for="r-c"><code>-c / --config</code>
@@ -317,7 +317,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 <span class="c"># no fs_roots: denied, not inherited</span></pre>
     </div>
   </div>
-  <p class="note">A configured scope is deny-by-default per field. A tool with no scope at all gets the permissive fallback rooted in the workspace (see <a href="scopes.html">Scopes and hardening</a>).</p>
+  <p class="note">A configured scope is deny-by-default per field. A tool with no scope at all gets the fallback rooted in the workspace, with no env var (see <a href="scopes.html">Scopes and hardening</a>).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-shelf">
@@ -450,7 +450,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>a2a</code>, <code>doctor</code>, <code>decide</code>, <code>studio</code>, <code>history</code>, <code>backtest</code>, <code>ranking</code>, <code>risk</code> and <code>sources</code> with <code>--sandbox</code> log a warning and go on; any other command stops. <code>evidence</code>, <code>lineage</code>, <code>trace</code> and <code>sandbox</code> never read it; <code>soe</code> reads a config only for its weekly commands (<code>--sandbox</code> or <code>-c</code>).</span></li>
     <li><span><b>Children see the same file.</b> <code>run-agent</code> reloads it by sandbox name; the bridge reads the absolute <code>TENGU_CONFIG</code>.</span></li>
     <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, <code>[sources]</code>, <code>[soe]</code>, <code>[a2a]</code> remotes, the <code>[solana] privy_wallet_id</code>, state dirs and rate limits.</span></li>
-    <li><span><b>Hardened means hardened.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
+    <li><span><b>Hardened means hardened.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, every agent's fallback scope is deny-all.</span></li>
     <li><span><b>Bound sandboxes stay in their generation.</b> With <code>[generation]</code>, every load checks the sandbox against <code>lineage/generations/&lt;id&gt;.toml</code>; xlab and xmarket-weekend bind W1.</span></li>
     <li><span><b>Ranking contracts fit the sandbox.</b> With <code>[strategy_ranking]</code>, every load refuses an unknown contract, one of another sandbox, or a contract strategy missing from <code>[backtest.strategies]</code> (<a href="strategy-ranking.html">Strategy ranking</a>).</span></li>
   </ul>
@@ -485,8 +485,8 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>Config</code>, <code>AgentConfig</code>, defaults, <code>Config::load</code>, validation, <code>fold_default_scopes</code></td></tr>
-        <tr><td><code>src/config/paths.rs</code></td><td><code>TENGU_HOME</code>, the default config path, <code>~</code> expansion, a file's sandbox name</td></tr>
+        <tr><td><code>src/config/{mod,agent,load}.rs</code></td><td><code>Config</code> + defaults (<code>mod.rs</code>), <code>AgentConfig</code> (<code>agent.rs</code>), <code>Config::load</code>, validation, <code>fold_default_scopes</code> (<code>load.rs</code>)</td></tr>
+        <tr><td><code>src/config/paths.rs</code></td><td><code>TENGU_HOME</code>, <code>Layout</code> (every path under it), the default config path, <code>~</code> expansion, a file's sandbox name</td></tr>
         <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections</code>: what tools read at call time, the bound generation's scope and the <code>[strategy_ranking]</code> section included</td></tr>
         <tr><td><code>src/config/lineage.rs</code></td><td><code>[generation]</code>: the binding <code>Config::load</code> checks</td></tr>
         <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code>: the ranking contracts a sandbox runs, their load rules</td></tr>
@@ -505,7 +505,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -515,7 +515,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 (function () {
   "use strict";
   var NET = { "a2a-lab": "open", "control-loop-lab": "open", "jev-exec": "open", "lping": "open", "sealed-check": "open, allow_hosts: 2", "soe": "open, allow_hosts: 3", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
-    "unlimited": "open", "xlab": "open, allow_hosts: 2", "xlab-w2": "open, allow_hosts: 4", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
+    "unlimited": "open", "venture-scan": "open", "xlab": "open, allow_hosts: 2", "xlab-w2": "open, allow_hosts: 4", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
   var sbx = document.getElementById("r-sbx"), cf = document.getElementById("r-c"), env = document.getElementById("r-env");
   var ex = document.getElementById("r-exists"), ok = document.getElementById("r-valid");
   var chain = document.getElementById("r-chain"), out = document.getElementById("r-out");
@@ -570,20 +570,20 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 
   /* agent block anatomy */
   var A = {
-    hdr: ["One block = one agent", ["deny_unknown_fields"], "The same block serves in-process chat, plan steps, decision loops, feeds and the Claude Code / Codex bridge. A misspelled key fails the load.", "src/config/mod.rs · AgentConfig"],
+    hdr: ["One block = one agent", ["deny_unknown_fields"], "The same block serves in-process chat, plan steps, decision loops, feeds and the Claude Code / Codex bridge. A misspelled key fails the load.", "src/config/agent.rs · AgentConfig"],
     "default": ["default = true", ["at most one"], "tengu chat talks to this agent (without one: whichever comes first in the agent map). Telegram sends plain messages to it. Two defaults fail validation.", "src/adapters/inbound/tui/mod.rs · run_tui"],
-    engine: ["engine", ["required"], "openrouter, claude_code, local or codex (config::ENGINES). Anything else fails validation. Picks the adapter that thinks for this agent.", "src/config/mod.rs · validate_agent"],
-    model: ["model", ["required", "non-empty"], "Format follows the engine: claude_code takes a bare slug like this one, OpenRouter wants anthropic/claude-sonnet-4-6, local sends the server's own id.", "src/config/mod.rs · validate_agent"],
+    engine: ["engine", ["required"], "openrouter, claude_code, local or codex (config::ENGINES). Anything else fails validation. Picks the adapter that thinks for this agent.", "src/config/load.rs · validate_agent"],
+    model: ["model", ["required", "non-empty"], "Format follows the engine: claude_code takes a bare slug like this one, OpenRouter wants anthropic/claude-sonnet-4-6, local sends the server's own id.", "src/config/load.rs · validate_agent"],
     workspace: ["workspace", ["default: none"], "Chat surfaces give tools only to an agent with a workspace. A plan step without one runs in a temp dir that is removed after the step.", "src/bootstrap/tools.rs · workspace_or_temp"],
     tools: ["tools", ["empty = every default tool"], "The allow-list on every surface. A non-empty list keeps only these names (plus workspace_tools). An opt-in name here is switched on too. A name that is no catalog tool, no &lt;server&gt;__&lt;tool&gt; and no loaded shell skill tool is dropped, with a load warning.", "src/bootstrap/tools.rs · agent_base_tools"],
-    description: ["description", ["present ⇒ routable"], "Rendered into TENGU_PLANNER_REGISTRY.md; the planner may send plan steps here. Empty text fails validation. No description: in-process only.", "src/config/mod.rs · AgentConfig.description"],
-    examples: ["example_queries", ["default: []"], "Listed under the registry entry so the planner can match short questions. Used only with a description.", "src/config/mod.rs · AgentConfig.example_queries"],
-    identity: ["identity", ["name", "instructions"], "Goes into the system prompt. The TUI header shows the name.", "src/config/mod.rs · IdentityConfig"],
-    limits: ["limits", ["LimitsConfig"], "Per-agent budgets: tool rounds, step wall clock, result sizes, context window, request timeout.", "src/config/mod.rs · LimitsConfig"],
-    rounds: ["max_tool_rounds", ["default 70"], "Tool cap per chat turn or plan step. OpenRouter and local count engine turns; claude_code and codex count tool calls.", "src/config/mod.rs · default_max_tool_rounds"],
-    timeout: ["step_timeout_secs", ["default 600", "must be > 0"], "Wall clock for one plan step run as tengu run-agent; the parent kills the child after it.", "src/config/mod.rs · default_step_timeout_secs"],
-    cc: ["claude_code.builtin_tools_profile", ["default editor_shell"], "none, read_only, research (+ WebSearch, run at Anthropic; no WebFetch), editor or editor_shell (config::CLAUDE_CODE_PROFILES). A sandbox with [risk], [soe] or a Solana signer requires none: built-in tools ignore Tengu scopes.", "src/config/hardening.rs · claude_code_errors"],
-    "private": ["A private agent", ["no description", "not default"], "Never routable by the planner or Telegram. Only such an agent may hold exec tools like paper_order. Feeds run its tools.", "src/config/risk.rs · src/adapters/inbound/telegram.rs"]
+    description: ["description", ["present ⇒ routable"], "Rendered into TENGU_PLANNER_REGISTRY.md; the planner may send plan steps here. Empty text fails validation. No description: in-process only.", "src/config/agent.rs · AgentConfig.description"],
+    examples: ["example_queries", ["default: []"], "Listed under the registry entry so the planner can match short questions. Used only with a description.", "src/config/agent.rs · AgentConfig.example_queries"],
+    identity: ["identity", ["name", "instructions"], "Goes into the system prompt. The TUI header shows the name.", "src/config/agent.rs · IdentityConfig"],
+    limits: ["limits", ["LimitsConfig"], "Per-agent budgets: tool rounds, step wall clock, result sizes, context window, request timeout.", "src/config/agent.rs · LimitsConfig"],
+    rounds: ["max_tool_rounds", ["default 70"], "Tool cap per chat turn or plan step. OpenRouter and local count engine turns; claude_code and codex count tool calls.", "src/config/agent.rs · default_max_tool_rounds"],
+    timeout: ["step_timeout_secs", ["default 600", "must be > 0"], "Wall clock for one plan step run as tengu run-agent; the parent kills the child after it.", "src/config/agent.rs · default_step_timeout_secs"],
+    cc: ["claude_code.builtin_tools_profile", ["default none"], "none, read_only, research (WebSearch only, run at Anthropic; no WebFetch), editor or editor_shell (config::CLAUDE_CODE_PROFILES). A sandbox with [risk], [soe] or a Solana signer requires none: built-in tools ignore Tengu scopes.", "src/config/hardening.rs · claude_code_errors"],
+    "private": ["A private agent", ["no description", "not default"], "Never routable by the planner or Telegram. Only such an agent may hold exec tools like paper_order. Feeds run its tools.", "src/config/risk.rs · src/adapters/inbound/telegram/"]
   };
   var lines = Array.prototype.slice.call(document.querySelectorAll("#toml li[data-k]"));
   var tt = document.getElementById("a-title"), tc = document.getElementById("a-chips"), tx = document.getElementById("a-text"), tf = document.getElementById("a-file");

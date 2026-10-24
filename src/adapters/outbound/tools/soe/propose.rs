@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{args, refused, run_arg, SoeShared};
-use crate::adapters::outbound::tools::xlab::field;
+use crate::adapters::outbound::tools::args::field;
 use crate::application::soe::cycle::PROFILE;
 use crate::application::soe::submit::{self, submit_proposal, RunHead};
 use crate::domain::canonical::canonical_json;

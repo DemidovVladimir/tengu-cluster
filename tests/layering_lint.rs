@@ -1,4 +1,4 @@
-//! Hexagonal layering lint — `docs/hexagonal-plan-2026-09-23.md`.
+//! Hexagonal layering lint — `docs/archive/2026-09/hexagonal-plan-2026-09-23.md`.
 //!
 //! Every `crate::<layer>` reference in a layer's non-test code must point at
 //! a layer it may depend on:
@@ -8,10 +8,10 @@
 //! | `domain` | `domain` (and no IO crates) |
 //! | `ports` | `domain`, `config` |
 //! | `config` | `domain` |
-//! | `application` | `domain`, `ports`, `config`, `application` |
+//! | `application` | `domain`, `ports`, `config`, `application` (IO crates only in the shrink-only `APPLICATION_IO`) |
 //! | `adapters/outbound` | all but `adapters::inbound`, `bootstrap` (`FORBIDDEN`) |
 //! | `bootstrap` | all but `adapters::inbound` (`FORBIDDEN`) |
-//! | `adapters/inbound`, `main.rs` | everything |
+//! | `adapters/inbound`, `main.rs`, `lib.rs` | everything |
 //!
 //! | Subtree (`FORBIDDEN`) | Must not import |
 //! |---|---|
@@ -20,14 +20,32 @@
 //! | `application/backtest` | `application::soe` |
 //! | `application/soe` | `application::backtest`, `domain::xm`, `domain::backtest::engine` |
 //!
+//! Core never imports a vertical (`VERTICALS`: the trading desk, xlab, the
+//! Solana family, lineage / evidence, SOE and the source layer): every other
+//! module of `domain`, `ports`, `config`, `application` and
+//! `adapters/outbound` is core, and only the `COMPOSITION` files (module
+//! lists, the `Config` aggregate and its loader, the tool catalog),
+//! `bootstrap/`, `adapters/inbound/`, `main.rs` and `lib.rs` wire verticals in. A
+//! vertical may use core and other verticals.
+//!
 //! A `use` statement counts leaf by leaf: grouped and multi-line imports
-//! (`use crate::domain::{soe, xm::risk};`) are expanded (`file_paths`).
+//! (`use crate::domain::{soe, xm::risk};`) are expanded (`file_paths`);
+//! the core check also resolves `super::` paths (`resolve_super`).
+//!
+//! Test code is inline `#[cfg(test)] mod … { … }` blocks and the files the
+//! crate builds only in tests (`tests/support/test_files.rs`: a `mod x;`
+//! behind `#[cfg(test)]`, `#[path]` or not, and every module below one).
 //!
 //! `EXCEPTIONS` lists known violations still being unwound. It may only
 //! shrink; the rewrite is done when it is empty.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[path = "support/test_files.rs"]
+mod support;
+use support::test_files;
 
 const LAYERS: &[&str] = &[
     "domain",
@@ -84,8 +102,88 @@ const FORBIDDEN: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Crates that do IO; `domain` must not name them.
-const DOMAIN_IO_CRATES: &[&str] = &[
+/// Vertical modules (`crate::` paths, whole segments): core code must not
+/// name one (`core_never_uses_a_vertical`).
+const VERTICALS: &[&str] = &[
+    "crate::domain::backtest",
+    "crate::domain::book",
+    "crate::domain::calendar",
+    "crate::domain::evidence",
+    "crate::domain::evidence_coverage",
+    "crate::domain::hl",
+    "crate::domain::lineage",
+    "crate::domain::lp",
+    "crate::domain::market",
+    "crate::domain::marketdata",
+    "crate::domain::marketdata_decode",
+    "crate::domain::marketdata_stats",
+    "crate::domain::sec",
+    "crate::domain::soe",
+    "crate::domain::solana",
+    "crate::domain::solana_tx",
+    "crate::domain::solana_write",
+    "crate::domain::source",
+    "crate::domain::xm",
+    "crate::ports::book",
+    "crate::ports::evidence",
+    "crate::ports::lineage",
+    "crate::ports::market_data",
+    "crate::ports::paper",
+    "crate::ports::soe",
+    "crate::ports::solana_signer",
+    "crate::ports::solana_writes",
+    "crate::ports::source_store",
+    "crate::application::backtest",
+    "crate::application::evidence",
+    "crate::application::lineage",
+    "crate::application::paper",
+    "crate::application::ranking",
+    "crate::application::soe",
+    "crate::application::sources",
+    "crate::config::backtest",
+    "crate::config::lineage",
+    "crate::config::risk",
+    "crate::config::soe",
+    "crate::config::solana",
+    "crate::config::sources",
+    "crate::config::strategy_ranking",
+    "crate::config::xmarket",
+    "crate::adapters::outbound::backfill",
+    "crate::adapters::outbound::decision_cache",
+    "crate::adapters::outbound::evidence",
+    "crate::adapters::outbound::hyperliquid",
+    "crate::adapters::outbound::lineage",
+    "crate::adapters::outbound::market_data",
+    "crate::adapters::outbound::paper_store",
+    "crate::adapters::outbound::soe",
+    "crate::adapters::outbound::solana",
+    "crate::adapters::outbound::sources",
+    "crate::adapters::outbound::tools::crypto",
+    "crate::adapters::outbound::tools::hyperliquid",
+    "crate::adapters::outbound::tools::soe",
+    "crate::adapters::outbound::tools::solana",
+    "crate::adapters::outbound::tools::sources",
+    "crate::adapters::outbound::tools::xlab",
+    "crate::adapters::outbound::tools::xm",
+];
+
+/// Core files (relative to `src/`) that wire verticals in; `bootstrap/`,
+/// `adapters/inbound/`, `main.rs` and `lib.rs` are composition as a whole.
+const COMPOSITION: &[&str] = &[
+    "domain/mod.rs",
+    "ports/mod.rs",
+    "config/mod.rs",
+    "config/load.rs",
+    "config/sections.rs",
+    "application/mod.rs",
+    "adapters/mod.rs",
+    "adapters/outbound/mod.rs",
+    "adapters/outbound/tools/mod.rs",
+];
+
+/// Crates that do IO: `domain` must not name them, `application` only in
+/// [`APPLICATION_IO`].
+const IO_CRATES: &[&str] = &[
     "reqwest::",
     "tokio::fs",
     "tokio::net",
@@ -100,6 +198,32 @@ const DOMAIN_IO_CRATES: &[&str] = &[
 /// Known violations: (file relative to `src/`, forbidden path prefix).
 /// Remove entries as they are fixed; never add without a plan entry.
 const EXCEPTIONS: &[(&str, &str)] = &[];
+
+/// `application` files (relative to `src/`) whose non-test code still names
+/// an IO crate. IO belongs in an outbound adapter behind a port: a file leaves
+/// this list when its IO moves out; nothing joins (shrink-only,
+/// `application_io_list_only_shrinks`).
+const APPLICATION_IO: &[&str] = &[
+    "application/backtest/gate.rs",
+    "application/backtest/mod.rs",
+    "application/backtest/run_dir.rs",
+    "application/decision_loop/mod.rs",
+    "application/orchestrator/shared_files.rs",
+    "application/ranking/mod.rs",
+    "application/ranking/store.rs",
+    "application/runtime/health.rs",
+    "application/skills/lifecycle/audit.rs",
+    "application/skills/lifecycle/evolve.rs",
+    "application/skills/lifecycle/fixtures.rs",
+    "application/skills/lifecycle/metric_kinds/description_trigger.rs",
+    "application/skills/lifecycle/metric_kinds/llm_judge.rs",
+    "application/skills/lifecycle/metrics.rs",
+    "application/skills/lifecycle/scanner.rs",
+    "application/skills/lifecycle/scratch_worktree.rs",
+    "application/skills/lifecycle/storage.rs",
+    "application/skills/registry.rs",
+    "application/tools/registry.rs",
+];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -146,6 +270,23 @@ fn code_lines(src: &str) -> Vec<(usize, &str)> {
         i += 1;
     }
     out
+}
+
+/// Every `.rs` file under `src/` by its `src/`-relative path.
+fn src_texts(src: &Path) -> BTreeMap<String, String> {
+    let mut paths = Vec::new();
+    rust_files(src, &mut paths);
+    paths
+        .iter()
+        .map(|p| {
+            let rel = p
+                .strip_prefix(src)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            (rel, fs::read_to_string(p).unwrap())
+        })
+        .collect()
 }
 
 /// Every `crate::<layer>...` path in `line`, as the full path text.
@@ -242,20 +383,81 @@ fn file_paths(text: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// `crate::` path of the module a `src/`-relative file defines
+/// (`config/builder/mod.rs` → `crate::config::builder`).
+fn module_of(rel: &str) -> String {
+    let m = rel.trim_end_matches(".rs").trim_end_matches("/mod");
+    format!("crate::{}", m.replace('/', "::"))
+}
+
+fn is_vertical(path: &str) -> bool {
+    VERTICALS
+        .iter()
+        .any(|v| path == *v || path.starts_with(&format!("{v}::")))
+}
+
+/// `text` with `super::` (and `super::super::`) spelled from the crate root,
+/// so `file_paths` sees relative imports too.
+fn resolve_super(rel: &str, text: &str) -> String {
+    let parent = |m: &str| m.rsplit_once("::").map(|(p, _)| p.to_string());
+    let module = module_of(rel);
+    let Some(up) = parent(&module) else {
+        return text.to_string();
+    };
+    let mut out = text.to_string();
+    if let Some(up2) = parent(&up) {
+        out = out.replace("super::super::", &format!("{up2}::"));
+    }
+    out.replace("super::", &format!("{up}::"))
+}
+
+/// Core files that name a vertical (module doc: core never imports one).
+fn core_vertical_violations() -> Vec<String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let texts = src_texts(&src);
+    let tests = test_files(&texts);
+    let mut found = Vec::new();
+    for (rel, text) in &texts {
+        let composition = rel == "main.rs"
+            || rel == "lib.rs"
+            || rel.starts_with("bootstrap/")
+            || rel.starts_with("adapters/inbound/")
+            || COMPOSITION.contains(&rel.as_str());
+        if composition || tests.contains(rel) || is_vertical(&module_of(rel)) {
+            continue;
+        }
+        for (n, path) in file_paths(&resolve_super(rel, text)) {
+            if is_vertical(&path)
+                && !EXCEPTIONS
+                    .iter()
+                    .any(|(f, p)| f == rel && path.starts_with(p))
+            {
+                found.push(format!(
+                    "src/{rel}:{n}: core must not use the vertical `{path}`"
+                ));
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 fn violations() -> Vec<String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let texts = src_texts(&src);
+    let tests = test_files(&texts);
+    let in_dir = |dir: &str| {
+        let prefix = format!("{dir}/");
+        texts
+            .iter()
+            .filter(|(rel, _)| rel.starts_with(&prefix) && !tests.contains(*rel))
+            .collect::<Vec<_>>()
+    };
     let mut found = Vec::new();
     for (layer, allowed) in RULES {
-        let mut files = Vec::new();
-        rust_files(&src.join(layer), &mut files);
-        for file in files {
-            let rel = file
-                .strip_prefix(&src)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            let text = fs::read_to_string(&file).unwrap();
-            for (n, path) in file_paths(&text) {
+        for (rel, text) in in_dir(layer) {
+            for (n, path) in file_paths(text) {
                 let target = path
                     .trim_start_matches("crate::")
                     .split("::")
@@ -266,17 +468,21 @@ fn violations() -> Vec<String> {
                 }
                 if EXCEPTIONS
                     .iter()
-                    .any(|(f, p)| *f == rel && path.starts_with(p))
+                    .any(|(f, p)| f == rel && path.starts_with(p))
                 {
                     continue;
                 }
                 found.push(format!("src/{rel}:{n}: `{layer}` must not use `{path}`"));
             }
-            if *layer == "domain" {
-                for (n, line) in code_lines(&text) {
-                    for io in DOMAIN_IO_CRATES {
+            let checks_io = *layer == "domain"
+                || (*layer == "application" && !APPLICATION_IO.contains(&rel.as_str()));
+            if checks_io {
+                for (n, line) in code_lines(text) {
+                    for io in IO_CRATES {
                         if line.contains(io) {
-                            found.push(format!("src/{rel}:{n}: `domain` must not do IO (`{io}`)"));
+                            found.push(format!(
+                                "src/{rel}:{n}: `{layer}` must not do IO (`{io}`): add a port"
+                            ));
                         }
                     }
                 }
@@ -284,16 +490,8 @@ fn violations() -> Vec<String> {
         }
     }
     for (dir, forbidden) in FORBIDDEN {
-        let mut files = Vec::new();
-        rust_files(&src.join(dir), &mut files);
-        for file in files {
-            let rel = file
-                .strip_prefix(&src)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            let text = fs::read_to_string(&file).unwrap();
-            for (n, path) in file_paths(&text) {
+        for (rel, text) in in_dir(dir) {
+            for (n, path) in file_paths(text) {
                 if forbidden.iter().any(|p| path.starts_with(p)) {
                     found.push(format!("src/{rel}:{n}: `{dir}` must not use `{path}`"));
                 }
@@ -314,6 +512,50 @@ fn layers_only_depend_inward() {
         found.len(),
         found.join("\n")
     );
+}
+
+#[test]
+fn core_never_uses_a_vertical() {
+    let found = core_vertical_violations();
+    assert!(
+        found.is_empty(),
+        "core → vertical imports ({}): move the shared piece into core\n{}",
+        found.len(),
+        found.join("\n")
+    );
+}
+
+/// A relative import is checked like a `crate::` one, and a vertical name
+/// matches whole segments only (`marketdata` is not `market`).
+#[test]
+fn super_paths_resolve_and_verticals_match_by_segment() {
+    let text = "use super::{xmarket::runtime_db, runtime};\nuse super::super::domain::lp::x;\n";
+    let paths: Vec<String> = file_paths(&resolve_super("config/builder/compile.rs", text))
+        .into_iter()
+        .map(|(_, p)| p)
+        .collect();
+    for want in [
+        "crate::config::builder::xmarket::runtime_db",
+        "crate::config::builder::runtime",
+        "crate::config::domain::lp::x",
+    ] {
+        assert!(paths.iter().any(|p| p == want), "{want} not in {paths:?}");
+    }
+    let paths: Vec<String> = file_paths(&resolve_super(
+        "config/hardening.rs",
+        "use super::xmarket::X;\n",
+    ))
+    .into_iter()
+    .map(|(_, p)| p)
+    .collect();
+    assert!(
+        paths.iter().all(|p| p == "crate::config::xmarket::X"),
+        "{paths:?}"
+    );
+    assert!(is_vertical("crate::config::xmarket::X"));
+    assert!(is_vertical("crate::domain::market"));
+    assert!(!is_vertical("crate::domain::market_hours"));
+    assert_eq!(module_of("config/builder/mod.rs"), "crate::config::builder");
 }
 
 #[test]
@@ -358,5 +600,47 @@ fn grouped_and_multi_line_imports_expand() {
     assert!(
         paths.iter().all(|p| !p.contains(['{', '}', ' '])),
         "{paths:?}"
+    );
+}
+
+/// Out-of-line test modules are test code: a `#[path]` sibling, a `tests.rs`
+/// under a `mod.rs`, a `#[cfg(test)]` module file; prod files never are.
+#[test]
+fn cfg_test_module_files_are_test_code() {
+    let tests = test_files(&src_texts(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+    ));
+    for f in [
+        "domain/schedule_tests.rs",
+        "application/backtest/tests.rs",
+        "domain/backtest/testkit.rs",
+        "domain/source/eval.rs",
+    ] {
+        assert!(tests.contains(f), "{f} not in {tests:?}");
+    }
+    for f in [
+        "domain/schedule.rs",
+        "application/backtest/mod.rs",
+        "main.rs",
+    ] {
+        assert!(!tests.contains(f), "{f} counted as test code");
+    }
+}
+
+#[test]
+fn application_io_list_only_shrinks() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let stale: Vec<_> = APPLICATION_IO
+        .iter()
+        .filter(|file| {
+            let text = fs::read_to_string(src.join(file)).unwrap_or_default();
+            !code_lines(&text)
+                .into_iter()
+                .any(|(_, l)| IO_CRATES.iter().any(|io| l.contains(io)))
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these files no longer do IO — remove them from APPLICATION_IO: {stale:?}"
     );
 }

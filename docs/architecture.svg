@@ -1,0 +1,600 @@
+<svg viewBox="0 0 1200 2290" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — the chat turn, its stores and key mechanics, and the flows without a user message: tengu run, tengu backtest, tengu ranking run (2026-04-27, cut to flows 2026-10-24)</title>
+  <desc id="desc">Five stacked sections: the seven-step per-turn flow; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); and tengu ranking run, from a sealed contract to a published ranking. Where each file lives: docs/code-map.html, generated from the source.</desc>
+  <style>
+    .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
+    .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
+    .h3 { font-size: 12px; font-weight: 700; fill: #1e293b; }
+    .body { font-size: 11px; fill: #334155; }
+    .small { font-size: 10px; fill: #64748b; }
+    .mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; fill: #1e293b; }
+    .file { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9.5px; fill: #475569; }
+    .pt { font-size: 11px; font-weight: 700; fill: #ffffff; }
+    .pt12 { font-size: 12px; font-weight: 700; fill: #ffffff; }
+    .lane-user { fill: #fef3c7; stroke: #fde68a; }
+    .lane-orch { fill: #ede9fe; stroke: #c4b5fd; }
+    .lane-plan { fill: #dbeafe; stroke: #93c5fd; }
+    .lane-exec { fill: #cffafe; stroke: #67e8f9; }
+    .lane-sub  { fill: #dcfce7; stroke: #86efac; }
+    .lane-tool { fill: #ffe4e6; stroke: #fda4af; }
+    .lane-mem  { fill: #f1f5f9; stroke: #cbd5e1; }
+    .lane-risk { fill: #fee2e2; stroke: #f87171; }
+    .lane-gate { fill: #fef9c3; stroke: #eab308; stroke-dasharray: 5 3; }
+    .pill-mem  { fill: #475569; }
+    .pill-rag  { fill: #7c3aed; }
+    .pill-agt  { fill: #0891b2; }
+    .pill-skl  { fill: #16a34a; }
+    .pill-orc  { fill: #c2410c; }
+    .pill-run  { fill: #0f766e; }
+    .pill-dec  { fill: #a16207; }
+    .pill-obs  { fill: #4338ca; }
+    .pill-tls  { fill: #0369a1; }
+    .pill-xm   { fill: #be123c; }
+    .pill-xl   { fill: #1e40af; }
+    .pill-par  { fill: #57534e; }
+    .pill-lin  { fill: #4d7c0f; }
+    .pill-rnk  { fill: #be185d; }
+    .pill-src  { fill: #115e59; }
+    .pill-soe  { fill: #9a3412; }
+    .pill-trc  { fill: #0e7490; }
+    .pill-std  { fill: #6d28d9; }
+    .pill-a2a  { fill: #1d4ed8; }
+    .pill-key  { fill: #b45309; }
+    .panel { fill: #ffffff; stroke: #e2e8f0; }
+    .arrow { stroke: #475569; stroke-width: 1.6; fill: none; }
+    .arrow-fat { stroke: #1e293b; stroke-width: 2.4; fill: none; }
+    .arrow-dash { stroke: #94a3b8; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+    <marker id="ah-fat" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#1e293b" />
+    </marker>
+    <marker id="ah-dash" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="2290" fill="#ffffff" />
+
+  <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response, and what runs without one</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · cut to flows + stores 2026-10-24 · companion to docs/architecture.md and .html · files: docs/code-map.html</text>
+
+  <g transform="translate(20, 56)">
+    <rect width="1160" height="50" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
+    <rect x="10" y="6" width="14" height="14" rx="3" class="pill-mem" />
+    <text x="30" y="17" class="small">memory/  (low-level vector store)</text>
+    <rect x="220" y="6" width="14" height="14" rx="3" class="pill-rag" />
+    <text x="240" y="17" class="small">agentic_memory/  (Postgres)</text>
+    <rect x="400" y="6" width="14" height="14" rx="3" class="pill-agt" />
+    <text x="420" y="17" class="small">[agents.*]  (agents, sandboxes)</text>
+    <rect x="590" y="6" width="14" height="14" rx="3" class="pill-skl" />
+    <text x="610" y="17" class="small">skills/  (3-tier scanner)</text>
+    <rect x="760" y="6" width="14" height="14" rx="3" class="pill-orc" />
+    <text x="780" y="17" class="small">orchestrator/  (planner + executor)</text>
+    <text x="960" y="17" class="small" font-style="italic">solid = control · dashed = data / optional</text>
+    <rect x="10" y="28" width="14" height="14" rx="3" class="pill-run" />
+    <text x="30" y="39" class="small">tengu run  (runtime)</text>
+    <rect x="160" y="28" width="14" height="14" rx="3" class="pill-dec" />
+    <text x="180" y="39" class="small">decision loops  (Jev)</text>
+    <rect x="320" y="28" width="14" height="14" rx="3" class="pill-obs" />
+    <text x="340" y="39" class="small">typed observations</text>
+    <rect x="470" y="28" width="14" height="14" rx="3" class="pill-tls" />
+    <text x="490" y="39" class="small">tool families</text>
+    <rect x="590" y="28" width="14" height="14" rx="3" class="pill-xm" />
+    <text x="610" y="39" class="small">xmarket  (risk + paper)</text>
+    <rect x="760" y="28" width="14" height="14" rx="3" class="pill-xl" />
+    <text x="780" y="39" class="small">xlab  (history + backtests)</text>
+    <rect x="960" y="28" width="14" height="14" rx="3" class="pill-par" />
+    <text x="980" y="39" class="small">engine parity</text>
+  </g>
+
+  <!-- ===================== SECTION 1 — the chat turn ===================== -->
+  <text x="20" y="130" class="h2">section 1 - per-turn flow - the seven steps from prompt to reply</text>
+  <line x1="20" y1="136" x2="1180" y2="136" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 150)">
+    <rect width="200" height="66" rx="6" class="lane-user" />
+    <text x="10" y="18" class="h3">1. User input</text>
+    <text x="10" y="34" class="body">TUI / Telegram / webhook</text>
+    <text x="10" y="48" class="file">inbound/tui/mod.rs</text>
+    <text x="10" y="60" class="file">inbound/{telegram,webhooks}.rs</text>
+  </g>
+  <path d="M 225 183 L 255 183" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(260, 150)">
+    <rect width="240" height="66" rx="6" class="lane-orch" />
+    <text x="10" y="18" class="h3">2. Bootstrap → Orchestrator</text>
+    <text x="10" y="34" class="body">planner_llm + build_orchestrator</text>
+    <text x="10" y="48" class="file">bootstrap/orchestrator.rs</text>
+    <text x="10" y="60" class="file">  PlannerLlm → engine</text>
+  </g>
+  <path d="M 505 183 L 535 183" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(540, 150)">
+    <rect width="280" height="66" rx="6" class="lane-plan" />
+    <text x="10" y="18" class="h3">3. Planner (RegistryPlanner)</text>
+    <text x="10" y="34" class="body">loads the registry, runs the planner LLM</text>
+    <text x="10" y="48" class="file">application/orchestrator/planner.rs</text>
+    <text x="10" y="60" class="file">+ skills/orchestrator/SKILL.md</text>
+  </g>
+  <path d="M 825 183 L 855 183" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(860, 150)">
+    <rect width="320" height="66" rx="6" class="lane-exec" />
+    <text x="10" y="18" class="h3">4. DagExecutor</text>
+    <text x="10" y="34" class="body">retry, parallel steps, cancel, replan</text>
+    <text x="10" y="48" class="file">application/orchestrator/executor.rs</text>
+    <text x="10" y="60" class="file">  + replan.rs · retry.rs</text>
+  </g>
+
+  <path d="M 1140 220 L 1140 262" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(680, 266)">
+    <rect width="500" height="78" rx="6" class="lane-sub" />
+    <text x="10" y="18" class="h3">5. SubprocessRunner - spawn tengu run-agent</text>
+    <text x="10" y="34" class="body">child process, IPC over stdin/stdout JSON, kill on drop, step_timeout_secs</text>
+    <text x="10" y="50" class="file">outbound/subprocess_runner.rs (parent) · inbound/cli/run_agent.rs (child)</text>
+    <text x="10" y="66" class="small">session_id · step_id · sandbox_config · plan_state · compose · TENGU_EGRESS env</text>
+  </g>
+  <path d="M 930 348 L 930 374" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(680, 378)">
+    <rect width="500" height="100" rx="6" class="lane-tool" />
+    <text x="10" y="18" class="h3">6. Subagent tool loop (LLM and tools)</text>
+    <text x="10" y="34" class="body">load [agents.&lt;name&gt;] from the sandbox config, build PluginToolExecutor</text>
+    <text x="10" y="48" class="file">bootstrap/tools.rs::build_subprocess_tool_executor</text>
+    <text x="10" y="62" class="file">outbound/tools/ catalog + mcp_client/ · claude_code, codex: tengu mcp-bridge</text>
+    <text x="10" y="76" class="small">runs until the model calls compress_and_store OR max_turns (= limits.max_tool_rounds)</text>
+    <text x="10" y="90" class="file">outbound/egress.rs - Tor proxy, host allowlist, shell sandbox, audit</text>
+  </g>
+  <path d="M 930 482 L 930 508" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(680, 512)">
+    <rect width="500" height="64" rx="6" class="lane-mem" />
+    <text x="10" y="18" class="h3">7. compress_and_store - durable summary</text>
+    <text x="10" y="34" class="body">Open Brain Postgres with postgres_memory; otherwise only over IPC</text>
+    <text x="10" y="50" class="file">inbound/cli/run_agent.rs::try_persist_agentic_step_summary</text>
+  </g>
+
+  <path d="M 676 544 L 658 544 L 658 238 L 990 238 L 990 222" class="arrow-dash" marker-end="url(#ah-dash)" />
+  <text x="666" y="254" class="small" font-style="italic">step output flows back to the DagExecutor; replan when a step is exhausted</text>
+
+  <g transform="translate(20, 266)">
+    <rect width="620" height="310" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">Memory writes happen alongside steps 3, 5, 7</text>
+    <line x1="10" y1="26" x2="610" y2="26" stroke="#e2e8f0" />
+    <text x="10" y="46" class="body" font-weight="600">At step 3 (planner.plan), BEFORE the write:</text>
+    <text x="10" y="62" class="file">RegistryPlanner::cross_session_recall_block (Phase 6.4 read-back)</text>
+    <text x="10" y="76" class="small">if memory.cross_session_msg_top_k is more than 0: semantic search over Open Brain memory,</text>
+    <text x="10" y="90" class="small">injected as a "Cross-session message recall" block</text>
+    <text x="10" y="116" class="body" font-weight="600">At step 3 (planner.plan):</text>
+    <text x="10" y="132" class="file">RegistryPlanner::persist_user_message</text>
+    <text x="10" y="146" class="small">writes the user message to Open Brain Postgres with session_id</text>
+    <text x="10" y="160" class="small">also pushes to the in-memory ring buffer (lite, this process only)</text>
+    <text x="10" y="174" class="small">within_session_output_top_k more than 0: recall of this session's step outputs</text>
+    <text x="10" y="200" class="body" font-weight="600">At step 5 startup (parent to child IPC):</text>
+    <text x="10" y="216" class="file">SubprocessRunner forwards sandbox_config + plan_state: the child loads the same config</text>
+    <text x="10" y="242" class="body" font-weight="600">At step 7 (compress_and_store):</text>
+    <text x="10" y="258" class="file">adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary</text>
+    <text x="10" y="272" class="small">captures the LLM-summarised step output</text>
+    <text x="10" y="286" class="small">writes the step summary to Open Brain Postgres tagged with step_id</text>
+  </g>
+
+  <g transform="translate(0, -386)">
+  <!-- ===================== SECTION 3 — stores ===================== -->
+  <text x="20" y="998" class="h2">section 2 - stores - Open Brain, LLM Wiki, planner files, runtime state</text>
+  <line x1="20" y1="1004" x2="1180" y2="1004" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 1018)">
+    <rect width="282" height="262" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="26" rx="6" class="pill-rag" />
+    <text x="10" y="18" class="pt12">TENGU_PLANNER_REGISTRY.md</text>
+    <text x="10" y="46" class="body">root roster: agents + skills + tool defs</text>
+    <text x="10" y="60" class="small">loaded into the planner prompt directly</text>
+    <text x="10" y="84" class="h3">written by:</text>
+    <text x="10" y="100" class="file">orchestrator/shared_files.rs</text>
+    <text x="10" y="114" class="small">  regenerated before planner calls</text>
+    <text x="10" y="128" class="small">  from [agents.*] with description, skills, tools</text>
+    <text x="10" y="148" class="h3">read by:</text>
+    <text x="10" y="164" class="file">RegistryPlanner::plan/replan</text>
+    <text x="10" y="178" class="small">  injected as system prompt context</text>
+    <text x="10" y="198" class="h3">notable:</text>
+    <text x="10" y="214" class="small">no vector DB dependency for routing</text>
+    <text x="10" y="228" class="small">operator-readable source of truth</text>
+    <text x="10" y="242" class="small">the plan: to each step as IPC plan_state</text>
+  </g>
+
+  <g transform="translate(312, 1018)">
+    <rect width="282" height="262" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="26" rx="6" class="pill-rag" />
+    <text x="10" y="18" class="pt12">Open Brain memory - who said what</text>
+    <text x="10" y="46" class="body">stores user messages keyed by session_id</text>
+    <text x="10" y="60" class="small">survives restart; durable across sessions</text>
+    <text x="10" y="84" class="h3">written by:</text>
+    <text x="10" y="100" class="file">RegistryPlanner::persist_user_message</text>
+    <text x="10" y="114" class="small">  on every plan() call</text>
+    <text x="10" y="134" class="h3">read by:</text>
+    <text x="10" y="150" class="file">RegistryPlanner::cross_session_recall_block</text>
+    <text x="10" y="164" class="small">  agentic_memory::recall_user_messages_with_vec</text>
+    <text x="10" y="178" class="small">  gated on memory.cross_session_msg_top_k</text>
+    <text x="10" y="192" class="small">  (default 0 = off, opt-in)</text>
+    <text x="10" y="216" class="small">no TTL sweep yet (tracked in SESSION_HANDOFF)</text>
+    <text x="10" y="230" class="small">rows stamped with session_id + agent</text>
+  </g>
+
+  <g transform="translate(604, 1018)">
+    <rect width="282" height="262" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="26" rx="6" class="pill-rag" />
+    <text x="10" y="18" class="pt12">Open Brain step outputs - what we did</text>
+    <text x="10" y="46" class="body">stores compressed step output summaries</text>
+    <text x="10" y="60" class="small">default store for cross-plan recall on replan</text>
+    <text x="10" y="84" class="h3">written by:</text>
+    <text x="10" y="100" class="file">inbound/cli/run_agent.rs::</text>
+    <text x="10" y="112" class="file">  try_persist_agentic_step_summary</text>
+    <text x="10" y="126" class="small">  compress_and_store is IMPLICIT on every subagent</text>
+    <text x="10" y="140" class="small">  child writes when the LLM calls it (or at exit)</text>
+    <text x="10" y="160" class="h3">read by:</text>
+    <text x="10" y="176" class="file">RegistryPlanner::replan</text>
+    <text x="10" y="190" class="small">  Postgres with postgres_memory</text>
+    <text x="10" y="204" class="small">  gated on memory.cross_plan_top_k (default 5)</text>
+    <text x="10" y="228" class="small">also within-session recall on the next turn</text>
+    <text x="10" y="242" class="small">(within_session_output_top_k, default 0 = off)</text>
+  </g>
+
+  <g transform="translate(896, 1018)">
+    <rect width="284" height="262" rx="6" class="panel" />
+    <rect x="0" y="0" width="284" height="26" rx="6" class="pill-run" />
+    <text x="10" y="18" class="pt12">runtime state  -  &lt;state dir&gt;</text>
+    <text x="10" y="46" class="body">&lt;TENGU_HOME&gt;/state/&lt;[xmarket] state&gt;</text>
+    <text x="10" y="60" class="small">outside every fs root; tengu prune spares it</text>
+    <text x="10" y="82" class="file">ledger.db</text>
+    <text x="10" y="94" class="small">paper ledger + risk verdicts (exec tools)</text>
+    <text x="10" y="114" class="file">runtime.db · run-&lt;s&gt;.json</text>
+    <text x="10" y="126" class="small">leases runtime:&lt;s&gt;, state:&lt;dir&gt; · heartbeat</text>
+    <text x="10" y="146" class="file">history/&lt;YYYYMMDD&gt;.db</text>
+    <text x="10" y="158" class="small">[recorder] day files (tengu history)</text>
+    <text x="10" y="178" class="file">market.db</text>
+    <text x="10" y="190" class="small">bars · funding · ctx (xlab backfill)</text>
+    <text x="10" y="210" class="file">backtests/&lt;run id&gt;/ · decision-cache.db</text>
+    <text x="10" y="222" class="small">run dirs (keep_runs) · Jev answers</text>
+    <text x="10" y="242" class="file">&lt;workspace&gt;/.tengu/observations.db</text>
+    <text x="10" y="254" class="small">typed rows, 7-day purge (workspace, not state)</text>
+  </g>
+
+  <!-- ===================== SECTION 4 — key mechanics ===================== -->
+  <text x="20" y="1312" class="h2">section 3 - key mechanics - what surprised me reading this code</text>
+  <line x1="20" y1="1318" x2="1180" y2="1318" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 1332)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">A. Doctrine: LLM = heart, Open Brain + LLM Wiki = brain, tools = hands</text>
+    <text x="10" y="36" class="small">Planner does ONE thing - pick the right agent. It uses the orchestrator SKILL.md as its system prompt;</text>
+    <text x="10" y="50" class="small">PlannerLlm::call sends one message: no tools, executor, bridge or memory. Subagents do the work in</text>
+    <text x="10" y="64" class="small">their own subprocess. Strict boundary: the planner reasons over a roster, a subagent executes a step.</text>
+    <text x="10" y="98" class="file">application/orchestrator/planner.rs::PlannerLlm::call  (nothing to strip)</text>
+  </g>
+
+  <g transform="translate(605, 1332)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">B. One shared session_id (Fix B, 2026-05-09)</text>
+    <text x="10" y="36" class="small">The caller resolves the id once (resolve_session_id: TENGU_SESSION_ID env override or a fresh UUID;</text>
+    <text x="10" y="50" class="small">tengu webhooks mints webhook-&lt;name&gt;-&lt;uuid&gt; per request) and build_orchestrator hands the same</text>
+    <text x="10" y="64" class="small">string to RegistryPlanner AND SubprocessRunner, so planner messages and subagent step summaries share</text>
+    <text x="10" y="78" class="small">one key; run-agent exports it as TENGU_SESSION_ID for memory writes.</text>
+    <text x="10" y="98" class="file">resolve_session_id  -  RegistryPlanner.session_id  -  SubprocessRunner.session_id</text>
+  </g>
+
+  <g transform="translate(20, 1457)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">C. Sandbox config crosses the IPC boundary (Phase 7.2)</text>
+    <text x="10" y="36" class="small">Without this, the child loaded ~/.tengu/config.toml and lost the parent's sandbox-specific scopes.</text>
+    <text x="10" y="50" class="small">Symptom: http_request scope-denies in researcher while the parent's sandbox allows "*".</text>
+    <text x="10" y="64" class="small">Fix: AgentIpcInput.sandbox_config, threaded from Config.sandbox_name to SubprocessRunner to IPC;</text>
+    <text x="10" y="78" class="small">the child's egress comes from TENGU_EGRESS (the parent's resolved policy).</text>
+    <text x="10" y="98" class="file">Config.sandbox_name (#[serde(skip)])  -  load_sandbox_or sets it</text>
+  </g>
+
+  <g transform="translate(605, 1457)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">D. compress_and_store is implicit, not declared</text>
+    <text x="10" y="36" class="small">Never list compress_and_store in [agents.*].tools - the runner appends it to every subagent. It marks</text>
+    <text x="10" y="50" class="small">"I am done with this step." The middle-ground protocol: only fail when no text was emitted AND</text>
+    <text x="10" y="64" class="small">no compress_and_store was called; otherwise OK with a tracing warn. A Claude Code step's bridge</text>
+    <text x="10" y="78" class="small">writes the summary to TENGU_BRIDGE_SUMMARY_FILE, then the engine ends the CLI run.</text>
+    <text x="10" y="98" class="file">adapters/inbound/cli/run_agent.rs::run_agent_subprocess  -  Phase 5c</text>
+  </g>
+
+  <g transform="translate(20, 1582)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">E. Recall layers in the planner prompt</text>
+    <text x="10" y="36" class="small">In-memory ring buffer (Phase 6.4 lite) - recent user messages of THIS process, lost on restart.</text>
+    <text x="10" y="50" class="small">Cross-session block (Phase 6.4 full) - recall over Open Brain memory, survives restart, opt-in via</text>
+    <text x="10" y="64" class="small">memory.cross_session_msg_top_k. Both inject before the current turn. A third opt-in lane,</text>
+    <text x="10" y="78" class="small">within_session_output_top_k, recalls this session's step outputs.</text>
+    <text x="10" y="98" class="file">update_and_format_history  +  cross_session_recall_block  +  session_output_recall_block</text>
+  </g>
+
+  <g transform="translate(605, 1582)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">F. C to B fallback - composed agents, two turns</text>
+    <text x="10" y="36" class="small">Turn 1 (C): planner emits Direct asking the user to confirm the closest match.</text>
+    <text x="10" y="50" class="small">Turn 2 (B): on confirmation, planner emits Plan with Step.compose set.</text>
+    <text x="10" y="64" class="small">Runner loads the base agent, OVERRIDES skills + tools for this run only (config on disk unchanged);</text>
+    <text x="10" y="78" class="small">in a hardened sandbox ([risk] / Solana signer) compose may only narrow the base.</text>
+    <text x="10" y="98" class="file">domain/plan.rs::AgentCompose  -  bootstrap::tools::compose_agent</text>
+  </g>
+
+  <g transform="translate(20, 1707)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">L. Money paths fail closed inside the tool (2026-09-30)</text>
+    <text x="10" y="36" class="small">The [risk] gate is not a planner or loop step: it runs inside every exec tool, so a feed, a Jev loop,</text>
+    <text x="10" y="50" class="small">a bridged Claude Code call and tengu tool call hit the same check. Gate + fill + ledger write = one</text>
+    <text x="10" y="64" class="small">BEGIN IMMEDIATE; idempotent per client_order_id (arg, else call id - never random); only a private</text>
+    <text x="10" y="78" class="small">agent may hold an exec tool; an entry re-probes the kill-switch file inside the transaction.</text>
+    <text x="10" y="98" class="file">tools/xm/exec_common.rs::run_exec  -  PaperLedger::place  -  domain/xm/risk.rs::evaluate</text>
+  </g>
+
+  <g transform="translate(605, 1707)">
+    <rect width="575" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">M. Time is a port; history is read as-of (2026-10-01)</text>
+    <text x="10" y="36" class="small">Clock: SystemClock live (feed schedules, paper fill latency), SimClock in replay - the backtest gate</text>
+    <text x="10" y="50" class="small">runs the real DecisionLoop with its clock set to each decided_at; the decision cache makes reruns</text>
+    <text x="10" y="64" class="small">identical (--offline). The engine reads series only as-of t: a bar is observable at its close, and</text>
+    <text x="10" y="78" class="small">every trade records data_asof_ms ≤ decided_at_ms (checks.rs perturbs everything after t).</text>
+    <text x="10" y="98" class="file">ports/clock.rs  -  bootstrap::decision::build_gate  -  outbound/decision_cache.rs</text>
+  </g>
+
+  <g transform="translate(20, 1832)">
+    <rect width="1160" height="100" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">G. Context/token metrics observability (2026-04-28) - domain/metrics.rs + application/metrics.rs</text>
+    <text x="10" y="36" class="small">Every successful planner, run-agent turn, embedding and Jev call emits one MetricsRecord, kind in {Planner, Subagent, Embedding, WikiCompiler, Decision}: tokens, latency,</text>
+    <text x="10" y="50" class="small">prompt chars/bytes, and (for Planner) a per-context-layer breakdown (system / roster / cross_session / history / session_recall / recall / failure / user_message).</text>
+    <text x="10" y="64" class="small">Three surfaces: tracing baseline (RUST_LOG=tengu=info, always on), in-process broadcast bus (OrchestratorEvent::MetricsRecorded, re-broadcast from the global sink),</text>
+    <text x="10" y="78" class="small">TUI bottom bubble (TENGU_TUI_METRICS=1, opt-in). Failed calls and in-process chat turns (no plan) emit none.</text>
+    <text x="10" y="94" class="file">emit_planner_metrics  -  AgentIpcOutput.metrics  -  embedder reads usage.total_tokens  -  decision loop: MetricsKind::Decision</text>
+  </g>
+
+  <!-- ===================== SECTION 5 — other flows ===================== -->
+  <text x="20" y="1966" class="h2">section 4 - other flows - no user message: tengu run and tengu backtest</text>
+  <line x1="20" y1="1972" x2="1180" y2="1972" stroke="#cbd5e1" />
+
+  <text x="20" y="1996" class="h3">A. tengu run --sandbox &lt;s&gt;  -  feed → tool → store → loop → exec tool → gate → ledger     (docs/runtime.md)</text>
+
+  <g transform="translate(20, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-orch" />
+    <text x="8" y="18" class="h3">1. tengu run</text>
+    <text x="8" y="34" class="body">lease, loops, feeds</text>
+    <text x="8" y="50" class="file">inbound/run.rs</text>
+    <text x="8" y="62" class="file">bootstrap/runtime.rs</text>
+    <text x="8" y="78" class="small">runtime.db: runtime:&lt;s&gt;</text>
+    <text x="8" y="90" class="small">+ state:&lt;dir&gt; · TTL 30 s</text>
+  </g>
+  <path d="M 167 2058 L 186 2058" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(189, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-exec" />
+    <text x="8" y="18" class="h3">2. feed fires</text>
+    <text x="8" y="34" class="body">on a Clock: UTC grid,</text>
+    <text x="8" y="48" class="body">windows, at-ticks</text>
+    <text x="8" y="64" class="file">runtime/feeds.rs</text>
+    <text x="8" y="76" class="file">domain/schedule.rs</text>
+    <text x="8" y="92" class="small">tool → 3 · tick → 5</text>
+  </g>
+  <path d="M 336 2058 L 355 2058" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(358, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-tool" />
+    <text x="8" y="18" class="h3">3. tool call</text>
+    <text x="8" y="34" class="body">the feed agent's</text>
+    <text x="8" y="48" class="body">executor (redacted)</text>
+    <text x="8" y="64" class="file">agent_tool_executor</text>
+    <text x="8" y="78" class="small">call id feed:&lt;name&gt;:</text>
+    <text x="8" y="90" class="small">&lt;slot ms&gt;:&lt;i&gt;</text>
+  </g>
+  <path d="M 505 2058 L 524 2058" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(527, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-mem" />
+    <text x="8" y="18" class="h3">4. rows in the store</text>
+    <text x="8" y="34" class="body">observe(): cache or</text>
+    <text x="8" y="48" class="body">fetch, typed rows</text>
+    <text x="8" y="64" class="file">observations.db</text>
+    <text x="8" y="78" class="small">[recorder] → history/</text>
+    <text x="8" y="90" class="small">mkt_ctx/1 · hl_book/1</text>
+  </g>
+  <path d="M 674 2058 L 693 2058" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(696, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-plan" />
+    <text x="8" y="18" class="h3">5. loop (tick)</text>
+    <text x="8" y="34" class="body">world rows → Jev</text>
+    <text x="8" y="48" class="body">→ act_at, requires</text>
+    <text x="8" y="64" class="file">decision_loop/</text>
+    <text x="8" y="76" class="file">LoopDispatch</text>
+    <text x="8" y="92" class="small">JevClient · dry_run</text>
+  </g>
+  <path d="M 843 2058 L 862 2058" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(865, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-tool" />
+    <text x="8" y="18" class="h3">6. exec tool</text>
+    <text x="8" y="34" class="body">private agent, id,</text>
+    <text x="8" y="48" class="body">latency, live book</text>
+    <text x="8" y="64" class="file">xm/exec_common.rs</text>
+    <text x="8" y="76" class="file">run_exec</text>
+    <text x="8" y="92" class="small">paper_order · xm_exits</text>
+  </g>
+  <path d="M 1012 2058 L 1031 2058" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(1034, 2008)">
+    <rect width="145" height="100" rx="6" class="lane-risk" />
+    <text x="8" y="18" class="h3">7. gate → ledger</text>
+    <text x="8" y="34" class="body">gate + fill + write,</text>
+    <text x="8" y="48" class="body">one transaction</text>
+    <text x="8" y="64" class="file">xm/risk.rs::evaluate</text>
+    <text x="8" y="76" class="file">paper_store.rs</text>
+    <text x="8" y="92" class="small">ledger.db · risk.jsonl</text>
+  </g>
+
+  <path d="M 430 2110 L 430 2124 L 937 2124 L 937 2112" class="arrow-dash" marker-end="url(#ah-dash)" />
+  <text x="440" y="2140" class="small" font-style="italic">a tool feed may call an exec tool directly (xm_exits, xm_weekend_fade): clock work, no LLM, no Jev</text>
+  <text x="20" y="2160" class="small">health: run-&lt;s&gt;.json + loop/1 + feed/1 rows every heartbeat_secs → tengu doctor --sandbox &lt;s&gt; --live (tengu run healthcheck) · SIGINT / SIGTERM drain ≤ shutdown_grace_secs · a second runner exits 1</text>
+  <text x="20" y="2174" class="small">today: tool feeds only in xmarket, xmarket-weekend, xlab-w2 (history refresh + rankings); a job feed in soe (soe_cycle); Jev loops in lping (incl. exec chains), jev-exec, xlab / xlab-w2 (xl_gate), control-loop-lab (demo)</text>
+
+  <text x="20" y="2206" class="h3">B. tengu backtest --sandbox &lt;s&gt;  -  market.db → resolve / prepare → candidates → [Jev gate] → evaluate → run dir     (docs/xlab-2026-10-01.md)</text>
+
+  <g transform="translate(20, 2218)">
+    <rect width="173" height="100" rx="6" class="lane-mem" />
+    <text x="8" y="18" class="h3">0. market.db</text>
+    <text x="8" y="34" class="body">history backfill · events,</text>
+    <text x="8" y="48" class="body">import-hl-archive / -json</text>
+    <text x="8" y="64" class="file">outbound/backfill/ (+ sec)</text>
+    <text x="8" y="76" class="file">outbound/market_data.rs</text>
+    <text x="8" y="92" class="small">bars · funding · ctx · events</text>
+  </g>
+  <path d="M 195 2268 L 214 2268" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(217, 2218)">
+    <rect width="173" height="100" rx="6" class="lane-plan" />
+    <text x="8" y="18" class="h3">1. resolve</text>
+    <text x="8" y="34" class="body">spec: library or JSON,</text>
+    <text x="8" y="48" class="body">validated, spec_sha256</text>
+    <text x="8" y="64" class="file">application/backtest/</text>
+    <text x="8" y="76" class="file">domain/backtest/spec.rs</text>
+    <text x="8" y="92" class="small">six kinds, @universe</text>
+  </g>
+  <path d="M 392 2268 L 411 2268" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(414, 2218)">
+    <rect width="173" height="100" rx="6" class="lane-exec" />
+    <text x="8" y="18" class="h3">2. prepare → candidates</text>
+    <text x="8" y="34" class="body">series as-of t, splits,</text>
+    <text x="8" y="48" class="body">max_candidates guard</text>
+    <text x="8" y="64" class="file">engine::candidates</text>
+    <text x="8" y="76" class="file">domain/backtest/kinds.rs</text>
+    <text x="8" y="92" class="small">features as-of t</text>
+  </g>
+  <path d="M 589 2268 L 608 2268" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(611, 2218)">
+    <rect width="173" height="100" rx="6" class="lane-gate" />
+    <text x="8" y="18" class="h3">3. [Jev gate]  --gate</text>
+    <text x="8" y="34" class="body">real DecisionLoop on a</text>
+    <text x="8" y="48" class="body">SimClock, no tools</text>
+    <text x="8" y="64" class="file">backtest/gate.rs</text>
+    <text x="8" y="76" class="file">decision_cache.rs</text>
+    <text x="8" y="92" class="small">--offline = cache only</text>
+  </g>
+  <path d="M 786 2268 L 805 2268" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(808, 2218)">
+    <rect width="173" height="100" rx="6" class="lane-sub" />
+    <text x="8" y="18" class="h3">4. evaluate</text>
+    <text x="8" y="34" class="body">research + capped arms</text>
+    <text x="8" y="48" class="body">(+ rules / jev arms)</text>
+    <text x="8" y="64" class="file">engine::simulate</text>
+    <text x="8" y="76" class="file">fills.rs · stats.rs</text>
+    <text x="8" y="92" class="small">costs, funding, bootstrap CI</text>
+  </g>
+  <path d="M 983 2268 L 1002 2268" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(1005, 2218)">
+    <rect width="174" height="100" rx="6" class="lane-mem" />
+    <text x="8" y="18" class="h3">5. run dir</text>
+    <text x="8" y="34" class="body">report.json · report.md</text>
+    <text x="8" y="48" class="body">trades-&lt;arm&gt;.jsonl</text>
+    <text x="8" y="64" class="file">backtests/&lt;run id&gt;/</text>
+    <text x="8" y="76" class="file">run_dir.rs</text>
+    <text x="8" y="92" class="small">prunes past keep_runs</text>
+  </g>
+
+  <path d="M 500 2320 L 500 2334 L 894 2334 L 894 2322" class="arrow-dash" marker-end="url(#ah-dash)" />
+  <text x="510" y="2350" class="small" font-style="italic">without --gate: rules arms only - also what the backtest tool runs (a split's holdout hidden until holdout: true)</text>
+  <text x="20" y="2370" class="small">time integrity: a bar is observable at its close; series are read only as-of t; every trade records data_asof_ms ≤ decided_at_ms (domain/backtest/checks.rs perturbs everything after t)</text>
+
+  </g>
+
+  <g transform="translate(0, -1072)">
+  <!-- ===================== SECTION 7 — research lineage, rankings, sources ===================== -->
+  <text x="20" y="3088" class="h2">section 5 - strategy ranking - tengu ranking run (2026-10-08)</text>
+  <line x1="20" y1="3094" x2="1180" y2="3094" stroke="#cbd5e1" />
+
+  <text x="20" y="3118" class="h3">tengu ranking run --sandbox &lt;s&gt;  -  sealed contract → date → lease → backtests → rank → publish     (docs/ranking.md)</text>
+
+  <g transform="translate(20, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-orch" />
+    <text x="8" y="18" class="h3">1. contract sealed</text>
+    <text x="8" y="34" class="body">[[sealed]] ranking:&lt;id&gt;</text>
+    <text x="8" y="48" class="body">hashes the file now</text>
+    <text x="8" y="64" class="file">application/ranking/</text>
+    <text x="8" y="76" class="file">lineage/ranking.rs</text>
+    <text x="8" y="92" class="small">else contract_unsealed</text>
+  </g>
+  <path d="M 195 3180 L 214 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(217, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-plan" />
+    <text x="8" y="18" class="h3">2. date + cutoff</text>
+    <text x="8" y="34" class="body">newest date in tz whose</text>
+    <text x="8" y="48" class="body">cutoff passed (DST-safe)</text>
+    <text x="8" y="64" class="file">ranking_date</text>
+    <text x="8" y="76" class="file">domain/tz.rs</text>
+    <text x="8" y="92" class="small">published date ⇒ returned</text>
+  </g>
+  <path d="M 392 3180 L 411 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(414, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-exec" />
+    <text x="8" y="18" class="h3">3. lease + manifest</text>
+    <text x="8" y="34" class="body">ranking:&lt;id&gt; in runtime.db</text>
+    <text x="8" y="48" class="body">TTL 15 min, resumable</text>
+    <text x="8" y="64" class="file">ranking/store.rs</text>
+    <text x="8" y="76" class="file">manifest.json</text>
+    <text x="8" y="92" class="small">held ⇒ ranking_busy</text>
+  </g>
+  <path d="M 589 3180 L 608 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(611, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-tool" />
+    <text x="8" y="18" class="h3">4. freshness → backtest</text>
+    <text x="8" y="34" class="body">old data ⇒ STALE; else</text>
+    <text x="8" y="48" class="body">prepare → evaluate</text>
+    <text x="8" y="64" class="file">application/backtest/</text>
+    <text x="8" y="76" class="file">write_run_dir</text>
+    <text x="8" y="92" class="small">to = cutoff, never a holdout</text>
+  </g>
+  <path d="M 786 3180 L 805 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(808, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-sub" />
+    <text x="8" y="18" class="h3">5. select → rank</text>
+    <text x="8" y="34" class="body">per cohort, weakest</text>
+    <text x="8" y="48" class="body">first; reasons listed</text>
+    <text x="8" y="64" class="file">backtest/ranking.rs</text>
+    <text x="8" y="76" class="file">RunFacts · select · rank</text>
+    <text x="8" y="92" class="small">content_sha256 (rerun-stable)</text>
+  </g>
+  <path d="M 983 3180 L 1002 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(1005, 3130)">
+    <rect width="174" height="100" rx="6" class="lane-mem" />
+    <text x="8" y="18" class="h3">6. publish</text>
+    <text x="8" y="34" class="body">&lt;date&gt;/ranking.{json,md}</text>
+    <text x="8" y="48" class="body">latest.md → latest.json</text>
+    <text x="8" y="64" class="file">strategy-rankings/</text>
+    <text x="8" y="76" class="file">&lt;contract&gt;/</text>
+    <text x="8" y="92" class="small">INCOMPLETE keeps latest</text>
+  </g>
+  <text x="20" y="3250" class="small">callers: tengu ranking run | show (cli/ranking.rs) · tool strategy_ranking (tools/xlab/rank.rs): xlab-w2's ranking feeds under tengu run (agent xl_ranker) · no LLM, no network, never a holdout read</text>
+  </g>
+
+  <g transform="translate(20, 2194)">
+    <rect width="1160" height="64" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="10" y="20" class="h3">Where the files live</text>
+    <text x="10" y="38" class="small">This picture shows flows and stores, not file lists. Every module with its line count and first doc paragraph: docs/code-map.html (generated from the source).</text>
+    <text x="10" y="52" class="small">One animated page per feature: docs/tutorial/ · the narrative with every step's files: docs/architecture.md · trace one turn first: tengu chat --sandbox lping, "what is the BTC price?".</text>
+  </g>
+</svg>

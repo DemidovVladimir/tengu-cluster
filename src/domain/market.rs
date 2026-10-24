@@ -25,9 +25,6 @@
 //! arithmetic; decoders keep the raw string where exactness matters (tick
 //! and lot rounding).
 
-// Consumers land next wave (`hl-ctx-tool`, `hl-book-tool`, `kg-sync-*`).
-#![allow(dead_code)]
-
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

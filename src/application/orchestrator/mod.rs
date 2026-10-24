@@ -1,14 +1,13 @@
 //! Harness-owned orchestration.
 //!
 //! - `plan`         — Step, StepId, Plan types + topology helpers
-//! - `planner`      — `RagPlanner`: the planner agent's LLM call over the file-backed registry
+//! - `planner`      — `RegistryPlanner`: the planner agent's LLM call over the file-backed registry
 //! - `executor`     — DAG executor: parallel, ready-set scheduling
 //! - `retry`        — per-step retry policy
 //! - `replan`       — outer loop: re-invoke the planner on exhaustion
 //! - `events`       — OrchestratorEvent enum + the event bus (broadcast + optional trace bridge)
 //! - `trace`        — the bridge: each OrchestratorEvent as an execution-trace event (Studio)
 //! - `shared_files` — `TENGU_PLANNER_REGISTRY.md` (from `[agents.*]` blocks with a `description`) + per-session plan state for subagents
-//! - `wiring`       — channel-side glue
 
 pub mod events;
 pub mod executor;
@@ -17,17 +16,12 @@ pub mod replan;
 pub mod retry;
 pub mod shared_files;
 pub(crate) mod trace;
-// Phase 7.1 (partial) — `pub mod roster` removed; the only runtime caller
-// (crate::bootstrap::orchestrator::build_orchestrator) now uses an inlined helper.
-pub mod wiring;
 
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::application::memory::manager::MemoryManager;
 use crate::application::metrics::MetricsBarrier;
 use crate::application::orchestrator::retry::RetryPolicy;
 use crate::ports::orchestration::Planner;
@@ -39,28 +33,21 @@ pub struct Orchestrator {
     policy: RetryPolicy,
     max_replans: u32,
     bus: EventBus,
-    /// Held to keep the manager alive for the lifetime of the orchestrator;
-    /// Phase 6.4 (full) will read from this for cross-session message recall.
-    #[allow(dead_code)]
-    memory: Arc<MemoryManager>,
-    cancel_flag: Arc<AtomicBool>,
     /// The metrics forwarder onto `bus` (`bootstrap::orchestrator`); it
     /// ends with this orchestrator. `None`: no forwarder (tests).
     metrics: Option<MetricsBarrier>,
 }
 
 impl Orchestrator {
-    /// Phase 6.1 (full) — `bus` is now an explicit constructor argument
-    /// rather than being minted internally, so the same bus can be wired
-    /// into the `RagPlanner` (which emits `OrchestratorEvent::RagQueried`)
-    /// before the orchestrator owns it. Callers without a planner that
-    /// emits events can pass a fresh `events::new_bus()`.
+    /// `bus` is an explicit constructor argument so the caller can wire
+    /// the metrics forwarder and the trace bridge onto it before the
+    /// orchestrator owns it. Callers with nothing to wire pass a fresh
+    /// `events::new_bus()`.
     pub fn new(
         planner: Arc<dyn Planner>,
         worker: Arc<dyn WorkerHandle>,
         policy: RetryPolicy,
         max_replans: u32,
-        memory: Arc<MemoryManager>,
         bus: EventBus,
     ) -> Self {
         Self {
@@ -69,8 +56,6 @@ impl Orchestrator {
             policy,
             max_replans,
             bus,
-            memory,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
             metrics: None,
         }
     }
@@ -96,26 +81,13 @@ impl Orchestrator {
         self.bus.subscribe()
     }
 
-    /// Request cancellation of the in-flight plan. The DAG executor observes
-    /// the flag at dispatch boundaries and returns `ExecResult::Cancelled`,
-    /// which the replan driver translates into a terminal
-    /// `PlanCompleted { cancelled: true }` event. Channel-side wiring
-    /// (`/stop` for Telegram, Ctrl-C for CLI) is deferred until the
-    /// full dispatch path routes through `Orchestrator::handle`.
-    #[allow(dead_code)]
-    pub fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
-    }
-
     /// One turn: plan, run, replan; every way out sends `PlanCompleted`.
-    /// Dropped unfinished (aborted at a shutdown deadline, an eval row's
-    /// timeout) it sends `PlanCompleted { cancelled: true }` as it drops —
-    /// after its steps were aborted — so the trace closes the turn
-    /// (`plan.completed`, dropped) instead of leaving it running.
+    /// Cancelling a turn = dropping this future (Telegram `/stop`, a
+    /// shutdown deadline, an eval row's timeout): the steps still running
+    /// are aborted, their `run-agent` children killed, and it sends
+    /// `PlanCompleted { cancelled: true }` as it drops, so the trace closes
+    /// the turn (`plan.completed`, dropped) instead of leaving it running.
     pub async fn handle(&self, user_message: String) -> String {
-        // Reset the flag each turn so a stale cancellation from a previous
-        // turn does not short-circuit this one.
-        self.cancel_flag.store(false, Ordering::SeqCst);
         let mut unfinished = Unfinished(Some(&self.bus));
         let reply = replan::drive(
             Arc::clone(&self.planner),
@@ -124,7 +96,6 @@ impl Orchestrator {
             &self.policy,
             self.max_replans,
             &self.bus,
-            Arc::clone(&self.cancel_flag),
         )
         .await;
         unfinished.0 = None;
@@ -153,10 +124,9 @@ mod e2e_tests {
     //! End-to-end orchestrator test with in-memory planner + worker.
     //!
     //! Kept inline (rather than in `tests/orchestrator_e2e.rs`) because
-    //! the crate has no `[lib]` target — external integration tests
-    //! cannot reach crate-private types.
+    //! the `tengu` lib keeps its modules private — external integration
+    //! tests cannot reach crate-private types.
 
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -192,7 +162,7 @@ mod e2e_tests {
     struct OkWorker;
     #[async_trait]
     impl WorkerHandle for OkWorker {
-        async fn run_step(&self, step: &Step, inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, inputs: &str, _: &Plan) -> anyhow::Result<String> {
             Ok(format!("out({})[{}]", step.id.0, inputs.trim()))
         }
     }
@@ -224,10 +194,8 @@ mod e2e_tests {
                 },
             ],
         };
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let bus = new_bus();
-        let cancel = Arc::new(AtomicBool::new(false));
         let out = replan::drive(
             Arc::new(StaticPlanner { plan }),
             "user question",
@@ -235,7 +203,6 @@ mod e2e_tests {
             &policy,
             0,
             &bus,
-            cancel,
         )
         .await;
         assert!(out.contains("out(c)")); // synthesizer output

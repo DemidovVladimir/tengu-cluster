@@ -43,9 +43,6 @@
 //! an opportunity dated after it (`future_leakage`). [`GateVerdict::with_holds`]
 //! adds an O3 Critic's `BLOCK_GATE` as `HOLD` failures — it never lifts one.
 
-// `GateCode::ALL` is read by tests only.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -88,6 +85,7 @@ pub enum GateCode {
 }
 
 impl GateCode {
+    #[cfg(test)]
     pub const ALL: [GateCode; 22] = [
         GateCode::MechanismHold,
         GateCode::MechanismReject,

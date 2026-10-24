@@ -1,8 +1,9 @@
 //! `SqliteMarketData` — `ports::market_data::MarketDataStore` over ONE
 //! database per xmarket state dir, `<state dir>/market.db` (xlab,
 //! `docs/xlab-2026-10-01.md` § 4): outside every workspace and fs root, like
-//! `ledger.db`. WAL (`synchronous = NORMAL`) + busy_timeout, so a backfill and
-//! a backtest of the install share it; every call runs on `spawn_blocking`.
+//! `ledger.db`. 0600, WAL (`synchronous = NORMAL`) + busy_timeout
+//! (`sqlite.rs::open_wal`), so a backfill and a backtest of the install share
+//! it; every call runs on `spawn_blocking`.
 //! No `[xmarket]` ⇒ [`open_market_data`] refuses. Fed by
 //! `outbound/backfill/`.
 //!
@@ -22,12 +23,13 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
-use rusqlite::{params, Connection};
+use rusqlite::params;
 
+use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::{market_db, MARKET_DB};
 use crate::domain::marketdata::{
@@ -126,40 +128,21 @@ pub(crate) fn market_state_dir(sections: &SandboxSections) -> Result<&Path> {
 }
 
 pub(crate) struct SqliteMarketData {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
 }
 
 impl SqliteMarketData {
     /// Open (creating) `<state_dir>/market.db`.
     pub(crate) fn open(state_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(state_dir)
-            .with_context(|| format!("create {}", state_dir.display()))?;
         let path: PathBuf = market_db(state_dir);
-        let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-        // NORMAL: WAL stays consistent; a power cut may lose the last writes,
-        // which a re-run of the backfill fetches again.
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
-        )?;
+        // Normal: a power cut may lose the last writes, which a re-run of the
+        // backfill fetches again.
+        let conn = open_wal(&path, Durability::Normal)?;
         conn.execute_batch(SCHEMA_SQL)
             .with_context(|| format!("schema of {}", path.display()))?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: SharedConn::new(conn, "market data"),
         })
-    }
-
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || {
-            let mut guard = conn.lock().map_err(|e| anyhow!("market data lock: {e}"))?;
-            f(&mut guard)
-        })
-        .await
-        .context("market data task")?
     }
 }
 
@@ -227,32 +210,33 @@ impl MarketDataStore for SqliteMarketData {
         }
         let (instrument, source, bars) =
             (instrument.to_string(), source.to_string(), bars.to_vec());
-        self.with_conn(move |conn| {
-            let at = now_ms();
-            let tx = conn.transaction()?;
-            let mut written = 0;
-            {
-                let mut stmt = tx.prepare(PUT_BAR_SQL)?;
-                for b in &bars {
-                    written += stmt.execute(params![
-                        instrument,
-                        interval.as_str(),
-                        b.t_open_ms,
-                        b.o,
-                        b.h,
-                        b.l,
-                        b.c,
-                        b.v,
-                        opt_i64(b.n)?,
-                        source,
-                        at
-                    ])?;
+        self.conn
+            .run(move |conn| {
+                let at = now_ms();
+                let tx = conn.transaction()?;
+                let mut written = 0;
+                {
+                    let mut stmt = tx.prepare(PUT_BAR_SQL)?;
+                    for b in &bars {
+                        written += stmt.execute(params![
+                            instrument,
+                            interval.as_str(),
+                            b.t_open_ms,
+                            b.o,
+                            b.h,
+                            b.l,
+                            b.c,
+                            b.v,
+                            opt_i64(b.n)?,
+                            source,
+                            at
+                        ])?;
+                    }
                 }
-            }
-            tx.commit()?;
-            Ok(written)
-        })
-        .await
+                tx.commit()?;
+                Ok(written)
+            })
+            .await
     }
 
     async fn bars(
@@ -264,7 +248,8 @@ impl MarketDataStore for SqliteMarketData {
     ) -> Result<BarSeries> {
         let id = instrument.to_string();
         let bars = self
-            .with_conn(move |conn| {
+            .conn
+            .run(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT t_open_ms, o, h, l, c, v, n FROM bars WHERE instrument = ?1 \
                      AND interval = ?2 AND t_open_ms >= ?3 AND t_open_ms < ?4 ORDER BY t_open_ms",
@@ -306,28 +291,30 @@ impl MarketDataStore for SqliteMarketData {
         }
         let (instrument, source, points) =
             (instrument.to_string(), source.to_string(), points.to_vec());
-        self.with_conn(move |conn| {
-            let at = now_ms();
-            let tx = conn.transaction()?;
-            let mut written = 0;
-            {
-                let mut stmt = tx.prepare(PUT_FUNDING_SQL)?;
-                for p in &points {
-                    written += stmt.execute(params![
-                        instrument, p.t_ms, p.rate_1h, p.premium, source, at
-                    ])?;
+        self.conn
+            .run(move |conn| {
+                let at = now_ms();
+                let tx = conn.transaction()?;
+                let mut written = 0;
+                {
+                    let mut stmt = tx.prepare(PUT_FUNDING_SQL)?;
+                    for p in &points {
+                        written += stmt.execute(params![
+                            instrument, p.t_ms, p.rate_1h, p.premium, source, at
+                        ])?;
+                    }
                 }
-            }
-            tx.commit()?;
-            Ok(written)
-        })
-        .await
+                tx.commit()?;
+                Ok(written)
+            })
+            .await
     }
 
     async fn funding(&self, instrument: &str, from_ms: i64, to_ms: i64) -> Result<FundingSeries> {
         let id = instrument.to_string();
         let points = self
-            .with_conn(move |conn| {
+            .conn
+            .run(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT t_ms, rate_1h, premium FROM funding WHERE instrument = ?1 \
                      AND t_ms >= ?2 AND t_ms < ?3 ORDER BY t_ms",
@@ -351,38 +338,40 @@ impl MarketDataStore for SqliteMarketData {
         }
         let (instrument, source, points) =
             (instrument.to_string(), source.to_string(), points.to_vec());
-        self.with_conn(move |conn| {
-            let tx = conn.transaction()?;
-            let mut written = 0;
-            {
-                let mut stmt = tx.prepare(PUT_CTX_SQL)?;
-                for p in &points {
-                    written += stmt.execute(params![
-                        instrument,
-                        p.t_ms,
-                        p.mark,
-                        p.oracle,
-                        p.mid,
-                        p.impact_bid,
-                        p.impact_ask,
-                        p.oi,
-                        p.day_ntl_vlm,
-                        p.funding_1h,
-                        p.premium,
-                        source
-                    ])?;
+        self.conn
+            .run(move |conn| {
+                let tx = conn.transaction()?;
+                let mut written = 0;
+                {
+                    let mut stmt = tx.prepare(PUT_CTX_SQL)?;
+                    for p in &points {
+                        written += stmt.execute(params![
+                            instrument,
+                            p.t_ms,
+                            p.mark,
+                            p.oracle,
+                            p.mid,
+                            p.impact_bid,
+                            p.impact_ask,
+                            p.oi,
+                            p.day_ntl_vlm,
+                            p.funding_1h,
+                            p.premium,
+                            source
+                        ])?;
+                    }
                 }
-            }
-            tx.commit()?;
-            Ok(written)
-        })
-        .await
+                tx.commit()?;
+                Ok(written)
+            })
+            .await
     }
 
     async fn ctx(&self, instrument: &str, from_ms: i64, to_ms: i64) -> Result<CtxSeries> {
         let id = instrument.to_string();
         let points = self
-            .with_conn(move |conn| {
+            .conn
+            .run(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT t_ms, mark, oracle, mid, impact_bid, impact_ask, oi, day_ntl_vlm, \
                      funding_1h, premium FROM ctx WHERE instrument = ?1 AND t_ms >= ?2 \
@@ -410,35 +399,36 @@ impl MarketDataStore for SqliteMarketData {
 
     async fn coverage(&self, instrument: Option<&str>) -> Result<Vec<CoverageRow>> {
         let id = instrument.map(str::to_string);
-        self.with_conn(move |conn| {
-            let mut parts: Vec<Part> = Vec::new();
-            for (kind, select, group) in COVERAGE_SQL {
-                let mut stmt = conn.prepare(&coverage_sql(select, group, id.is_some()))?;
-                let mut rows = match &id {
-                    Some(id) => stmt.query(params![id])?,
-                    None => stmt.query([])?,
-                };
-                while let Some(r) = rows.next()? {
-                    let interval = r
-                        .get::<_, Option<String>>(1)?
-                        .map(|s| {
-                            Interval::parse(&s).map_err(|e| anyhow!("{MARKET_DB} {kind}: {e}"))
-                        })
-                        .transpose()?;
-                    parts.push((
-                        r.get(0)?,
-                        kind,
-                        interval,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get::<_, i64>(5)?.max(0) as u64,
-                    ));
+        self.conn
+            .run(move |conn| {
+                let mut parts: Vec<Part> = Vec::new();
+                for (kind, select, group) in COVERAGE_SQL {
+                    let mut stmt = conn.prepare(&coverage_sql(select, group, id.is_some()))?;
+                    let mut rows = match &id {
+                        Some(id) => stmt.query(params![id])?,
+                        None => stmt.query([])?,
+                    };
+                    while let Some(r) = rows.next()? {
+                        let interval = r
+                            .get::<_, Option<String>>(1)?
+                            .map(|s| {
+                                Interval::parse(&s).map_err(|e| anyhow!("{MARKET_DB} {kind}: {e}"))
+                            })
+                            .transpose()?;
+                        parts.push((
+                            r.get(0)?,
+                            kind,
+                            interval,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get::<_, i64>(5)?.max(0) as u64,
+                        ));
+                    }
                 }
-            }
-            Ok(fold_coverage(parts))
-        })
-        .await
+                Ok(fold_coverage(parts))
+            })
+            .await
     }
 
     async fn put_events(&self, source: &str, events: &[MarketEvent]) -> Result<usize> {
@@ -450,51 +440,53 @@ impl MarketDataStore for SqliteMarketData {
                 .map_err(|why| anyhow!("{source}: {why}; nothing written"))?;
         }
         let (source, events) = (source.to_string(), events.to_vec());
-        self.with_conn(move |conn| {
-            let at = now_ms();
-            let tx = conn.transaction()?;
-            {
-                let mut stmt = tx.prepare(PUT_EVENT_SQL)?;
-                for e in &events {
-                    stmt.execute(params![
-                        e.instrument,
-                        source,
-                        e.id,
-                        e.published_ms,
-                        e.kind,
-                        e.form,
-                        e.title,
-                        at
-                    ])?;
+        self.conn
+            .run(move |conn| {
+                let at = now_ms();
+                let tx = conn.transaction()?;
+                {
+                    let mut stmt = tx.prepare(PUT_EVENT_SQL)?;
+                    for e in &events {
+                        stmt.execute(params![
+                            e.instrument,
+                            source,
+                            e.id,
+                            e.published_ms,
+                            e.kind,
+                            e.form,
+                            e.title,
+                            at
+                        ])?;
+                    }
                 }
-            }
-            tx.commit()?;
-            Ok(events.len())
-        })
-        .await
+                tx.commit()?;
+                Ok(events.len())
+            })
+            .await
     }
 
     async fn events(&self, instrument: &str, from_ms: i64, to_ms: i64) -> Result<Vec<MarketEvent>> {
         let id = instrument.to_string();
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT instrument, published_ms, kind, id, form, title FROM events \
+        self.conn
+            .run(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT instrument, published_ms, kind, id, form, title FROM events \
                  WHERE instrument = ?1 AND published_ms >= ?2 AND published_ms < ?3 \
                  ORDER BY published_ms, id",
-            )?;
-            let rows = stmt.query_map(params![id, from_ms, to_ms], |r| {
-                Ok(MarketEvent {
-                    instrument: r.get(0)?,
-                    published_ms: r.get(1)?,
-                    kind: r.get(2)?,
-                    id: r.get(3)?,
-                    form: r.get(4)?,
-                    title: r.get(5)?,
-                })
-            })?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .await
+                )?;
+                let rows = stmt.query_map(params![id, from_ms, to_ms], |r| {
+                    Ok(MarketEvent {
+                        instrument: r.get(0)?,
+                        published_ms: r.get(1)?,
+                        kind: r.get(2)?,
+                        id: r.get(3)?,
+                        form: r.get(4)?,
+                        title: r.get(5)?,
+                    })
+                })?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
     }
 
     async fn put_event_coverage(&self, c: &EventCoverage) -> Result<()> {
@@ -508,46 +500,48 @@ impl MarketDataStore for SqliteMarketData {
             );
         }
         let c = c.clone();
-        self.with_conn(move |conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO event_coverage(instrument, source, from_ms, to_ms, \
+        self.conn
+            .run(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO event_coverage(instrument, source, from_ms, to_ms, \
                  covered, note, fetched_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    c.instrument,
-                    c.source,
-                    c.from_ms,
-                    c.to_ms,
-                    c.covered,
-                    c.note,
-                    c.fetched_at_ms
-                ],
-            )?;
-            Ok(())
-        })
-        .await
+                    params![
+                        c.instrument,
+                        c.source,
+                        c.from_ms,
+                        c.to_ms,
+                        c.covered,
+                        c.note,
+                        c.fetched_at_ms
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
     }
 
     async fn event_coverage(&self, instrument: &str) -> Result<Vec<EventCoverage>> {
         let id = instrument.to_string();
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT instrument, source, from_ms, to_ms, covered, note, fetched_at_ms \
+        self.conn
+            .run(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT instrument, source, from_ms, to_ms, covered, note, fetched_at_ms \
                  FROM event_coverage WHERE instrument = ?1 ORDER BY source",
-            )?;
-            let rows = stmt.query_map(params![id], |r| {
-                Ok(EventCoverage {
-                    instrument: r.get(0)?,
-                    source: r.get(1)?,
-                    from_ms: r.get(2)?,
-                    to_ms: r.get(3)?,
-                    covered: r.get(4)?,
-                    note: r.get(5)?,
-                    fetched_at_ms: r.get(6)?,
-                })
-            })?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .await
+                )?;
+                let rows = stmt.query_map(params![id], |r| {
+                    Ok(EventCoverage {
+                        instrument: r.get(0)?,
+                        source: r.get(1)?,
+                        from_ms: r.get(2)?,
+                        to_ms: r.get(3)?,
+                        covered: r.get(4)?,
+                        note: r.get(5)?,
+                        fetched_at_ms: r.get(6)?,
+                    })
+                })?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
     }
 }
 

@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tracing::warn;
 
-use super::{defs, opt_u64_arg, policy, store_live, HlShared};
+use super::{defs, policy, store_live, HlShared};
 use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::hyperliquid::info::{HlInfo, InfoReply};
-use crate::adapters::outbound::tools::args::require_str;
+use crate::adapters::outbound::tools::args::{opt_u64_arg, require_str};
 use crate::domain::book::L2Book;
 use crate::domain::hl::book::{
     decode_l2_book, decode_last_trade, HlBook, BOOK_TTL_MS, DEFAULT_NOTIONALS_USD, LAST_FIELD,
@@ -704,7 +704,7 @@ mod tests {
         assert!(o.errors[0].message.contains("net_hosts"), "{:?}", o.errors);
     }
 
-    // ── live (mainnet; `cargo test --bin tengu live_hl -- --ignored --test-threads 1`) ──
+    // ── live (mainnet; `cargo test --lib live_hl -- --ignored --test-threads 1`) ──
 
     #[tokio::test]
     #[ignore]

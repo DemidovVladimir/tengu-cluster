@@ -8,10 +8,10 @@
 //! - `abi_encode`                — pure compute (no scope gate)
 //! - `hex_to_uint256`            — pure compute (no scope gate)
 //!
-//! Wallet access is controlled by `ToolScope::wallets`. During the Phase A
-//! migration window the `permissive_scope` helper grants a single canonical
-//! wallet label (`DEFAULT_WALLET_LABEL` in `helpers.rs`); per-agent wallet
-//! allow-lists arrive with A9 / Phase B.
+//! Wallet access is controlled by `ToolScope::wallets`. The
+//! `permissive_scope` helper grants a single canonical wallet label
+//! (`DEFAULT_WALLET_LABEL` in `helpers.rs`); per-agent wallet allow-lists
+//! are open work (`TODO(Phase B)` there).
 //!
 //! Privy gate (`helpers.rs`): env vars through `env_reads`, every request
 //! through `egress::policy().check_url` (`[egress] allow_hosts`) + the

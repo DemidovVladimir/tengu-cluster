@@ -1,8 +1,9 @@
 //! Composition for `[decision_loops.<name>]`: Jev client + the loop agent's
 //! tool executor (same allow-list, scopes and workspace a `run-agent`
-//! subprocess of that agent gets; wrapped in `SanitizedToolExecutor` with the
-//! caller's `SecretRegistry`, then `trace_exec::TracedExecutor` (`tool.*`
-//! events into the process recording), then `egress::AttributedExecutor`:
+//! subprocess of that agent gets; redacting with the caller's
+//! `SecretRegistry` by construction (`ToolStack`), then
+//! `trace_exec::TracedExecutor` (`tool.*` events into the process
+//! recording), then `egress::AttributedExecutor`:
 //! egress records name the loop's agent, the event's session and the call
 //! id) + the agent workspace's observation store (`open_observation_store`:
 //! `<workspace>/.tengu/observations.db`, source of `state.world`, + the history
@@ -34,7 +35,6 @@ use crate::adapters::outbound::decisions::JevClient;
 use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::adapters::outbound::observations::open_observation_store;
-use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::backtest::gate::{Gate, GateWorker};
 use crate::application::decision_loop::{AuditLog, DecisionLoop};
 use crate::application::trace_exec::TracedExecutor;
@@ -56,18 +56,18 @@ pub(crate) fn audit_path() -> PathBuf {
 
 /// `<home>/logs/decisions.jsonl`.
 pub(crate) fn audit_file(home: &Path) -> PathBuf {
-    home.join("logs").join("decisions.jsonl")
+    crate::config::paths::Layout::at(home).decisions_log()
 }
 
 /// `<home>/logs/maps/` — the execution maps `tengu decide --map` ran, as
 /// `<sha256>.json` (canonical JSON), by the identity their audit lines carry.
 pub(crate) fn maps_dir(home: &Path) -> PathBuf {
-    home.join("logs").join("maps")
+    crate::config::paths::Layout::at(home).maps()
 }
 
 /// Tool executor of `agent` for a decision loop or a `[feeds]` feed: the
 /// allow-list, scopes and workspace a `run-agent` child of that agent gets,
-/// wrapped in `SanitizedToolExecutor` with the process `secrets` — plus the
+/// redacting with the process `secrets` (`ToolStack`) — plus the
 /// tool names it runs (none when no executor could be built: every call
 /// then fails).
 pub(crate) fn agent_tool_executor(
@@ -76,7 +76,7 @@ pub(crate) fn agent_tool_executor(
     workspace: &Path,
     secrets: &Arc<SecretRegistry>,
 ) -> (Arc<dyn ToolExecutor>, BTreeSet<String>) {
-    let (_, executor) = crate::bootstrap::tools::build_subprocess_tool_executor(
+    let (_, stack) = crate::bootstrap::tools::build_subprocess_tool_executor(
         agent,
         config,
         workspace,
@@ -84,18 +84,13 @@ pub(crate) fn agent_tool_executor(
         Arc::new(NoopActivity),
         None,
     );
-    let (inner, runs): (Arc<dyn ToolExecutor>, BTreeSet<String>) = match executor {
-        Some(e) => {
-            let runs = e.additional_tool_defs(&[]).into_iter().map(|d| d.name);
-            (Arc::new(e), runs.collect())
+    match stack {
+        Some(stack) => {
+            let runs = stack.raw.additional_tool_defs(&[]).into_iter();
+            (stack.executor, runs.map(|d| d.name).collect())
         }
-        None => (
-            Arc::new(crate::adapters::outbound::noop::NoopRuntimeToolExecutor),
-            BTreeSet::new(),
-        ),
-    };
-    let tools = Arc::new(SanitizedToolExecutor::new(inner, Arc::clone(secrets)));
-    (tools, runs)
+        None => (Arc::new(NoopRuntimeToolExecutor), BTreeSet::new()),
+    }
 }
 
 /// `secrets` is the process registry: tool text and typed observations are

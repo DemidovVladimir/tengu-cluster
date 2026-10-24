@@ -394,9 +394,10 @@ pub(crate) fn secret_backends() -> Vec<SecretBackend> {
             id: "vault",
             label: "Local encrypted vault",
             available: true,
-            note: "~/.tengu/secrets.vault (AES-256-GCM, master password): `tengu secret set NAME \
+            note:
+                "<TENGU_HOME>/secrets.vault (AES-256-GCM, master password): `tengu secret set NAME \
                    <value>`. Loaded into the process env at start; never written to TOML."
-                .into(),
+                    .into(),
         },
         SecretBackend {
             id: "env",
@@ -410,7 +411,7 @@ pub(crate) fn secret_backends() -> Vec<SecretBackend> {
             available: true,
             note:
                 "The key is a Worker secret (`npx wrangler secret put NAME`); tengu gets a route \
-                 and a session, never the key ([keys], docs/sealed-keys-2026-10-09.md)."
+                 and a session, never the key ([keys], docs/sealed-keys.md)."
                     .into(),
         },
     ]
@@ -545,11 +546,11 @@ fn kinds() -> Vec<KindSpec> {
                     .help("Env var with the server's bearer key (empty env = no key). A wired secret sets it.")
                     .writes("agents.<name>.local.api_key_env"),
                 field("claude_tools", "Claude built-in tools", Select)
-                    .default(json!("read_only"))
+                    .default(json!("none"))
                     .options(&[
                         ("none", "none — tengu tools only"),
                         ("read_only", "read_only — Read/Grep/Glob"),
-                        ("research", "research — + WebSearch (subscription)"),
+                        ("research", "research — WebSearch only (subscription)"),
                         ("editor", "editor — + Edit/Write"),
                         ("editor_shell", "editor_shell — + Bash"),
                     ])
@@ -644,7 +645,7 @@ fn kinds() -> Vec<KindSpec> {
             deletable: true,
             title_field: Some("skill"),
             subtitle_fields: vec![],
-            help: "A SKILL.md package (skills/, ~/.tengu/skills/, <workspace>/.tengu/skills/).",
+            help: "A SKILL.md package (skills/, <TENGU_HOME>/skills/, <workspace>/.tengu/skills/).",
             fields: vec![field("skill", "Skill", String)
                 .required()
                 .readonly()
@@ -910,7 +911,7 @@ type SecretPreset = (
 );
 
 /// The secret card presets — the
-/// shipped seal-proxy routes (`docs/sealed-keys-2026-10-09.md` § Worker)
+/// shipped seal-proxy routes (`docs/sealed-keys.md` § Worker)
 /// and plain keys. Data only: the compiler treats every secret alike.
 const SECRET_PRESETS: &[SecretPreset] = &[
     (

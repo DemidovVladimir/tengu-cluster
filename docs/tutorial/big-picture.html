@@ -134,8 +134,8 @@
         </g>
         <g class="n data" data-at="5">
           <rect x="196" y="280" width="160" height="52" rx="8"/>
-          <text x="276" y="302" text-anchor="middle" class="t-title t-mono">TENGU_PLAN.md</text>
-          <text x="276" y="320" text-anchor="middle" class="t-small">debug mirror of the plan</text>
+          <text x="276" y="302" text-anchor="middle" class="t-title t-mono">plan_state</text>
+          <text x="276" y="320" text-anchor="middle" class="t-small">the plan, to every step</text>
         </g>
         <g class="n" data-at="6,9-10">
           <rect x="390" y="300" width="150" height="60" rx="8"/>
@@ -209,13 +209,13 @@
         <li><code>tengu chat --sandbox lping</code> loads <code>sandboxes/lping/config.toml</code>: validates it, folds scopes, pins <code>TENGU_CONFIG</code>, signs a seal-proxy session when it has <code>[keys]</code>, installs the <code>[egress]</code> policy.</li>
         <li>With an <code>[orchestrator]</code> section the message goes to the planner. Without one (the default) the default agent answers in one in-process chat turn.</li>
         <li>The planner prompt: the registry of described agents, skills and tools, recalled memory, recent messages, then your message.</li>
-        <li>One LLM call with tools, bridge, memory and grounding stripped. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
-        <li>The DAG executor registers the plan for this session and mirrors it to <code>TENGU_PLAN.md</code>. Every step whose <code>depends_on</code> are done starts at once.</li>
+        <li>One LLM call straight to the planner agent's engine: no tools, bridge or memory. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
+        <li>The DAG executor runs the plan: every step whose <code>depends_on</code> are done starts at once, and each gets the plan it is part of (<code>plan_state</code>).</li>
         <li>Per step, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and writes one JSON request to its stdin.</li>
         <li>The child reloads the same sandbox, takes <code>[agents.&lt;step.agent&gt;]</code> and loops: model turn, tool calls, results. At most 70 turns by default.</li>
         <li>The model ends with <code>compress_and_store(summary)</code>. With <code>postgres_memory</code> the summary lands in <code>agentic_memory</code> under the shared session id.</li>
         <li>The child prints one <code>AgentIpcOutput</code> line and exits. When all steps are done, the leaf step's output is the reply (parallel leaves joined, one section each), secrets redacted.</li>
-        <li>A failed step runs again: 3 attempts, waiting 1 s then 3 s. Still failing, the planner replans with the error, at most 2 times; unchanged finished steps are reused.</li>
+        <li>A failed step runs again: 3 attempts, waiting 1 s then 2 s (a fatal error, e.g. the child exits before its loop, is not retried). Still failing, the planner replans with the error, at most 2 times; unchanged finished steps are reused.</li>
       </ol>
     </div>
   </figure>
@@ -275,7 +275,6 @@
     </div>
     <div class="tabpanel" id="tab-toml"><pre><span class="k">[orchestrator]</span>
 agent = <span class="s">"lping"</span>                 <span class="c"># whose engine + model run the planner call</span>
-engine = <span class="s">"rag"</span>                  <span class="c"># the only value</span>
 max_attempts_per_step = <span class="n">3</span>
 max_replans = <span class="n">2</span>
 
@@ -313,15 +312,12 @@ step_timeout_secs = <span class="n">600</span></pre></div>
     <div class="tabpanel" id="tab-in" hidden><pre><span class="c"># what SubprocessRunner writes to the child's stdin (example values)</span>
 {
   <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
-  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,
-  <span class="k">"model"</span>: <span class="s">""</span>,             <span class="c"># empty: the child uses the agent block's model</span>
-  <span class="k">"tools"</span>: [], <span class="k">"skills"</span>: [],
+  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># model, tools, skills: from its agent block</span>
   <span class="k">"max_turns"</span>: <span class="n">40</span>,          <span class="c"># the agent's limits.max_tool_rounds</span>
-  <span class="k">"sandbox"</span>: <span class="n">null</span>,
   <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,
   <span class="k">"step_id"</span>: <span class="s">"s1"</span>,
   <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,
-  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n\n- phase: `active`\n\n## Steps\n…"</span>
+  <span class="k">"plan_state"</span>: <span class="s">"## Steps\n\n- `s1` agent=`crypto_researcher` …"</span>
 }</pre></div>
     <div class="tabpanel" id="tab-out" hidden><pre><span class="c"># one line on the child's stdout (example values, pretty-printed here)</span>
 {
@@ -391,7 +387,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
     <li><span><b>A child cannot be started by hand by accident.</b> Without <code>TENGU_AGENT_IPC=1</code> it exits with an error.</span></li>
     <li><span><b>Same fences in the child.</b> It reloads the same sandbox file and the parent's resolved egress policy; a bad policy aborts it.</span></li>
     <li><span><b>Steps cannot hang the turn.</b> The child is killed after the agent's <code>step_timeout_secs</code> (default 600).</span></li>
-    <li><span><b>A dropped turn leaves nothing running.</b> Dropped unfinished (aborted at a shutdown deadline, an eval row's timeout), a turn aborts its steps — their children are killed — and reports itself cancelled (<code>PlanCompleted</code>).</span></li>
+    <li><span><b>A dropped turn leaves nothing running.</b> Dropped unfinished (Telegram <code>/stop</code>, aborted at a shutdown deadline, an eval row's timeout), a turn aborts its steps — their children are killed — and reports itself cancelled (<code>PlanCompleted</code>).</span></li>
   </ul>
 </section>
 
@@ -399,7 +395,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Watch one turn</h2>
-    <p>Needs a <code>--features claude_code</code> build and <code>claude</code> logged in: every <code>lping</code> agent runs on the Claude subscription. <code>OPENROUTER_API_KEY</code> only for workspace memory and the Jev loops. <code>lping</code> is the sandbox with an <code>[orchestrator]</code> section. The TUI shows the <code>orch:</code> lines as system bubbles.</p>
+    <p>Needs <code>claude</code> logged in: every <code>lping</code> agent runs on the Claude subscription. <code>OPENROUTER_API_KEY</code> only for workspace memory and the Jev loops. <code>lping</code> is the sandbox with an <code>[orchestrator]</code> section. The TUI shows the <code>orch:</code> lines as system bubbles.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
@@ -408,8 +404,8 @@ step_timeout_secs = <span class="n">600</span></pre></div>
 <span class="ln">orch: ▶ s1 [<span class="hl">crypto_researcher</span>]</span>
 <span class="ln o">orch: ✓ s1</span>
 <span class="ln o">orch: plan completed</span>
-<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md TENGU_PLANNER_REGISTRY.md</span>
-<span class="ln cmd"><span class="p">$ </span>tail -f ~/.tengu/logs/tengu.log | rg 'metrics|rag query'</span></pre>
+<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLANNER_REGISTRY.md</span>
+<span class="ln cmd"><span class="p">$ </span>tail -f ~/.tengu/logs/tengu.log | rg 'metrics|planner registry'</span></pre>
   </div>
 </section>
 
@@ -425,7 +421,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
         <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td>the <code>tengu</code> commands; config path, logs, egress</td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td><code>--sandbox</code>: load, pin <code>TENGU_CONFIG</code>, egress</td></tr>
         <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td>the chat screen; orchestrator or direct turn</td></tr>
-        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>build_orchestrator</code>, session id, the stripped planner turn</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>planner_llm</code> (the planner's engine), <code>build_orchestrator</code>, session id</td></tr>
         <tr><td><code>src/application/orchestrator/</code></td><td>planner, executor, retry, replan, events, plan files</td></tr>
         <tr><td><code>src/application/chat/service.rs</code></td><td>one chat turn (<code>process_user_text</code>)</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>spawns the child, IPC types, timeout</td></tr>
@@ -436,7 +432,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

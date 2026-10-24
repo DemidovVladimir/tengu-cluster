@@ -52,8 +52,6 @@ No sandbox ships one — start from the commented `[skill_lifecycle]` sample in 
 Minimum example:
 
 ```toml
-runtime_profile = "auto"
-
 [agents.main]
 default = true
 engine = "openrouter"
@@ -102,16 +100,16 @@ Confirm: `./target/debug/tengu doctor` lists both agents (`main`, `skill-improve
 ## 1. Unit test suite (no API key, no cost)
 
 ```bash
-cargo test --bin tengu skills::lifecycle:: -- --nocapture 2>&1 | tail -5
-cargo test --bin tengu inbound::eval::    -- --nocapture 2>&1 | tail -5
-cargo test --bin tengu outbound::tools:: -- --nocapture 2>&1 | tail -5
+cargo test --lib skills::lifecycle:: -- --nocapture 2>&1 | tail -5
+cargo test --lib inbound::eval::    -- --nocapture 2>&1 | tail -5
+cargo test --lib outbound::tools:: -- --nocapture 2>&1 | tail -5
 ```
 
 Expected:
 
 ```
 test result: ok. N passed; 0 failed ...      (application/skills/lifecycle)
-test result: ok. N passed; 0 failed ...      (adapters/inbound/eval.rs)
+test result: ok. N passed; 0 failed ...      (adapters/inbound/eval/ + application/skills/lifecycle/eval.rs)
 test result: ok. N passed; 0 failed ...      (adapters/outbound/tools — `postgres_memory` adds more)
 ```
 
@@ -129,7 +127,7 @@ Specific test groups worth knowing:
 | `skills::lifecycle::metric_kinds::script::tests` | shell-script metric JSON parse |
 | `skills::lifecycle::metric_kinds::dialog_replay::tests` | current-dialog slice → delegate metric |
 | `skills::lifecycle::metric_kinds::description_trigger::tests` | should/shouldn't-trigger judge, holdout split |
-| `skills::lifecycle::scanner::tests` · `audit::tests` · `learner_state::tests` | threat patterns, `skills/.audit.jsonl`, `state/<learner>.json` |
+| `skills::lifecycle::scanner::tests` · `audit::tests` | threat patterns, `skills/.audit.jsonl` |
 | `skills::lifecycle::storage::tests` | `metrics.json` round-trip, rolling window, retention pruning |
 | `skills::lifecycle::fixtures::tests` | YAML round-trip + transcript→fixture extraction |
 | `skills::lifecycle::scratch_worktree::tests` | git worktree + non-git fallback |
@@ -181,7 +179,7 @@ All should return without error.
 ```
 
 Expected output includes:
-- Auto-detected runtime profile + `[egress]` network mode.
+- The `[egress]` network mode.
 - Backend diagnostics for **each configured agent** — look for `main` (or the sandbox planner) and `skill-improver`.
 
 If `skill-improver` is missing → the active config is incomplete. Re-check section 0.3.
@@ -299,7 +297,7 @@ Check one of the transcripts:
 less evals/runs/<most-recent>/skill-creator-f1.md
 ```
 
-Look for a `# Tools` section that **includes `skill_distill`**. If it doesn't — your config doesn't have `workspace_tools = ["skill_distill"]` on the eval agent, or the `SkillLifecyclePlugin` registration regressed. The eval config is at `skills/skill-creator/evals/config.toml` — check that its `skill-creator-agent` has `workspace_tools = ["skill_distill"]`.
+Look for a `skill_distill` call (the agent's tool definitions, not a `# Tools` section — the system prompt has had no tool list since 2026-10-23). If there is none — your config doesn't have `workspace_tools = ["skill_distill"]` on the eval agent, or the `SkillLifecyclePlugin` registration regressed. The eval config is at `skills/skill-creator/evals/config.toml` — check that its `skill-creator-agent` has `workspace_tools = ["skill_distill"]`.
 
 Check that the metric rubric actually ran:
 
@@ -315,7 +313,7 @@ Expected: a JSON object with `pass`, `score`, `notes` — the judge's substantiv
 |---------|-------|-----|
 | "`[skill_lifecycle]` config missing" | No `[skill_lifecycle]` block in config | Add per section 0.3 |
 | "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`domain::tools::WORKSPACE_TOOLS`: memory, skill-lifecycle, Solana, Hyperliquid, xm, xlab and sources names — the error lists them all) | Fix the name; checked in `src/config/mod.rs::validate_agent` |
-| "yaml prompts parse failed" | Fixtures file is neither schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}` or the `{schema_version, fixtures: [...]}` file the skill tools write (`eval.rs` reads both) |
+| "yaml prompts parse failed" | Fixtures file is neither schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}` or the `{schema_version, fixtures: [...]}` file the skill tools write (`lifecycle/eval.rs::parse_yaml_prompts` reads both) |
 | Every row fails with "agent only described skill_distill in text" | `skill_distill` not advertised to the LLM | The eval agent must opt in (`skill_distill` in `workspace_tools` or `tools`); the row is the `catalog()` entry in `src/adapters/outbound/tools/mod.rs` (`SkillLifecyclePlugin`) |
 | llm_judge fails with "model does not support assistant prefill" | Old prefill-based judge prompt | Verify commit `6d88028` or later — `LlmJudgeKind::run` should build the prompt with `""` prefill |
 
@@ -534,9 +532,9 @@ cargo build --bin tengu
 export OPENROUTER_API_KEY=sk-or-...
 
 # Unit tests (no cost)
-cargo test --bin tengu skills::lifecycle:: --quiet
-cargo test --bin tengu inbound::eval:: --quiet
-cargo test --bin tengu outbound::tools:: --quiet
+cargo test --lib skills::lifecycle:: --quiet
+cargo test --lib inbound::eval:: --quiet
+cargo test --lib outbound::tools:: --quiet
 
 # Config sanity
 ./target/debug/tengu doctor
@@ -569,9 +567,9 @@ Total cost for a full validation pass: **~$1.00**, ~5 minutes wall time.
 
 ## Related
 
-- Design spec: `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (§15 Implementation addendum reconciles spec vs. shipped).
-- Plan (phase 1): `docs/superpowers/plans/2026-04-20-skill-metrics-evolution.md` (Tasks 1-11, landed on main).
-- Plan (phase 2): `docs/superpowers/plans/2026-04-21-skill-metrics-evolution-phase2.md` (Tasks α/β/γ/δ consolidation).
+- Design spec: `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (§15 Implementation addendum reconciles spec vs. shipped).
+- Plan (phase 1): `docs/archive/2026-04/superpowers/plans/2026-04-20-skill-metrics-evolution.md` (Tasks 1-11, landed on main).
+- Plan (phase 2): `docs/archive/2026-04/superpowers/plans/2026-04-21-skill-metrics-evolution-phase2.md` (Tasks α/β/γ/δ consolidation).
 - `docs/skills.md` — skill authoring + Metrics & Evolution section.
-- `docs/configuration.md` — `[skill_lifecycle]` config reference.
-- `docs/architecture.md` — Skill Lifecycle key-abstraction entry.
+- `src/config/skill_lifecycle.rs` — `[skill_lifecycle]` config reference.
+- `docs/archive/2026-03/architecture.md` — Skill Lifecycle key-abstraction entry.

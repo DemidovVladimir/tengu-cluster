@@ -10,12 +10,12 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 |---|---|---|---|
 | `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) — a git submodule pinned at `7f104aa118a891aca85cfebbd68bf9f4a2cd85e7` with no `.gitmodules` entry: empty in a fresh clone or worktree | Privy agentic wallets: create / manage wallets, policies, transactions | no sandbox lists it |
 | `execution-map` | documentation | Architect → Jev: the execution-map JSON for `tengu decide --map` (`config/execution_map.rs`) — fields, narrowing rules, outcomes | no sandbox lists it |
-| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | no sandbox lists it |
+| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow; the in-chat lifecycle verbs a `learning-agent` serves | no sandbox lists it |
 | `telegram-rag-ingest` | documentation | Resources shared in Telegram (attachments, URLs, text) → searchable vector memory; answer from it later (`http_request` → `write_file` → `persistent_store`) | `storage-test` → `storage` |
 | `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab`, `xlab-w2` → `xl_architect` |
 | `soe-architect` | documentation (+ `resources/proposal.example.json`) | SOE Architect stage: read the run's packet, at least two mechanisms + `HOLD`, ranges with evidence ids or `UNKNOWN`, never a computed field; `soe_propose` call shapes and the draft format | `soe` → `soe_architect` |
 | `soe-critic` | documentation | SOE Critic stage: the seven challenge kinds and their conservative-only effects; `soe_challenge` flat call shape | `soe` → `soe_critic` |
-| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping` only) — read by the planner from `<cwd>/skills/orchestrator/SKILL.md` (`planner.rs`), not through `skill_packages`; its lifecycle-verb rows need a `learning-agent` block no sandbox ships |
+| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping` only) — read by the planner from `<cwd>/skills/orchestrator/SKILL.md` (`planner.rs`), not through `skill_packages`; ~2.8 KB: two JSON shapes, the exact-name rule, `depends_on`, compose (the lifecycle-verb rows moved to `skill-creator` 2026-10-23) |
 | `skill-eval` | documentation | Points to `tengu eval` / `tengu skill metrics` / `tengu skill evolve` | none |
 | `german-teacher` · `spanish-teacher` | documentation, learner-facing (`resources/`, `evals/prompts.yaml`) | Teacher-seeded skills (`tengu skill seed`), `editable_by_learner: true`; read their materials with `skill_resource` | none |
 | `orchestration-e2e` | no `SKILL.md` — `evals/` only | 9 eval rows + an orchestrated eval config (`tengu eval orchestration-e2e`) | `tengu eval` |
@@ -34,7 +34,7 @@ An agent that runs no shell (`[risk]`, `[soe]` or a `[solana]` signer sandbox: `
 
 | Order (first match wins) | Directory |
 |---|---|
-| 1 Managed | `~/.tengu/skills/` — the home dir's, even when `TENGU_HOME` points elsewhere (`tengu skill install --tier managed`) |
+| 1 Managed | `<TENGU_HOME>/skills/` (`tengu skill install --tier managed`) |
 | 2 Workspace dotdir | `<workspace>/.tengu/skills/` |
 | 3 Project | `<workspace>/skills/` |
 | 4 Cwd | `<cwd>/skills/` when it differs from 3 — the repo's `skills/` when tengu runs from the repo root |
@@ -86,7 +86,7 @@ metrics:                    # optional: accuracy metrics (below)
 | `commands` | registry | slash commands the skill declares |
 | `metrics` | lifecycle | `tengu eval` / `skill evolve` / `skill doctor` |
 | `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
-| `learner_facing` | written by `skill seed` / `manage_skill create` | marker; the per-learner state module (`skills/<name>/state/<learner_id>.json`, `lifecycle/learner_state.rs`) is landed but not wired |
+| `learner_facing` | written by `skill seed` / `manage_skill create` | marker only: no per-learner state exists (G12, `docs/skill-research.md`) |
 
 `requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading of frontmatter skills (2026-10-08, `registry.rs::SkillGate`, checked on every `reload`): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
 
@@ -99,18 +99,29 @@ A skill's `metrics:` block declares accuracy characteristics the harness measure
 | `shell_check` | Runs a command, matches exit code + stdout regex. For deterministic outcomes (tx confirmed, file exists). |
 | `llm_judge` | Loads a `rubric_file`, lets a judge LLM score the fixture transcript against narrative criteria. For qualitative quality. |
 | `tool_assertion` | Dispatches a workspace tool (e.g. `persistent_store`) and asserts on its output via `value_matches` / `value_equals` / `value_in`. |
-| `script` | Invokes `sh <path>` with fixture data in env vars; parses stdout JSON `{pass, score, notes?}`. Escape hatch for custom checks. |
+| `script` | Runs `sh <path>` through the shell port (the `[egress]` wrapper, 300 s timeout) in the workspace, with `PROMPT` / `TRANSCRIPT` / `EXPECTED_OUTCOME` set; parses stdout JSON `{pass, score, notes?}`; a failed run or non-zero exit fails the row. Escape hatch for custom checks. |
 | `dialog_replay` | Reflective eval: scores the current dialog slice from `from_message_index` by delegating to a sibling `llm_judge` / `tool_assertion` metric (`delegate_metric`). |
 | `description_trigger` | Judge LLM decides whether the planner would route to this skill for each query in `queries_file` (`{queries: [{query, should_trigger}]}`); `runs_per_query` (3), `holdout` (0.4). |
 
-Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric. Full frontmatter schema: `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6.1.
+Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric.
+
+Fields and load checks (`lifecycle/metrics.rs::MetricSpec` + `validate_metrics`; every metric has a `name`, unique in the skill, and an optional `min_pass_rate` in [0, 1]; no `metrics:` block = the skill loads and `tengu eval` refuses it):
+
+| Kind | Required | Optional | Refused at load |
+|---|---|---|---|
+| `shell_check` | `cmd` | `expect_stdout_matches`, `expect_exit_code` | empty `cmd`; neither expectation set |
+| `llm_judge` | `rubric_file` (under the skill dir) | `judge_model` | rubric file missing |
+| `tool_assertion` | `tool`, `action`, `assert` | `key` | empty `tool` |
+| `script` | `path` (under the skill dir) | — | file missing |
+| `dialog_replay` | `from_message_index`, `delegate_metric` | `expected_outcome` | empty `delegate_metric` |
+| `description_trigger` | `queries_file` (under the skill dir) | `judge_model`, `runs_per_query` (3), `holdout` (0.4) | file missing; `runs_per_query` 0; `holdout` outside [0, 1] |
 
 ## Distillation and in-chat edits
 
 | Tool (opt-in unless noted) | Does |
 |---|---|
 | `skill_distill` | Authors a new skill mid-conversation: `skills/<name>/{SKILL.md, evals/prompts.yaml, evals/config.toml, metrics/<scaffolds>}` atomically (`evals/config.toml` mirrors the calling agent's engine + model). Loads on the next session (stable tool / skill inventory per conversation). Refuses a call with no conversation (a bridged call gets the run's transcript) |
-| `manage_skill` | `create \| edit_body \| patch \| add_resource \| remove_resource \| delete` — the unified write API (`docs/skill-redesign-2026-04-29.md`) |
+| `manage_skill` | `create \| edit_body \| patch \| add_resource \| remove_resource \| delete` — the unified write API (`docs/archive/2026-04/skill-redesign-2026-04-29.md`) |
 | `view_skill` (always) | `list \| read \| read_resource` |
 | `skill_resource` (always), `apply_improver_proposal` | back-compat aliases |
 
@@ -131,7 +142,7 @@ Writers refuse agent / CLI state paths (`.tengu/`, `.claude/`, `skills/` via `wr
 | `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine → scan → validate → install from URL / git / local path (default tier `managed`; `--strict` refuses caution / dangerous verdicts) |
 | `tengu skill seed <name> [<resources_dir>] [--tier T] [--description] [--learner-facing] [--yes]` | Teacher onboarding: SKILL.md template + `resources/` folder |
 
-Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); no sandbox ships one — commented `[skill_lifecycle]` sample in `config.example.toml`, `docs/configuration.md` § Skill lifecycle.
+Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); no sandbox ships one — commented `[skill_lifecycle]` sample in `config.example.toml`, `src/config/skill_lifecycle.rs`.
 
 ## Example: shell skill
 
@@ -149,7 +160,7 @@ cargo test {{filter}} 2>&1
 Its command is gated by `shell_bins` in its scope (first command word only — a guard rail, not a sandbox); it never loads in a hardened sandbox.
 
 ## Related
-- `docs/configuration.md` — `skill_packages`, `[skill_lifecycle]`
+- `src/config/agent.rs` · `src/config/skill_lifecycle.rs` — `skill_packages`, `[skill_lifecycle]`
 - `docs/mcp-bridge.md` — how skill tools reach Claude Code
 - `docs/engine-backends.md` — engines
-- `docs/skill-redesign-2026-04-29.md` · `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`
+- `docs/archive/2026-04/skill-redesign-2026-04-29.md` · `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (history)

@@ -1,5 +1,5 @@
 //! `FsVault` — `ports::evidence::Vault` over `<TENGU_HOME>/state/evidence/<vault>/`
-//! (`docs/lineage-2026-10-06.md` § 3). The vault dir is created once
+//! (`docs/lineage.md` § 3). The vault dir is created once
 //! (`create_dir`, never over an existing one); files are copied with
 //! `std::fs::copy` (APFS: `clonefile`, no extra disk), each copy hashed and
 //! checked equal to its source's hash; `seal` clears every write bit.
@@ -34,7 +34,7 @@ pub(crate) struct FsVault {
 impl FsVault {
     /// `<tengu_home>/state/evidence/<vault>`.
     pub(crate) fn new(tengu_home: &Path, vault: &str) -> Self {
-        Self::at(tengu_home.join("state").join("evidence").join(vault))
+        Self::at(crate::config::paths::Layout::at(tengu_home).vault(vault))
     }
 
     pub(crate) fn at(root: PathBuf) -> Self {

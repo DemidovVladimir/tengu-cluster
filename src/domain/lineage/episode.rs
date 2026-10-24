@@ -1,4 +1,4 @@
-//! Experience episode — `lineage/episodes/<id>.toml` (`docs/lineage-2026-10-06.md`
+//! Experience episode — `lineage/episodes/<id>.toml` (`docs/lineage.md`
 //! § 2, handoff § 22–24, § 37, § 71; roadmap P4): context + hypothesis +
 //! information + decision + action + outcome + quality. Decision quality and
 //! outcome are stored apart, so a lucky bad decision and a good unlucky one

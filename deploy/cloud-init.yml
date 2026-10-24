@@ -42,12 +42,12 @@ runcmd:
   # Configure
   - cd /opt/tengu-cluster && cp .env.example .env && cp config.example.toml config.toml
 
-  # Bind the webhook listener ([webhooks] bind, port 7080 — `tengu webhooks`,
-  # feature `webhooks`) to 0.0.0.0 for external access. Only the [webhooks]
-  # section is rewritten; nothing listens on [hub].port. Only matters for
+  # Bind the webhook listener ([webhooks] bind, port 7080 — `tengu run` /
+  # `tengu webhooks`, the runtime with no feeds)
+  # to 0.0.0.0 for external access. Only the [webhooks]
+  # section is rewritten. Only matters for
   # `make up NETWORK=open` (the default Tor topology publishes no ports),
-  # with the [webhooks] block uncommented and the image built with
-  # TENGU_FEATURES=openrouter,telegram,webhooks.
+  # with the [webhooks] block uncommented (`webhooks` is a default feature).
   - sed -i '/^\[webhooks\]/,/^\[/ s/^bind = "127.0.0.1"/bind = "0.0.0.0"/' /opt/tengu-cluster/config.toml
 
   # Build images (tengu + Tor proxy) so they're ready when the user SSH's in

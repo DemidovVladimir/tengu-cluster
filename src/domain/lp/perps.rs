@@ -48,6 +48,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::canonical::hex;
 use crate::domain::observation::{
     set_bool, set_int, set_num, ErrorClass, Features, Field, ObsStatus, Observed, ReadError,
 };
@@ -330,15 +331,11 @@ fn check_disc(d: &[u8], disc: &[u8; 8], min_len: usize, name: &str) -> Result<()
     if d[..8] != disc[..] {
         return Err(format!(
             "{name}: discriminator {} != {}",
-            hex8(&d[..8]),
-            hex8(disc)
+            hex(&d[..8]),
+            hex(disc)
         ));
     }
     Ok(())
-}
-
-fn hex8(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------

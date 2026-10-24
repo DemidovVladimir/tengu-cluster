@@ -1,5 +1,5 @@
 //! `tengu evidence …` — preserve and grade forward evidence
-//! (`docs/lineage-2026-10-06.md` § 3, roadmap Phase 0); no config, no LLM,
+//! (`docs/lineage.md` § 3, roadmap Phase 0); no config, no LLM,
 //! no network. Every reader is read-only (`adapters/outbound/evidence/`);
 //! the only write is a new vault + the record file `snapshot` fills.
 //!
@@ -13,7 +13,7 @@
 //! | `regrade --history <dir>… --anchor [--signal-at [--allow-signal-after-entry]] --entry --exit --notional-usd N [--top-n N] [--min-abs-signal-bps X] [--direction fade\|follow] [--taker-fee-bps F \| --fees recorded] [--market-db <db>] [--instruments ids…] [--fill-book as-of\|next] [--compare-ledger <db> --compare-account A] [--expect-signals <file>]` | rule W or a variant from recorded rows (`domain/xm/regrade.rs`); universe default = every `mkt_ctx/1` key at the anchor or the signal; a signal after the entry refused unless allowed, then `LOOK-AHEAD: …` is line 1 (JSON `look_ahead`) |
 //!
 //! Every command takes `--format text|json`. Times: RFC 3339, epoch ms or a
-//! UTC date (`domain::marketdata::parse_time`); printed RFC 3339 UTC with
+//! UTC date (`domain::time::parse_time`); printed RFC 3339 UTC with
 //! ms. Ids and hashes are printed in full.
 
 use std::collections::BTreeSet;
@@ -32,7 +32,8 @@ use crate::application::evidence::{self as uc, Verdict};
 use crate::config::paths::resolve_tengu_home;
 use crate::domain::evidence::EvidenceRecord;
 use crate::domain::evidence_coverage::{Coverage, Window};
-use crate::domain::marketdata::{parse_time, Interval};
+use crate::domain::marketdata::Interval;
+use crate::domain::time::parse_time;
 use crate::domain::xm::grade::{AccountGrade, CheckStatus};
 use crate::domain::xm::regrade::{
     check_signals, compare_with_ledger, parse_signal_lines, BookPick, Direction, FeeModel,

@@ -470,11 +470,11 @@ mod tests {
         let second = run_live(&rerun, "platform_rule_change", &offline).await;
         let dir = RunDir::Cycle(first.cycle_id.clone());
         let (a, b) = (live.store.dir(&dir), rerun.store.dir(&dir));
-        for name in [PROPOSALS, CHALLENGES, "stages.json"] {
+        // The same replies (`stages.json`) and metrics (`ops.json`).
+        for name in [PROPOSALS, CHALLENGES, "stages.json", "ops.json"] {
             assert!(a.contains_key(name), "{name}");
             assert_eq!(a.get(name), b.get(name), "{name}");
         }
-        assert_eq!(first.stages, second.stages, "the same replies and metrics");
         assert_eq!(
             decision_sha256(&*live.store, &dir).unwrap(),
             decision_sha256(&*rerun.store, &dir).unwrap()

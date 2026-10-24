@@ -9,7 +9,7 @@
 //!   via `AgentConfig.workspace_tools` (like `shared_cache`).
 //!
 //! Both tools are natively async — no `block_in_place` bridge. See task A5 in
-//! `docs/superpowers/plans/2026-04-16-phase-a-tool-plugin-architecture.md`.
+//! `docs/archive/2026-04/superpowers/plans/2026-04-16-phase-a-tool-plugin-architecture.md`.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -252,9 +252,7 @@ mod tests {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
-            shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
             memory_manager: None,
-            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -271,9 +269,7 @@ mod tests {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
-            shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
             memory_manager: Some(manager),
-            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -297,9 +293,7 @@ mod tests {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
-            shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
             memory_manager: Some(manager),
-            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();

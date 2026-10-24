@@ -30,9 +30,6 @@
 //! (`observe`), every proposal and challenge checked, challenges merged,
 //! each candidate assessed and blocked, then [`allocate`].
 
-// Consumers land with the cycle (application `run_cycle`) and `tengu soe`.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use serde::Serialize;
@@ -641,7 +638,7 @@ pub fn decide_week(w: &WeekInput) -> Result<Week, Vec<ValueError>> {
 pub(crate) mod tests {
     use super::*;
     use crate::domain::canonical::canonical_json;
-    use crate::domain::lineage::pins::toml_digest;
+    use crate::domain::canonical::toml_digest;
     use crate::domain::soe::challenge::tests::{challenge, widen};
     use crate::domain::soe::challenge::{ChallengeKind, Effect};
     use crate::domain::soe::economics::tests::{economics, with_economics, VERIFIED_DEAL};

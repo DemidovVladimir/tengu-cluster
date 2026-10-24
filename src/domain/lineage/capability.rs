@@ -1,4 +1,4 @@
-//! Capability — `lineage/capabilities/<id>.toml` (`docs/lineage-2026-10-06.md`
+//! Capability — `lineage/capabilities/<id>.toml` (`docs/lineage.md`
 //! § 2, handoff § 31–32; roadmap P5): a decision-relevant capability, never
 //! a helper and never a parameter variant (that is a variant).
 //!

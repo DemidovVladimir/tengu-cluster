@@ -1,4 +1,4 @@
-//! Workflow graph — the read model Tengu Studio draws (`TENGU_STUDIO_PLAN.md`
+//! Workflow graph — the read model Tengu Studio draws (`docs/plans/TENGU_STUDIO_PLAN.md`
 //! § 5): one sandbox's validated config + tool catalog (+ an optional
 //! execution map) as nodes and edges. Pure data: built by
 //! `application/studio/graph.rs`, printed by `tengu studio graph`. Layout

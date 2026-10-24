@@ -1,4 +1,4 @@
-//! Studio composition (`TENGU_STUDIO_PLAN.md` § 5): the inputs the Studio
+//! Studio composition (`docs/plans/TENGU_STUDIO_PLAN.md` § 5): the inputs the Studio
 //! use cases (`application/studio/`) need from adapters, and their redaction
 //! before anything leaves the process.
 //!

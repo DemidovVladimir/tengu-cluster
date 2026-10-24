@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tengu Architecture Explorer</title>
+<style>
+  :root {
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --surface3: #2D2D4A;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --accent: #7C3AED;
+    --accent-mid: #A78BFA;
+    --accent-light: #EDE9FE;
+    --user: #F59E0B;
+    --orch: #C084FC;
+    --plan: #60A5FA;
+    --exec: #22D3EE;
+    --sub: #4ADE80;
+    --tool: #FB7185;
+    --mem: #94A3B8;
+    --risk: #F87171;
+    --rag: #A78BFA;
+    --agt: #67E8F9;
+    --skl: #86EFAC;
+    --orc: #FB923C;
+    --egr: #FCD34D;
+    --met: #F0ABFC;
+    --run: #2DD4BF;
+    --dec: #FBBF24;
+    --obs: #818CF8;
+    --tls: #38BDF8;
+    --xm: #FB7185;
+    --xl: #93C5FD;
+    --par: #D6D3D1;
+    --lin: #A3E635;
+    --rnk: #F472B6;
+    --src: #5EEAD4;
+    --soe: #FDBA74;
+    --trc: #67E8F9;
+    --std: #C4B5FD;
+    --a2a: #93C5FD;
+    --keys: #FCA5A5;
+    --ok: #16A34A;
+    --warn: #CA8A04;
+    --info: #0891B2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 36px 20px;
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .header .sub { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .tabs {
+    display: flex; gap: 2px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 36px; overflow-x: auto;
+    position: sticky; top: 88px; z-index: 90;
+  }
+  .tab {
+    padding: 12px 20px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); border: none; background: none;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: all .15s;
+    font-family: inherit;
+  }
+  .tab.active { color: #fff; border-bottom-color: var(--accent-mid); }
+  .tab:hover { color: var(--text); }
+  .content { padding: 28px 36px 80px; max-width: 1320px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  h2 { font-size: 16px; font-weight: 700; margin-bottom: 14px; color: #fff; }
+  h3 { font-size: 13px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+  p { color: var(--text-muted); margin-bottom: 10px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; background: var(--surface2);
+    padding: 2px 6px; border-radius: 3px;
+    color: var(--accent-light);
+    overflow-wrap: anywhere;
+  }
+  /* ── walk-a-turn / other flows ── */
+  .walk-bar {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px;
+  }
+  .flow-switch { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .flow-btn {
+    padding: 8px 14px; border-radius: 6px; font-size: 12px; font-weight: 700;
+    cursor: pointer; border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text-muted); font-family: inherit;
+  }
+  .flow-btn.active { background: var(--surface3); color: #fff; border-color: var(--accent-mid); }
+  .flow-title { font-size: 13px; color: var(--text); margin-bottom: 12px; font-weight: 600; }
+  .step-pill {
+    padding: 8px 14px; border-radius: 6px; font-size: 12px;
+    font-weight: 600; cursor: pointer; transition: all .15s;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-muted); font-family: inherit;
+  }
+  .step-pill:hover { border-color: var(--accent-mid); color: #fff; }
+  .step-pill.active {
+    background: var(--accent); border-color: var(--accent);
+    color: #fff;
+  }
+  .step-detail {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 22px;
+    min-height: 260px;
+  }
+  .step-detail .step-num {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    background: var(--accent); color: #fff;
+    padding: 3px 10px; border-radius: 12px;
+    letter-spacing: .5px;
+  }
+  .step-detail h3 { font-size: 18px; margin: 8px 0 12px; }
+  .step-detail .what {
+    color: var(--text); font-size: 14px; margin-bottom: 16px;
+  }
+  .step-detail .files {
+    background: var(--surface2); border-radius: 6px;
+    padding: 12px 16px; margin-bottom: 14px;
+  }
+  .step-detail .files-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--text-dim); font-weight: 700; margin-bottom: 6px;
+  }
+  .step-detail .file-row {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; padding: 3px 0; color: var(--accent-light);
+    overflow-wrap: anywhere;
+  }
+  .step-detail .file-row .desc {
+    color: var(--text-muted); margin-left: 8px; font-family: inherit; font-size: 11px;
+  }
+  .step-detail .deep {
+    border-left: 3px solid var(--accent-mid); padding-left: 14px;
+    margin-top: 14px; font-size: 12px; color: var(--text-muted);
+  }
+  .step-detail .deep strong { color: var(--text); }
+  .nav-buttons { margin-top: 18px; display: flex; gap: 10px; }
+  .nav-btn {
+    padding: 8px 18px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; font-size: 13px;
+    font-family: inherit; transition: all .15s;
+  }
+  .nav-btn:hover:not(:disabled) {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--surface3); }
+  @media (max-width: 720px) {
+    .header { position: static; padding: 18px 16px 14px; }
+    .tabs { top: 0; padding: 0 8px; }
+    .content { padding: 20px 16px 60px; }
+    .step-detail { padding: 16px; }
+    .tab { padding: 12px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tengu-Cluster · Architecture Explorer</h1>
+  <div class="sub">2026-04-27 · synced 2026-10-24 · walk the chat turn and the three other flows · where every file lives: <a href="code-map.html" style="color:inherit">code-map.html</a> (generated) · one page per feature: <a href="tutorial/index.html" style="color:inherit">tutorial/</a> · companion to architecture.{md,svg}</div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-tab="walk">Walk a Turn</button>
+  <button class="tab" data-tab="flows">Other Flows</button>
+</div>
+
+<div class="content">
+
+<!-- ============ WALK A TURN ============ -->
+<div class="panel active" id="panel-walk">
+  <h2>How a single user message becomes a response</h2>
+  <p>Click each step to see what runs, in which file. Use the buttons or arrow keys at the bottom to walk through.</p>
+
+  <div class="walk-bar" id="walk-bar"></div>
+  <div class="step-detail" id="walk-detail"></div>
+  <div class="nav-buttons">
+    <button class="nav-btn" id="prev-btn" onclick="walkStep(-1)">← Previous</button>
+    <button class="nav-btn" id="next-btn" onclick="walkStep(1)">Next →</button>
+  </div>
+</div>
+
+<!-- ============ OTHER FLOWS ============ -->
+<div class="panel" id="panel-flows">
+  <h2>Flows with no user message — <code>tengu run</code>, <code>tengu backtest</code> and <code>tengu ranking run</code></h2>
+  <p>Same tools, scopes and egress as a chat turn; no planner. Pick a flow, then walk its steps (arrow keys work here too).</p>
+  <div class="flow-switch" id="flow-switch"></div>
+  <div class="flow-title" id="flow-title"></div>
+  <div class="walk-bar" id="flow-bar"></div>
+  <div class="step-detail" id="flow-detail"></div>
+  <div class="nav-buttons">
+    <button class="nav-btn" id="flow-prev" onclick="flowStep(-1)">← Previous</button>
+    <button class="nav-btn" id="flow-next" onclick="flowStep(1)">Next →</button>
+  </div>
+</div>
+
+</div>
+
+<script>
+// ============ DATA ============
+// Plain text: every string is HTML-escaped at render time, so write <name> as is.
+const STEPS = [
+  {
+    num: 1, title: "User input", lane: "user",
+    what: "User types a message into the TUI or sends a Telegram message (fails closed without an allow-list); a webhook POST (feature webhooks, default) runs a one-shot orchestrator turn with its own session_id.",
+    files: [
+      { path: "src/adapters/inbound/tui/mod.rs", desc: "cursive TUI loop, captures input, dispatches to engine thread" },
+      { path: "src/adapters/inbound/telegram.rs", desc: "Telegram polling + per-chat dispatch; allow-list, private agents never @-routable" },
+      { path: "src/adapters/inbound/webhooks.rs", desc: "POST /webhooks/:name → one-shot orchestrator turn, or a loop event (loop = \"<name>\")" },
+    ],
+    deep: "Both chat surfaces also subscribe to the OrchestratorEvent bus so they can render plan progress lines (PlanCreated, StepStarted, ✓ step-N)."
+  },
+  {
+    num: 2, title: "Bootstrap — build_orchestrator", lane: "orch",
+    what: "bootstrap/orchestrator.rs::planner_llm(config) builds the planner's engine (PlannerLlm) from [agents.<[orchestrator] agent>]; build_orchestrator(config, llm, session_id, trace) constructs the Orchestrator wrapping the planner + worker. planner_llm returns None when [orchestrator] is missing — channels then fall back to direct default-agent dispatch.",
+    files: [
+      { path: "src/bootstrap/orchestrator.rs::planner_llm", desc: "the planner's engine + agent block; an error for a missing block or an engine that does not build. TUI / Telegram: at startup (refuse to start); webhook planner endpoints, loop escalations: per turn (warn, skip); eval: per row; A2A: per planner turn" },
+      { path: "src/bootstrap/orchestrator.rs::build_orchestrator", desc: "the wiring: RegistryPlanner + SubprocessRunner share config.agents and the caller's session_id" },
+      { path: "src/bootstrap/orchestrator.rs::resolve_session_id", desc: "TENGU_SESSION_ID, else a fresh UUID (per process for chat / Telegram, per row for tengu eval); tengu webhooks mints webhook-<name>-<uuid> per request instead" },
+      { path: "src/application/orchestrator/events.rs", desc: "EventBus minted here, shared with planner; the global metrics sink is bridged onto it" },
+    ],
+    deep: "[orchestrator] has no engine key (removed 2026-10-23; unknown keys fail the load) — the planner call runs on the agent's engine. The old static-mode planner (OrchestratorAgentPlanner + ChatWorker) is deleted."
+  },
+  {
+    num: 3, title: "Planner — RegistryPlanner::plan (legacy name)", lane: "plan",
+    what: "Embed once (postgres_memory) → regenerate/load TENGU_PLANNER_REGISTRY.md → optional cross-session recall → persist user message → push to in-memory buffer → optional session-output recall → LLM call → parse verdict.",
+    files: [
+      { path: "src/application/orchestrator/planner.rs::RegistryPlanner::plan", desc: "the orchestration of all the steps below" },
+      { path: "TENGU_PLANNER_REGISTRY.md", desc: "root file-backed roster loaded into the planner prompt" },
+      { path: "skills/orchestrator/SKILL.md", desc: "the planner's system prompt (no Rust code)" },
+      { path: "skills/orchestrator/plan_schema.json", desc: "the plan JSON shape the prompt asks for (no JSON-schema check in Rust; Plan::validate checks the plan)" },
+    ],
+    deep: "The planner LLM call is PlannerLlm::call: one user message through collect_engine_response with no tools, executor, observer, memory, bridge or [[mcp_servers]]; it returns (text, TurnTelemetry) with prompt/completion tokens, model slug, latency — the same usage on every surface. RegistryPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / session_recall / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after it. parse_verdict (4-path cascade: raw JSON, fenced, JSON inside prose, prose → Direct) gives PlannerVerdict::Direct { response } or PlannerVerdict::Plan { plan }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
+  },
+  {
+    num: 4, title: "DagExecutor", lane: "exec",
+    what: "Standard topological DAG with retry. Plan::ready_steps returns every step whose deps are satisfied; each is tokio::spawn'd on the SubprocessRunner. On step exhaustion, calls RegistryPlanner::replan with failure context + cross-plan recall.",
+    files: [
+      { path: "src/application/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel; abort_in_flight on cancel / exhaustion" },
+      { path: "src/application/orchestrator/replan.rs::drive", desc: "the outer loop — Plan::validate (empty, duplicate ids, unknown agents / dependencies, cycles) then replan-on-invalid / exhausted; stores the rendered plan per session (plan_state)" },
+      { path: "src/application/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts; by the failure's class (StepFailure): transient / timeout at once, then 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode never retried" },
+      { path: "src/domain/plan.rs::Plan::ready_steps · leaves", desc: "topology check · the steps that make the reply" },
+    ],
+    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn; the retry policy still runs its attempts, then the replan) on an agent name with no routable [agents.*] block — composed agents use Step.compose to declare a transient roster, NOT a renamed agent name. Cancel or an exhausted step aborts every step still in flight (its run-agent child is kill_on_drop); an unknown dependency or a cycle fails Plan::validate before any step (a replan), and a step that still never becomes ready is a replan; parallel leaves with no join step are joined in plan order, one ### <id> (<agent>) section each."
+  },
+  {
+    num: 5, title: "SubprocessRunner — spawn tengu run-agent", lane: "sub",
+    what: "Fails fast (no spawn; the retry policy still runs its attempts) when step.agent names no routable [agents.*] block (one with a description); builds AgentIpcInput JSON (max_turns = the agent's limits.max_tool_rounds; model/tools/skills travel empty), spawns child with TENGU_AGENT_IPC=1 + TENGU_EGRESS (parent's resolved [egress]), pipes JSON over stdin, reads result over stdout under limits.step_timeout_secs (run_with_timeout). Kill on drop. The child's stderr log goes through the parent's log (forward_child_log, target tengu::run_agent); a failed step's error carries its last 40 lines.",
+    files: [
+      { path: "src/adapters/outbound/subprocess_runner.rs::SubprocessRunner::run_step", desc: "parent side; re-emits the child's metrics on the global sink (metrics::forward — no second log line)" },
+      { path: "src/adapters/outbound/subprocess_runner.rs::AgentIpcInput", desc: "the wire format — session_id, step_id, sandbox_config, plan_state, optional compose" },
+      { path: "src/adapters/outbound/subprocess_runner.rs::AgentIpcOutput", desc: "Ok { output, summary } / Failed { error, output }, both + metrics + tools (tool activity)" },
+      { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "child entry point" },
+    ],
+    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny. plan_state carries the plan the step belongs to (WorkerHandle::run_step(step, inputs, plan); no file); scopes are enforced per tool (folded default_scopes + the child's workspace in fs_roots; a deny-all scope stays a deny)."
+  },
+  {
+    num: 6, title: "Subagent tool loop", lane: "tool",
+    what: "Inside the child: load the parent's config FIRST (sandbox_config → sandboxes/<name>/config.toml, else the default chain) → egress::install (TENGU_EGRESS wins) → take [agents.*] for the step's agent from it (compose.base_agent when composed; skill_packages/tools overridden in memory only, narrowing only in a hardened sandbox) → the step's workspace (the agent's, else a temp dir for this step — executor and engine alike) → assemble system prompt (base + skills + plan_state + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns (= limits.max_tool_rounds); results capped and older rounds compacted as in chat, every engine.",
+    files: [
+      { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "the orchestrating function" },
+      { path: "src/bootstrap/tools.rs::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools (∩ tools); subagent_config merges workspace-tool opt-ins from tools; a Claude Code / Codex step builds only the list (bridged_step_tools) unless [[mcp_servers]] need discovering" },
+      { path: "src/bootstrap/tools.rs::workspace_or_temp · compose_agent", desc: "the step's workspace; composed agents (hardened: narrow only)" },
+      { path: "src/adapters/outbound/engines/mod.rs::build_step_engine", desc: "a Claude Code or Codex step's bridge gets the workspace grant + a summary file for compress_and_store (engines::bridges_tools)" },
+      { path: "src/adapters/outbound/egress.rs", desc: "tool_client (proxy, redirects off) / llm_api_client / shell_command — the network policy every tool call goes through" },
+      { path: "src/adapters/outbound/tools/ + src/adapters/outbound/mcp_client/", desc: "the actual tools (catalog) + [[mcp_servers]] proxies" },
+      { path: "src/application/chat/tool_loop.rs::collect_engine_response", desc: "chat's loop with the step's StepHooks (compress_and_store, per-turn metrics); one last tool-less call at the cap; tool_result_content caps results" },
+    ],
+    deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Each engine turn emits a MetricsRecord with kind=Subagent (StepHooks::on_turn); records are packed into AgentIpcOutput.metrics and re-emitted by SubprocessRunner::run_step on the parent's global metrics sink."
+  },
+  {
+    num: 7, title: "compress_and_store → durable summary", lane: "mem",
+    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it (a Claude Code or Codex step's bridge writes it to TENGU_BRIDGE_SUMMARY_FILE), writes the LLM-summarised output to durable memory, and exits cleanly with the summary in the IPC output JSON. postgres_memory builds write Postgres agentic_memory (try_persist_agentic_step_summary) with embeddings when available; without the feature the summary only travels back over IPC.",
+    files: [
+      { path: "src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs", desc: "the tool definition only (implicit on every subagent)" },
+      { path: "src/adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary", desc: "the durable write (postgres_memory)" },
+    ],
+    deep: "Output flows back to the parent via the IPC stdout, then to the DagExecutor (step 4). On step success the next ready step starts. The child's session_id and step_id are stamped on durable memory payloads so later planner recall can pull the right entries."
+  },
+];
+
+const FLOWS = [
+  {
+    key: "run",
+    label: "tengu run",
+    title: "tengu run --sandbox <s> — feed → tool → store → loop → exec tool → gate → ledger (docs/runtime.md)",
+    steps: [
+      {
+        num: 1, title: "Start — leases", lane: "orch",
+        what: "tengu run --sandbox <s> takes the leases runtime:<s> (+ state:<dir> for an [xmarket] state dir) in <state dir>/runtime.db — all or none, TTL 30 s, renewed every 10 s. A held lease ⇒ exit 1; a lost one ⇒ the run stops as failed. tengu webhooks takes the same leases.",
+        files: [
+          { path: "src/adapters/inbound/run.rs::run_runtime", desc: "signals (a second one exits 130), webhook routes (feature webhooks, default), the tengu run started line" },
+          { path: "src/bootstrap/runtime.rs", desc: "LeasePlan / OwnerLeases, loops built once, start_feeds, Runtime::spawn / shutdown" },
+          { path: "src/adapters/outbound/runtime_store.rs", desc: "SqliteRuntimeStore — acquire / renew / release, TTL takeover" },
+          { path: "src/domain/runtime.rs", desc: "lease resources and the live verdict (pure)" },
+        ],
+        deep: "Shutdown: stop signal → the webhook server stops accepting (loop endpoints answer 503) → heartbeat stopping, queued loop events dropped, running ones get [runtime] shutdown_grace_secs (20) → heartbeat stopped, leases released. A task that ends before the stop signal fails the run (Docker's restart policy brings it back). After the leases, start opens this process's trace recording (bootstrap::trace::open_sink, <TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl, runtime_id = the lease holder): runtime.*, feed.*, loop.*, every step and tool call."
+      },
+      {
+        num: 2, title: "Loops built once", lane: "plan",
+        what: "Every [decision_loops.*] is built once (bootstrap::decision::build_decision_loop) behind one LoopDispatch — the process owns loop state. One event at a time per loop (FIFO), [runtime] max_decisions_in_flight (4) across loops, ≤ max_queued_per_loop (64) waiting; one more is refused: a webhook gets 429, a feed tick is dropped.",
+        files: [
+          { path: "src/application/runtime/loops.rs::LoopDispatch", desc: "submit / submit_tracked, Refused::QueueFull, drain on shutdown" },
+          { path: "src/bootstrap/decision.rs::build_decision_loop", desc: "JevClient + the loop agent's executor + observation store" },
+          { path: "src/config/runtime.rs", desc: "[runtime]: grace, in-flight, queue, heartbeat" },
+        ],
+        deep: "Today xmarket and xmarket-weekend hold no [decision_loops] (tool feeds only; tracker item jev-xmarket-loops-toml); xlab-w2 runs tool feeds (history_refresh, strategy_ranking_daily, strategy_ranking_weekend); soe runs one job feed (soe_week → soe_cycle); loops live in lping (lp_watch, hedge_watch, exec chains hedge_exec and lp_exec with a sequence and bound slots), jev-exec (executor), xlab / xlab-w2 (xl_gate, replayed by tengu backtest --gate) and control-loop-lab (demo, fed by the tick feed tick). tengu decide --map runs an Architect's execution map that only narrows a loop."
+      },
+      {
+        num: 3, title: "Feed fires", lane: "exec",
+        what: "One supervised task feed:<name> per [feeds.<n>] on SystemClock: every_secs on the UTC grid, local windows with their own interval, at ticks (\"Sun 18:00\", \"daily 00:01\") in America/New_York · Europe/Paris · UTC, jitter_pct, run_on_start. One run in flight; missed slots are never replayed.",
+        files: [
+          { path: "src/bootstrap/runtime.rs::start_feeds", desc: "one task per feed; a feed whose tool its agent cannot run stops tengu run at start" },
+          { path: "src/application/runtime/feeds.rs::run_feed", desc: "fire, call or tick, back off, report health" },
+          { path: "src/domain/schedule.rs::next_fire", desc: "grid, windows, DST-safe at-ticks, jitter, late grace" },
+          { path: "src/config/feeds.rs", desc: "[feeds.<n>]: kind tool / tick / job (a closed JOBS list: soe_cycle), schedule, fan-out each, health" },
+        ],
+        deep: "Failures back off by error class (domain/backoff.rs): transient / timeout / rate limit ⇒ the failed calls again after 1–60 s with the same ids; quota or a long rate limit parks; auth / fatal / decode / not_applicable wait for the next slot — except an at-tick slot, whose failed calls retry for 15 min (AT_RETRY_WINDOW_MS). Clock work (exits, the weekend fade, the daily risk roll) is a kind = \"tool\" feed: no LLM, no Jev. A kind = \"job\" feed runs RuntimeJob::run(slot ms, feed:<name>:<slot ms>) (ports/runtime.rs; built by bootstrap/runtime.rs::job_for — soe_cycle → bootstrap/soe.rs) with the same backoff and health."
+      },
+      {
+        num: 4, title: "Tool call", lane: "tool",
+        what: "kind = \"tool\": the feed's agent runs the tool through the executor its decision loop would get (scopes, workspace, secret redaction), wrapped so the egress audit names the feed. Fan-out each = { coin = [...] } ≤ 500 calls, concurrency 1–32. Call ids feed:<name>:<slot ms>:<i> → ToolCtx.call_id; a retry reuses them (exec tools deduplicate).",
+        files: [
+          { path: "src/bootstrap/decision.rs::agent_tool_executor", desc: "the agent's executor behind SanitizedToolExecutor (one per agent)" },
+          { path: "src/adapters/outbound/egress.rs::AttributedExecutor", desc: "egress lines carry agent = the feed's, session = feed:<name>, the call id" },
+          { path: "src/adapters/outbound/secrets.rs::SanitizedToolExecutor", desc: "text, observations and errors redacted" },
+        ],
+        deep: "A tool feed may call an exec tool directly — xm_exits every 15 s, xm_weekend_fade every 60 s — which is how the weekend run trades on paper with no LLM at all."
+      },
+      {
+        num: 5, title: "Rows in the store", lane: "mem",
+        what: "Typed tools (hl_ctx, hl_book, risk_status, …) read through observe(): a fresh cached row or a live fetch; the result row lands in <workspace>/.tengu/observations.db (slot-monotonic upsert; Error rows never cached). With [recorder], open_observation_store wraps the cache so every live result (Error and ttl-0 rows too) also goes to <state dir>/history/<YYYYMMDD>.db.",
+        files: [
+          { path: "src/application/observe.rs::observe", desc: "cache-or-fetch; max_age_secs = 0 forces a live read" },
+          { path: "src/adapters/outbound/observations.rs", desc: "SqliteObservationStore, open_observation_store, RecordingObservationStore" },
+          { path: "src/adapters/outbound/history_sqlite.rs", desc: "UTC day files, retention sweeper; tengu history range / asof" },
+          { path: "src/config/recorder.rs", desc: "[recorder]: schemas, keep_data, change_only + heartbeat, retention" },
+        ],
+        deep: "Health rows feed/1:<name> go to the feed agent's store: connecting → live (→ stalled when quiet) → backoff while retrying / down; a row's observed_at_ms is the last item, so requires = { feed = 10 } means \"delivered within 10 s\"."
+      },
+      {
+        num: 6, title: "Loop (tick)", lane: "plan",
+        what: "kind = \"tick\": LoopDispatch::submit_tracked sends {event, ts_ms = slot} to [decision_loops.<target>] (session <feed>:<slot ms>). handle_event reads world rows from the loop agent's store (never fetched), asks Jev for next_action + slot choices, escalates below act_at, checks requires freshness and runs the tool via execute_typed (dry_run logs write actions instead).",
+        files: [
+          { path: "src/application/decision_loop/mod.rs::handle_event", desc: "per event, up to max_steps: world → Jev → gate → tool → history" },
+          { path: "src/application/decision_loop/world.rs", desc: "world aliases from the store: fresh / stale / missing / error" },
+          { path: "src/adapters/outbound/decisions.rs::JevClient", desc: "OpenRouter /api/alpha/decisions; one retry on 429 / 5xx; circuit open 30 s after 3 failures" },
+        ],
+        deep: "Every decisions call writes one line to <TENGU_HOME>/logs/decisions.jsonl (failed calls too, one write_all per line); a successful call also emits a MetricsKind::Decision record. A tool step's call id is {loop}:{session_id}:{t}; a typed result with features.risk = \"deny\" is outcome Refused."
+      },
+      {
+        num: 7, title: "Exec tool — run_exec", lane: "tool",
+        what: "paper_order / paper_close / xm_exits / xm_weekend_fade enter run_exec: [risk] + [paper] + the ledger must exist; the caller must be a private agent; client_order_id = the arg, else the call id (never random), stored with an order fingerprint; store reads only (mkt_ctx/1, mkt_instrument/1, the opportunity row); funding owed booked first; then fill_with_latency: sleep the [paper] latency on the Clock, read a live book, fill.",
+        files: [
+          { path: "src/adapters/outbound/tools/xm/exec_common.rs::run_exec", desc: "the gate inside every exec tool" },
+          { path: "src/application/paper.rs::fill_with_latency", desc: "latency on the Clock, then the book, then the fill" },
+          { path: "src/adapters/outbound/tools/hyperliquid/book.rs", desc: "HlBookSource — the exec tools' live book read (never cached)" },
+          { path: "src/domain/xm/exec.rs", desc: "client_order_id rule, order_fingerprint, exit IOC ceiling, paper_fill/1" },
+        ],
+        deep: "A replay of a stored client_order_id returns its row (no latency, nothing written) unless the fingerprint differs — then client_order_id_conflict. An argument never takes a reserved prefix: exit: fade: fade-shadow: feed: mcp: chat:."
+      },
+      {
+        num: 8, title: "Gate + fill + ledger", lane: "risk",
+        what: "PaperLedger::place runs decide(plan) inside one BEGIN IMMEDIATE: funding for the instrument settled, the account valued, the [risk] gate (evaluate — or evaluate_shadow for a shadow account), the fill on the post-latency book, the write. An entry re-probes the kill-switch file inside the transaction. A deny writes one verdict row (call id, tool, session) mirrored to <TENGU_HOME>/logs/risk.jsonl; a loop sees outcome Refused.",
+        files: [
+          { path: "src/ports/paper.rs", desc: "PaperLedger: place, settle_funding, trigger_exit, account owners" },
+          { path: "src/adapters/outbound/paper_store.rs", desc: "SqlitePaperLedger — <state dir>/ledger.db" },
+          { path: "src/domain/xm/risk.rs::evaluate", desc: "every rule a Check, fail closed (missing:<field>)" },
+          { path: "src/domain/xm/paper.rs", desc: "the fill engine: market / IOC on an L2 book, HL reject codes" },
+        ],
+        deep: "Each ledger account records its owner sandbox; another sandbox's tools are refused account_owner_mismatch. The row paper_fill/1:<account>:<client_order_id> is ttl 0: recorded, never cached. tengu risk status / halt / resume reads and steers the same ledger."
+      },
+      {
+        num: 9, title: "Health + doctor --live", lane: "mem",
+        what: "HealthBoard writes <state dir>/run-<s>.json and loop/1:<name> rows every [runtime] heartbeat_secs (5); tengu doctor --sandbox <s> --live reads them — non-zero when the heartbeat is missing, older than heartbeat_stale_secs (30) or stopped, or a required feed is down or stale. It is the Docker healthcheck.",
+        files: [
+          { path: "src/application/runtime/health.rs", desc: "HealthBoard, heartbeat task, FeedWriter" },
+          { path: "src/domain/runtime.rs::live_verdict", desc: "the live checks (pure)" },
+          { path: "src/adapters/inbound/cli/doctor.rs", desc: "tengu doctor --live / --engines / --tor" },
+        ],
+        deep: "Loops and optional feeds are reported, never failed. Errors in rows and heartbeats never carry URLs."
+      },
+    ],
+  },
+  {
+    key: "backtest",
+    label: "tengu backtest",
+    title: "tengu backtest --sandbox <s> — market.db → resolve / prepare → candidates → [Jev gate] → evaluate → run dir (docs/xlab-2026-10-01.md)",
+    steps: [
+      {
+        num: 0, title: "Fill market.db", lane: "mem",
+        what: "tengu history backfill (Hyperliquid candleSnapshot + fundingHistory; --source gecko for GeckoTerminal pool OHLCV), tengu history events (SEC EDGAR filings of hyperliquid:xyz:<TICKER> names, published = the index page's acceptance time; needs $SEC_USER_AGENT), import-hl-archive (S3 asset_ctxs *.csv.lz4 → ctx), import-json → <state dir>/market.db (WAL; bars, funding, ctx, events, event_coverage by full instrument id). Resumes: only what is not stored; a bar not yet closed is never stored.",
+        files: [
+          { path: "src/adapters/inbound/cli/history.rs", desc: "backfill / events / import-hl-archive / import-json / coverage (+ range / asof for the recorder)" },
+          { path: "src/adapters/outbound/backfill/", desc: "mod (Retry, missing_ranges, report), hl, gecko, hl_archive, json, sec (+ domain/sec.rs decoders)" },
+          { path: "src/adapters/outbound/market_data.rs", desc: "SqliteMarketData — WITHOUT ROWID tables, upserts, coverage" },
+          { path: "src/domain/marketdata_decode.rs", desc: "HL / Gecko / archive / JSON decoders; a bad row names its row and time" },
+        ],
+        deep: "Budgets: [rate_limits.hyperliquid] (xlab 600 / min, burst 200 — the IP's 1200 is shared with the xmarket runs), [rate_limits.geckoterminal] (25 / min) and [rate_limits.sec] (xlab-w2 300 / min, burst 5); egress through the tool client under allow_hosts. HL keeps the newest 5 000 bars per interval (1h ≈ 208 days). A ticker without a SEC CIK is recorded as not covered (its silence is no evidence of no news)."
+      },
+      {
+        num: 1, title: "resolve", lane: "plan",
+        what: "The spec — a [backtest.strategies.<n>] name or a JSON object — parsed and validated with every problem in one error (spec_of; deny_unknown_fields); universe @<name> resolved; instruments read = the universe or the spec's ids minus exclude; spec_sha256 = sha256 of the canonical JSON.",
+        files: [
+          { path: "src/application/backtest/mod.rs::resolve", desc: "spec_of, universe, instruments, spec_sha256" },
+          { path: "src/domain/backtest/spec.rs", desc: "six kinds, bounds naming the field, SplitSpec (time: / instruments:)" },
+          { path: "src/domain/canonical.rs", desc: "canonical JSON + sha256 hex" },
+          { path: "src/config/backtest.rs", desc: "[backtest]: costs, universes, strategies, splits, gate, max_candidates, keep_runs" },
+        ],
+        deep: "Six kinds: weekend_window, daily_window, move_trigger, funding_carry, pair_spread, event_window. A spec is data, not code — the Architect's level-2 capability."
+      },
+      {
+        num: 2, title: "prepare → candidates", lane: "exec",
+        what: "A kind outside the bound [generation] is refused first (capability_unavailable). from = the earliest stored bar of the instruments, to = now by default; series over the data window: bars at the interval, funding when the cost books it (always for funding_carry), ctx when half_spread = ctx; cut at --data-through (else the newest row read is the run's data_through_ms); [backtest.splits] applied (a bar straddling a split dropped); a spec with labels loads events + event coverage; engine::candidates decides each instant as-of t and stops past [backtest] max_candidates (50 000).",
+        files: [
+          { path: "src/application/backtest/mod.rs::prepare", desc: "series, data_through_ms, splits, InfoData, RunParams, RiskCaps, the run id proposed" },
+          { path: "src/domain/backtest/engine.rs::candidates", desc: "checks, then kinds.rs; the max_candidates guard" },
+          { path: "src/domain/backtest/kinds.rs", desc: "the six kinds' decisions as-of t, skips, data notes" },
+          { path: "src/domain/backtest/labels.rs", desc: "weekend_window info labels NEWS / UNCERTAIN / NOISE (Phase 7); skip classes before top_n" },
+          { path: "src/domain/backtest/features.rs", desc: "features as-of t for the Jev gate" },
+        ],
+        deep: "Price at an instant = the close of the bar ending exactly there; missing ⇒ skipped (missing_price), never interpolated. Each trade records decided_at_ms and data_asof_ms; data_asof_ms ≤ decided_at_ms is asserted."
+      },
+      {
+        num: 3, title: "[Jev gate] — optional", lane: "user",
+        what: "--gate: build_gate (before any work) wires a CachedDecisionEngine over JevClient and K replay loops (--concurrency, 4), each the real DecisionLoop on its own SimClock — terminal actions only, no tools, no history. run_gate decides the first --max-decisions (500) candidates by seq at clock.set(decided_at); the rest are counted as cut.",
+        files: [
+          { path: "src/application/backtest/gate.rs::run_gate", desc: "K workers on one queue; results by seq, identical for any K" },
+          { path: "src/bootstrap/decision.rs::build_gate", desc: "cached engine + build_replay_loop × K" },
+          { path: "src/application/decision_loop/mod.rs::decide_terminal", desc: "one decision → Verdict" },
+          { path: "src/adapters/outbound/decision_cache.rs", desc: "CachedDecisionEngine — <state dir>/backtests/decision-cache.db" },
+        ],
+        deep: "Cache key = sha256 hex of canonical {model, state, questions}; --offline = cache only (a miss is class error; no key, no spend). Classes: take, skip, ask_architect, unsure (below act_at), rejected, error. xlab's xl_gate pins typesafe/jev-1.13-20260917 with act_at = 0.01."
+      },
+      {
+        num: 4, title: "evaluate", lane: "sub",
+        what: "Arm research (every candidate at notional_usd, no caps) always; capped with [risk] + [paper] (an instant's candidates by descending |signal|, order clamp, gross / net exposure, daily / total loss halts); with the gate, rules / jev / rules_capped / jev_capped over the decided candidates, calibration and the paired jev − rules CI. Fills at bar closes ± costs, funding over the hold; split halves side by side.",
+        files: [
+          { path: "src/application/backtest/mod.rs::evaluate", desc: "research, capped, extra arms vs their base arm" },
+          { path: "src/application/backtest/gate.rs::evaluate_gated", desc: "evaluate + the gate's arms, comparisons, calibration" },
+          { path: "src/domain/backtest/engine.rs::simulate", desc: "per arm: drops, the capped book, fills" },
+          { path: "src/domain/backtest/fills.rs · costs.rs · stats.rs", desc: "simple-return P&L, fee + half-spread + slippage, clustered t, cluster-bootstrap CI, Sharpe, drawdown" },
+        ],
+        deep: "P&L on simple returns (a linear perp); net = gross − costs ± funding, in bps of the entry notional; the bootstrap is seeded (splitmix64) so reruns are identical."
+      },
+      {
+        num: 5, title: "Run dir", lane: "mem",
+        what: "write_run_dir claims <state dir>/backtests/<YYYYMMDDTHHMMSSZ>-<strategy>[-N]/ (create_dir) and writes report.json (backtest/1:<run id>, data_through_ms, the cohort identity: generation, instruments_sha256, costs_sha256), report.md, trades-<arm>.jsonl, candidates.jsonl, skips.json and the gate's decisions.jsonl; then prunes run dirs beyond [backtest] keep_runs (100) — never the decision cache, a run the lineage registry cites or one a published ranking's latest.json names.",
+        files: [
+          { path: "src/application/backtest/run_dir.rs", desc: "write_run_dir, prune_runs" },
+          { path: "src/domain/backtest/report.rs", desc: "BacktestReport: report.json + the backtest/1 row, report.md, compact text" },
+          { path: "src/adapters/inbound/cli/backtest.rs", desc: "--strategy | --spec, --from / --to, --split, --format, --fetch, --gate, --max-decisions, --concurrency, --offline" },
+        ],
+        deep: "The backtest tool (xl_architect) runs resolve → prepare → evaluate → write_run_dir with rules arms only — no gate, no fetch; a split's holdout stays hidden until holdout: true, and every read is appended to <state dir>/backtests/holdout-reads.jsonl. run_id + view reads a stored run's periods / instruments / trades / notes by id."
+      },
+    ],
+  },
+  {
+    key: "ranking",
+    label: "tengu ranking run",
+    title: "tengu ranking run --sandbox <s> — sealed contract → date → lease → backtests → rank → publish (docs/ranking.md)",
+    steps: [
+      {
+        num: 1, title: "Contract sealed", lane: "orch",
+        what: "The contract must be listed in [strategy_ranking] contracts; the lineage registry is reloaded from disk and the contract's newest [[sealed]] row ranking:<id> must hash the file now — else contract_unsealed / contract_changed. Nothing is written before this passes.",
+        files: [
+          { path: "src/application/ranking/mod.rs::run_ranking", desc: "the coordinator: contract, date, lease, manifest, freshness, backtest, rank, publish" },
+          { path: "src/domain/lineage/ranking.rs", desc: "RankingContract — strategies, cohort, eligibility, rating; lineage/rankings/<id>.toml" },
+          { path: "src/config/strategy_ranking.rs", desc: "[strategy_ranking] registry, contracts → SandboxSections::ranking" },
+        ],
+        deep: "Seal a contract with tengu lineage seal ranking:<id> before any ranked outcome is seen; an unsealed contract is only a Warn (ranking_unsealed) in the registry, but the publisher refuses it."
+      },
+      {
+        num: 2, title: "Date + cutoff", lane: "plan",
+        what: "The given date, else the newest local date in the contract's tz whose cutoff has passed; a weekday of days (none = every day) — else not_a_ranking_day; cutoff = Zone::at(date, cutoff), DST-correct, ≤ now — else cutoff_not_reached; after from — else before_from.",
+        files: [
+          { path: "src/application/ranking/mod.rs::ranking_date", desc: "date, cutoff and the refusals" },
+          { path: "src/domain/tz.rs", desc: "America/New_York · Europe/Paris · UTC civil time with DST" },
+        ],
+        deep: "A COMPLETE / INCOMPLETE manifest of that date returns the published ranking as it is (published = false): checked before and after the lease; only the operator reruns a published date, by deleting its <date>/ dir."
+      },
+      {
+        num: 3, title: "Lease + manifest", lane: "exec",
+        what: "Lease ranking:<contract id> in the state dir's runtime.db (TTL 15 min, renewed before each strategy and before each manifest write; another holder ⇒ ranking_busy; a lost renewal ⇒ ranking_lease_lost). A RUNNING / FAILED manifest of the same contract sha256 is resumed: a DONE strategy whose report.json still hashes is reused.",
+        files: [
+          { path: "src/application/ranking/store.rs", desc: "<state dir>/strategy-rankings/<contract>/<date>/manifest.json; temp file + rename" },
+          { path: "src/adapters/outbound/runtime_store.rs", desc: "SqliteRuntimeStore — the same lease table tengu run uses" },
+        ],
+        deep: "Lease holder: cli:<pid> from tengu ranking run, the call id (feed:…, mcp:…, chat:…) from the strategy_ranking tool."
+      },
+      {
+        num: 4, title: "Freshness → backtest", lane: "tool",
+        what: "Per strategy, one at a time: every instrument's newest stored bar must close ≥ cutoff − max_lag_bars × interval, else STALE (no run); then prepare (from = the contract's from, to = data through = the cutoff, no split — never a holdout read), evaluate (the rules arms), write_run_dir.",
+        files: [
+          { path: "src/application/backtest/mod.rs", desc: "prepare / evaluate — the same use case as tengu backtest" },
+          { path: "src/application/backtest/run_dir.rs", desc: "write_run_dir; retention also keeps this date's DONE runs" },
+        ],
+        deep: "No LLM, no network: market.db is read only (a missing one is an error, never created). Fill it first with tengu history backfill — xlab-w2 does that in its history_refresh feed."
+      },
+      {
+        num: 5, title: "Select → rank", lane: "sub",
+        what: "Each report.json is read back (its sha256, RunFacts, the standing from the reloaded registry as of the cutoff); select drops or rejects runs (not_in_contract, failed:<stage>, stale, missing, holdout_present, arm_missing, cohort_unknown / cohort_mismatch, superseded_run, excluded_status, insufficient_trades / periods, funding_incomplete); rank orders each cohort weakest → strongest by the rating tuple, then the tie break.",
+        files: [
+          { path: "src/domain/backtest/ranking.rs", desc: "RunFacts::from_report, StrategyStanding::of, select, rank, content_sha256, render_markdown / render_compact" },
+        ],
+        deep: "content_sha256 = canonical sha256 of the ranking without run ids, report hashes and the generation time: a rerun on the same data ranks to the same hash. on_missing = INCOMPLETE makes a failed or stale strategy mark the whole ranking INCOMPLETE."
+      },
+      {
+        num: 6, title: "Publish", lane: "mem",
+        what: "<date>/ranking.json + ranking.md; COMPLETE and no newer date in latest ⇒ latest.md, then latest.json (the commit point); then the manifest's final status. A failure after the lease marks the manifest FAILED (resumable).",
+        files: [
+          { path: "src/adapters/inbound/cli/ranking.rs", desc: "tengu ranking run | show — exit 1 on INCOMPLETE, a failure or a refusal" },
+          { path: "src/adapters/outbound/tools/xlab/rank.rs", desc: "strategy_ranking — run | latest; xlab-w2's [feeds.strategy_ranking_daily] / _weekend under tengu run (agent xl_ranker)" },
+        ],
+        deep: "INCOMPLETE is an error from the tool too, so the feed shows down and tengu doctor --live names it; latest keeps the previous COMPLETE ranking. Run-dir retention never prunes a run latest.json cites."
+      },
+    ],
+  },
+];
+
+// ============ HELPERS ============
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function renderStep(s, label) {
+  return `
+    <span class="step-num">${esc(label)} ${esc(s.num)}</span>
+    <h3>${esc(s.title)}</h3>
+    <div class="what">${esc(s.what)}</div>
+    <div class="files">
+      <div class="files-label">Files involved</div>
+      ${s.files.map(f => `<div class="file-row">${esc(f.path)}<span class="desc">— ${esc(f.desc)}</span></div>`).join('')}
+    </div>
+    <div class="deep"><strong>Deep cut:</strong> ${esc(s.deep)}</div>
+  `;
+}
+
+// ============ WALK A TURN ============
+let walkIdx = 0;
+function renderWalk() {
+  const bar = document.getElementById('walk-bar');
+  bar.innerHTML = STEPS.map((s, i) =>
+    `<button class="step-pill ${i===walkIdx?'active':''}" onclick="setWalk(${i})">${esc(s.num)}. ${esc(s.title)}</button>`
+  ).join('');
+  document.getElementById('walk-detail').innerHTML = renderStep(STEPS[walkIdx], 'STEP');
+  document.getElementById('prev-btn').disabled = walkIdx === 0;
+  document.getElementById('next-btn').disabled = walkIdx === STEPS.length - 1;
+}
+function setWalk(i) { walkIdx = i; renderWalk(); }
+function walkStep(d) {
+  const next = walkIdx + d;
+  if (next >= 0 && next < STEPS.length) { walkIdx = next; renderWalk(); }
+}
+
+// ============ OTHER FLOWS ============
+let flowIdx = 0, flowStepIdx = 0;
+function renderFlows() {
+  document.getElementById('flow-switch').innerHTML = FLOWS.map((f, i) =>
+    `<button class="flow-btn ${i===flowIdx?'active':''}" onclick="setFlow(${i})">${esc(f.label)}</button>`
+  ).join('');
+  const flow = FLOWS[flowIdx];
+  document.getElementById('flow-title').textContent = flow.title;
+  document.getElementById('flow-bar').innerHTML = flow.steps.map((s, i) =>
+    `<button class="step-pill ${i===flowStepIdx?'active':''}" onclick="setFlowStep(${i})">${esc(s.num)}. ${esc(s.title)}</button>`
+  ).join('');
+  document.getElementById('flow-detail').innerHTML = renderStep(flow.steps[flowStepIdx], 'STEP');
+  document.getElementById('flow-prev').disabled = flowStepIdx === 0;
+  document.getElementById('flow-next').disabled = flowStepIdx === flow.steps.length - 1;
+}
+function setFlow(i) { flowIdx = i; flowStepIdx = 0; renderFlows(); }
+function setFlowStep(i) { flowStepIdx = i; renderFlows(); }
+function flowStep(d) {
+  const next = flowStepIdx + d;
+  if (next >= 0 && next < FLOWS[flowIdx].steps.length) { flowStepIdx = next; renderFlows(); }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT') return;
+  if (document.getElementById('panel-walk').classList.contains('active')) {
+    if (e.key === 'ArrowLeft') walkStep(-1);
+    if (e.key === 'ArrowRight') walkStep(1);
+  } else if (document.getElementById('panel-flows').classList.contains('active')) {
+    if (e.key === 'ArrowLeft') flowStep(-1);
+    if (e.key === 'ArrowRight') flowStep(1);
+  }
+});
+
+// ============ TABS ============
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+renderWalk();
+renderFlows();
+</script>
+
+</body>
+</html>

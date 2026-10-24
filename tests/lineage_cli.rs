@@ -357,7 +357,7 @@ fn the_repo_registry_is_frozen_and_every_pin_recomputes() {
 
 #[test]
 fn the_repo_registry_answers_the_acceptance_questions() {
-    // G2–G4 on the real records (TENGU_HANDOFF.md § 57–58, roadmap G4).
+    // G2–G4 on the real records (docs/plans/TENGU_HANDOFF.md § 57–58, roadmap G4).
     let home = tempfile::tempdir().unwrap();
     let reg = repo_registry();
     let r = reg.to_str().unwrap();

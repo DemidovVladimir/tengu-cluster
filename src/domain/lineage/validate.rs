@@ -1,4 +1,4 @@
-//! The registry's checks — `Registry::validate` (`docs/lineage-2026-10-06.md`
+//! The registry's checks — `Registry::validate` (`docs/lineage.md`
 //! § 2): every code of the table in `lineage/mod.rs`, from record fields and
 //! file digests only (pins, evidence and run dirs: `application/lineage/verify.rs`).
 //!
@@ -927,7 +927,7 @@ mod tests {
     use super::super::registry::tests::minimal;
     use super::super::value::Time;
     use super::*;
-    use crate::domain::lineage::pins::toml_digest;
+    use crate::domain::canonical::toml_digest;
 
     /// The minimal registry with the test contract (`ranking/rank.t`) as
     /// `text`, its file digest recorded.

@@ -29,7 +29,7 @@ pub struct EngineDiagnostics {
 }
 
 // Fields populated for engine builders that route through the Claude Code
-// MCP bridge. The OpenRouter / Sonnet path used by the v2 RagPlanner +
+// MCP bridge. The OpenRouter / Sonnet path used by the v2 RegistryPlanner +
 // SubprocessRunner ignores everything except `system_prompt`. Kept for the
 // in-flight bridge engine refactor; no removal until that lands.
 #[allow(dead_code)]

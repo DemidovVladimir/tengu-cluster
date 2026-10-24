@@ -1,5 +1,5 @@
 //! Lineage adapters — the files behind `ports/lineage.rs`
-//! (`docs/lineage-2026-10-06.md` § 1–2). Read-only: nothing here writes a
+//! (`docs/lineage.md` § 1–2). Read-only: nothing here writes a
 //! registry, a vault, a run dir or a state file.
 //!
 //! | File | Implements | Reads |

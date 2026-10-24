@@ -1,5 +1,5 @@
 //! Seal proxy — the tengu side of the `tengu-seal` Cloudflare Worker
-//! (`cloudflare/seal-worker`, `docs/sealed-keys-2026-10-09.md`).
+//! (`cloudflare/seal-worker`, `docs/sealed-keys.md`).
 //!
 //! No provider key is stored here: keys are Worker secrets the operator sets
 //! in Cloudflare. At startup [`install`] gets a session: the SSH agent

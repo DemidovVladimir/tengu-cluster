@@ -2,7 +2,7 @@
 
 use crate::domain::message::Message;
 use crate::domain::session::HistoryAssembly;
-use crate::domain::token::estimate_tokens_approx_min1;
+use crate::domain::token::{estimate_tokens_approx_min1, truncate_with_suffix, CHARS_PER_TOKEN};
 
 /// Assemble newest contiguous history suffix that fits the token budget.
 pub(crate) fn assemble_recent_history(
@@ -37,16 +37,15 @@ pub(crate) fn assemble_recent_history(
     }
 }
 
-/// Truncate string content using the shared `~4 chars/token` approximation.
+/// Truncate string content using the shared `~4 chars/token` approximation:
+/// cut at a char boundary at or below `max_tokens × 4` bytes (the unit
+/// `estimate_tokens_approx` counts), `\n\n[truncated]` marking a cut.
 pub(crate) fn truncate_to_token_budget(content: &str, max_tokens: usize) -> String {
-    let max_chars = max_tokens.saturating_mul(4);
-    if content.len() <= max_chars {
-        content.to_string()
-    } else {
-        let mut truncated = content.chars().take(max_chars).collect::<String>();
-        truncated.push_str("\n\n[truncated]");
-        truncated
-    }
+    truncate_with_suffix(
+        content,
+        max_tokens.saturating_mul(CHARS_PER_TOKEN),
+        "\n\n[truncated]",
+    )
 }
 
 /// Reserve output tokens from explicit engine output cap with safety headroom.

@@ -1,5 +1,5 @@
 //! `[runtime]` — knobs of the `tengu run` process (`bootstrap/runtime.rs`;
-//! operator doc `docs/runtime-2026-09-30.md`). `deny_unknown_fields`; every
+//! operator doc `docs/runtime.md`). `deny_unknown_fields`; every
 //! key has a default, so a sandbox without `[runtime]` runs as-is.
 //!
 //! | Key | Default | Effect |
@@ -124,7 +124,15 @@ pub fn state_dir(
     xm_state_dir
         .or(sources_state_dir)
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| tengu_home.join("state"))
+        .unwrap_or_else(|| super::paths::Layout::at(tengu_home).state())
+}
+
+/// The `tengu run` lease (`outbound/runtime_store.rs`).
+pub(crate) const RUNTIME_DB: &str = "runtime.db";
+
+/// `<state_dir>/runtime.db` — `state_dir` as [`state_dir`] picks it.
+pub(crate) fn runtime_db(state_dir: &Path) -> PathBuf {
+    state_dir.join(RUNTIME_DB)
 }
 
 #[cfg(test)]

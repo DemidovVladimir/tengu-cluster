@@ -206,7 +206,7 @@
         <g class="pop badge" data-at="6"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">proxy env: advisory</text></g>
         <g class="pop badge" data-at="7"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">no host check here</text></g>
         <g class="pop badge" data-at="8"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">fail closed</text></g>
-        <g class="pop badge" data-at="9"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">agent · session · call_id</text></g>
+        <g class="pop badge" data-at="9"><rect x="644" y="36" width="212" height="22" rx="11"/><text x="750" y="51" text-anchor="middle">agent · session · call_id · run_id</text></g>
 
         <circle class="tok" r="6" data-path="p-cfg-inst" data-at="2" data-dur="800"/>
         <circle class="tok guard" r="6" data-path="p-inst-child" data-at="3" data-dur="800"/>
@@ -234,7 +234,7 @@
         <li>Shell commands: each <code>http(s)://</code> literal passes the same URL gate. Built or encoded URLs slip by; on macOS <code>shell_network = "isolated"</code> is the hard stop.</li>
         <li>LLM calls (OpenRouter, embeddings, Jev) use the proxy only with <code>route_llm_api</code>. The Claude and Codex CLIs get <code>HTTPS_PROXY</code>; MCP and Telegram follow the proxy. No host check here.</li>
         <li>With a proxy, traffic goes to Arti on <code>:9050</code>, then lyrebird-rs, an obfs4 or snowflake bridge, and Tor. No direct fallback: proxy down, request fails.</li>
-        <li><code>network = "open"</code> goes direct. Either way, every tool hop and every network shell command appends one JSONL line to <code>egress.jsonl</code>.</li>
+        <li><code>network = "open"</code> goes direct. Either way, every tool hop and every network shell command appends one JSONL line to <code>egress.jsonl</code>; a denied or failed one is also a WARN line in <code>tengu.log</code>.</li>
       </ol>
     </div>
   </figure>
@@ -418,6 +418,7 @@
     <div><b>other 4xx · egress or scope denial</b><i>fatal</i>nothing was sent for a denial</div>
   </div>
   <p class="note">Error text never carries a secret: an RPC URL renders as its host, and values of <code>key</code>, <code>token</code>, <code>secret</code>, <code>auth</code>, <code>sig</code>, <code>password</code> query params become <code>&lt;redacted&gt;</code>. Bodies are quoted to 160 chars.</p>
+  <p class="note"><b>One pipeline.</b> Hyperliquid, SEC, GeckoTerminal, TED, Solana RPC, the Solana JSON fetches and the Privy signer send through <code>GatedHttp</code>: gate on the request's own URL, then the <code>[rate_limits.*]</code> budget, the seal session for a proxy URL, the send, the client's decoder, one audit line. Backfills and source fetches retry with <code>Retry</code> from the same file.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-out">
@@ -447,7 +448,7 @@
     <li><span><b>Every tool hop is gated.</b> <code>http_request</code> checks scheme, <code>deny_hosts</code>, <code>allow_hosts</code> and <code>net_hosts</code> on the first hop and each redirect, up to 10; env-expanded headers are dropped on a cross-origin redirect.</span></li>
     <li><span><b>The seal proxy is one more host.</b> With <code>[keys]</code>, provider calls go to <code>&lt;proxy&gt;/&lt;route&gt;</code> on the <code>tengu-seal</code> Worker, which holds the keys as Cloudflare secrets; its session runs through the LLM-API client (Tor when <code>route_llm_api</code>); a sandbox with <code>allow_hosts</code> must list its host, or the config does not load (<a href="sealed-keys.html">sealed keys</a>).</span></li>
     <li><span><b>Children inherit the parent's policy.</b> <code>run-agent</code> and <code>mcp-bridge</code> apply <code>TENGU_EGRESS</code> over their own config, same audit file.</span></li>
-    <li><span><b>No ungated Bash under a proxy.</b> Claude Code profile <code>editor_shell</code> launches as <code>editor</code> while a proxy is set. <code>research</code> (Read, Glob, Grep, WebSearch) has no Bash and no WebFetch, so it is not changed.</span></li>
+    <li><span><b>No ungated Bash under a proxy.</b> Claude Code profile <code>editor_shell</code> launches as <code>editor</code> while a proxy is set. <code>research</code> (WebSearch only) has no Bash and no WebFetch, so it is not changed.</span></li>
     <li><span><b>Isolated shells are kernel-fenced.</b> With <code>shell_network = "isolated"</code> (macOS <code>sandbox-exec</code>) every outbound connection but the proxy port is refused, DNS included.</span></li>
     <li><span><b>Audit lines keep secrets out.</b> The URL is logged as the model wrote it (<code>$VAR</code> unexpanded), headers by name only, body and reason redacted.</span></li>
   </ul>
@@ -491,11 +492,11 @@
         <tr><td><code>src/adapters/outbound/egress.rs</code></td><td>the policy: <code>install</code>, <code>check_url</code>, client builders, shell guard, audit, <code>TENGU_EGRESS</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/http/request.rs</code></td><td>per-hop gate, redirects, the <code>http_request</code> audit record</td></tr>
         <tr><td><code>src/adapters/outbound/a2a/mod.rs</code></td><td>A2A remotes: <code>peer_client</code> (proxied, loopback direct, no redirects), gate per request, <code>tool = "a2a"</code> audit (<a href="a2a.html">A2A</a>)</td></tr>
-        <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing</td></tr>
+        <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing, <code>GatedHttp</code> (gate → budget → seal session → send → decode → audit), <code>Retry</code></td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td>installs the sandbox's policy, warns on a dead proxy</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>hands <code>TENGU_EGRESS</code> to <code>run-agent</code></td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI <code>HTTPS_PROXY</code>, bridge <code>TENGU_EGRESS</code> (<code>engines/codex.rs</code> the same for Codex)</td></tr>
-        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>the bot's proxied client, 30 s / 60 s timeouts</td></tr>
+        <tr><td><code>src/adapters/inbound/telegram/pipe.rs</code></td><td>the bot's proxied client, 30 s / 60 s timeouts</td></tr>
         <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor</code> egress block and <code>--tor</code></td></tr>
         <tr><td><code>deploy/tor/</code></td><td>Arti + lyrebird-rs image, <code>arti.toml</code>, standalone compose</td></tr>
         <tr><td><code>docker-compose.tor.yml</code></td><td>internal <code>tor-front</code> network for Docker tengu</td></tr>
@@ -506,7 +507,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -594,9 +595,9 @@
   }
   function connectForm(p) { var u = parseUrl(p); if (!u) return null; var s = u.protocol.replace(":", ""); return (s === "http" || s === "https") ? p : "http://" + u.host; }
   function stamp(ev, r) {
-    ev.ts = "2026-10-07T12:00:00.000000+00:00"; ev.pid = 41237;
+    ev.ts = "2026-10-07T12:00:00.000000+00:00"; ev.ts_ms = 1791374400000; ev.pid = 41237;
     if (!("agent" in ev)) ev.agent = "<agent>";
-    ev.session = "<session id>"; ev.call_id = "<call id>";
+    ev.session = "<session id>"; ev.call_id = "<call id>"; ev.run_id = "<trace run id, or null>";
     ev.via = r.proxy ? "proxy" : "direct"; ev.proxy = r.proxy;
     return ev;
   }

@@ -3,7 +3,7 @@
 #   tengu chat --sandbox lping
 #   tengu decide --sandbox lping --loop lp_watch      (or hedge_watch, hedge_exec, lp_exec)
 #
-# Roadmap (see docs/lping-2026-09-24.md):
+# Roadmap (see docs/lping.md):
 #   1. research      — market / token / pool research over http_request      (done)
 #   2. typed reads   — sol_price, dlmm_pools, dlmm_pool, dlmm_positions,
 #                      jup_perps, solana_wallet, solana_tx, lp_snapshot,
@@ -19,8 +19,6 @@
 # every write tool refuses `send` but can simulate keylessly. To let
 # `lp_executor` send real transactions, see
 # "Signing" at the bottom of this file.
-
-runtime_profile = "auto"
 
 # --- Network -----------------------------------------------------------------
 # Open: paid RPC providers + market-data APIs (and OpenRouter) commonly block
@@ -61,8 +59,10 @@ goal_template = "A Solana on-chain event arrived. Summarise what happened (pool,
 # writes its cache (`<workspace>/.tengu/observations.db`) → fs_roots. RPC tools
 # read $SOLANA_RPC_URL when set (else the public mainnet endpoint): if you set
 # it, add that URL's host to their net_hosts too.
+# http_request: any host, but $SOLANA_RPC_URL expands only toward a host named
+# here ("*" does not count): set it to another RPC → add that host too.
 [default_scopes.http_request]
-net_hosts = ["*"]
+net_hosts = ["*", "api.mainnet-beta.solana.com"]
 env_reads = ["SOLANA_RPC_URL"]   # explicit: "*" would expand any $SECRET into a URL (review H1)
 fs_roots = ["~/lping-workspace"]
 
@@ -147,12 +147,11 @@ fs_roots = ["~/lping-workspace"]
 
 [orchestrator]
 agent = "lping"
-engine = "rag"
 max_attempts_per_step = 3
 max_replans = 2
 
 # Planner + in-process chat agent, on the Claude subscription. A planner turn
-# gets no tools and no bridge (bootstrap::orchestrator::run_turn_inner), and
+# gets no tools and no bridge (orchestrator::planner::PlannerLlm::call), and
 # `builtin_tools_profile = "none"` leaves the CLI no built-ins: plan JSON only.
 [agents.lping]
 default = true
@@ -265,7 +264,7 @@ orders through http_request: typed write adapters for those venues do not
 exist yet."""
 
 # --- Decision loops (Jev picks, tools execute) --------------------------------
-# Design: docs/decision-loop-plan-2026-09-24.md. Test one event:
+# Design: docs/decision-loops.md. Test one event:
 #   tengu decide --sandbox lping --loop lp_watch [--event helius.json]
 # Live trigger: [webhooks.endpoints.helius] above (`tengu webhooks --sandbox lping`).
 # Typed tools cache their observations in ~/lping-workspace/.tengu/observations.db;
@@ -645,7 +644,7 @@ max_divergence_bps = 50
 mode = "simulate"
 
 # --- Signing (off) -------------------------------------------------------------
-# To let the loops SEND (docs/typed-observations-2026-09-24.md § Write tools):
+# To let the loops SEND (docs/observations.md § Write tools):
 #  1. a DEDICATED Privy Solana wallet — never the TS bot's F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S
 #     (the per-wallet lease cannot see the bot's sends); Privy signs through the
 #     seal proxy, no key on this machine (docs/cloudflare-secrets-setup.html):

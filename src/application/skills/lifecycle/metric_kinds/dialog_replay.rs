@@ -2,7 +2,7 @@
 //! `[from_message_index..end]` instead of pre-authored `evals/prompts.yaml`
 //! rows. Synthesizes a single in-memory `Fixture` from the slice's last user
 //! message and delegates scoring to a sibling metric on the same skill
-//! (`llm_judge` or `tool_assertion`). See `docs/skill-research-2026-04-28.md`
+//! (`llm_judge` or `tool_assertion`). See `docs/skill-research.md`
 //! Batch 8 actions #23 & #25.
 //!
 //! Doctrine notes:
@@ -264,9 +264,7 @@ mod tests {
             tools: None,
             judge,
             http: None,
-            memory_manager: None,
             secret_registry: None,
-            activity: None,
             tool_scopes: None,
             conversation,
             sibling_metrics: siblings,

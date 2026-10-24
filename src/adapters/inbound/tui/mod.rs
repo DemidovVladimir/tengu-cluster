@@ -4,7 +4,6 @@ pub mod app;
 pub mod view;
 
 use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::application::chat::service::{
     handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
@@ -12,7 +11,7 @@ use crate::application::chat::service::{
 use crate::application::skills::registry::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
-use crate::config::{Config, RuntimeProfile};
+use crate::config::Config;
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
@@ -23,6 +22,7 @@ use cursive::backends::crossterm::crossterm::{event::DisableMouseCapture, execut
 use cursive::Cursive;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
+use tracing::Instrument;
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -97,57 +97,6 @@ fn spawn_decision_feed(
     });
 }
 
-/// Format a single `OrchestratorEvent::RagQueried` event as one compact line
-/// suitable for a System bubble. Shape:
-///
-/// ```text
-/// rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) skill/web-research(0.18)
-/// ```
-///
-/// The query is truncated to 60 chars (with ellipsis) so a long user message
-/// doesn't blow the line width. Top 3 hits shown — anything below that
-/// rarely matters for routing-judgement debugging and adding more would
-/// wrap awkwardly in the chat pane. Score formatted to 2 decimals to keep
-/// the line tight while preserving the resolution that matters at the
-/// 0.15–0.6 typical-score range.
-fn format_rag_debug_line(
-    phase: &str,
-    query: &str,
-    hits: &[crate::application::orchestrator::events::RagQueriedHit],
-) -> String {
-    const MAX_QUERY_LEN: usize = 60;
-    const TOP_N: usize = 3;
-
-    let truncated_query: String = if query.chars().count() > MAX_QUERY_LEN {
-        let head: String = query.chars().take(MAX_QUERY_LEN).collect();
-        format!("{}…", head)
-    } else {
-        query.to_string()
-    };
-
-    let hits_str = if hits.is_empty() {
-        "(no hits)".to_string()
-    } else {
-        hits.iter()
-            .take(TOP_N)
-            .map(|h| {
-                // Tool / skill kinds get a `kind/` prefix so they're
-                // distinguishable from agent hits at a glance. Agent hits
-                // omit the prefix because that's the most common case and
-                // the line stays narrower without it.
-                if h.kind == "agent" {
-                    format!("{}({:.2})", h.name, h.score)
-                } else {
-                    format!("{}/{}({:.2})", h.kind, h.name, h.score)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-
-    format!("rag-{} \"{}\" → {}", phase, truncated_query, hits_str)
-}
-
 /// TUI adapter for publishing tool activity lines.
 struct CursiveToolActivityAdapter {
     cb_sink: cursive::CbSink,
@@ -167,11 +116,7 @@ impl ToolActivityPort for CursiveToolActivityAdapter {
 }
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
-pub fn run_tui(
-    config: Config,
-    _profile: RuntimeProfile,
-    secret_registry: Arc<SecretRegistry>,
-) -> Result<()> {
+pub fn run_tui(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
     // Resolve agent config
     let (agent_id, agent_config) = config
         .agents
@@ -196,15 +141,11 @@ pub fn run_tui(
         engine.context_window(),
         engine.max_output_tokens_per_turn() as usize,
     );
-    let advertise_workspace_tools = engine.supports_tool_use() && !engine.manages_own_workspace();
 
     // Build initial system prompt without skill contexts — the engine thread will rebuild
     // with actual skills on the first turn (tools_dirty = true).
-    let system_prompt = crate::application::skills::registry::build_system_prompt(
-        &agent_config,
-        advertise_workspace_tools,
-        &[],
-    );
+    let system_prompt =
+        crate::application::skills::registry::build_system_prompt(&agent_config, &[]);
 
     // Channel: UI → Engine thread
     let (request_tx, request_rx) = mpsc::channel::<ChatRequest>();
@@ -221,38 +162,15 @@ pub fn run_tui(
     // Set header
     let identity = agent_config.identity.name.as_deref().unwrap_or("Tengu");
     let engine_label = format!("{}/{}", agent_config.engine, agent_config.model);
-    let default_lens = agent_config.default_lens.clone();
-    view::update_header(&mut siv, identity, &engine_label, &default_lens);
+    view::update_header(&mut siv, identity, &engine_label);
     view::push_welcome(&mut siv);
 
     let memory_config = config.memory.clone();
     let mcp_servers = config.mcp_servers.clone();
 
-    // Harness-owned orchestration (Track A — factory-closure wiring).
-    //
-    // `MemoryManager` stays empty (no providers) — Track B owns the port
-    // wiring that registers `BuiltinMemoryProvider`. An empty manager is a
-    // no-op for `prefetch_all` / `sync_all`, which is correct for now.
-    //
-    // `orchestrator_snapshots` is shared between this main thread (where
-    // the orchestrator + factory are constructed) and the engine thread
-    // (where snapshots are written before each user-message dispatch).
-    // The engine thread runs `rt.block_on(orchestrator.handle(...))` and the
-    // orchestrator spawns step tasks that call our factory closure, which
-    // reads inputs back from the same map.
-    let _memory_manager: Arc<crate::application::memory::manager::MemoryManager> =
-        Arc::new(crate::application::memory::manager::MemoryManager::new());
-    let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
-        Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
-    // The engine thread publishes a snapshot for this chat agent only; when
-    // `[orchestrator] agent` is another agent its planner turn needs its own.
-    if let Some(planner) =
-        crate::bootstrap::orchestrator::planner_inputs_if_other(&config, &agent_id)?
-    {
-        if let Ok(mut guard) = orchestrator_snapshots.write() {
-            guard.insert(planner.agent_id.clone(), planner);
-        }
-    }
+    // Harness-owned orchestration: with `[orchestrator]`, the planner calls
+    // its own engine (`planner_llm`) and each plan step runs as a `tengu
+    // run-agent` child; the engine thread runs `orchestrator.handle(...)`.
     // With `[orchestrator]`, this process records its plans and steps
     // (`RunKind::Chat`; Studio, `tengu trace show`).
     let trace = crate::bootstrap::trace::open_orchestration(
@@ -260,25 +178,23 @@ pub fn run_tui(
         crate::domain::trace::RunKind::Chat,
         &secret_registry,
     );
-    let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
-        let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
-            &orchestrator_snapshots,
-        ));
-        let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
-            Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn));
-        crate::bootstrap::orchestrator::build_orchestrator(
-            &config,
-            factory,
-            Arc::clone(&_memory_manager),
-            crate::bootstrap::orchestrator::resolve_session_id(),
-            trace.as_ref().and_then(|s| {
-                crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
-            }),
-        )
-        .map(Arc::new)
-    };
+    // One session per process: the planner's and every turn's `turn` span.
+    let session_id = crate::bootstrap::orchestrator::resolve_session_id();
+    let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> =
+        match crate::bootstrap::orchestrator::planner_llm(&config)? {
+            Some(llm) => crate::bootstrap::orchestrator::build_orchestrator(
+                &config,
+                llm,
+                session_id.clone(),
+                trace.as_ref().and_then(|s| {
+                    crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
+                }),
+            )
+            .map(Arc::new),
+            None => None,
+        };
     if orchestrator.is_some() {
-        tracing::info!("TUI orchestrator constructed with per-turn snapshot factory");
+        tracing::info!("TUI orchestrator constructed");
     }
 
     // Task 5.4 — verbose event rendering for CLI. Subscribe to the
@@ -290,13 +206,6 @@ pub fn run_tui(
     if let Some(orch) = orchestrator.as_ref() {
         let mut rx = orch.subscribe();
         let sink = siv.cb_sink().clone();
-        // RagQueried debug-panel render is opt-in: setting
-        // `TENGU_TUI_RAG_DEBUG=1` flips it on. Default off so the
-        // System bubble stream stays uncluttered for normal use; flip on
-        // when you want to see WHY a routing decision happened.
-        let render_rag_debug = std::env::var("TENGU_TUI_RAG_DEBUG")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-            .unwrap_or(false);
         // Metrics panel — opt-in via `TENGU_TUI_METRICS=1`. When on, every
         // `MetricsRecorded` event is absorbed into a per-bus aggregator and
         // a compact one-line status (tokens in/out, last call, session
@@ -352,20 +261,6 @@ pub fn run_tui(
                                         "orch: plan completed".to_string()
                                     })
                                 }
-                                OrchestratorEvent::StepProgress { .. } => None,
-                                // Phase 6.1 (full) — RagQueried debug panel.
-                                // Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`.
-                                // When on, render a single compact System bubble
-                                // showing the top-K registry hits the planner LLM
-                                // saw, so the user can see WHY a routing decision
-                                // was made (which agent / score / phase).
-                                OrchestratorEvent::RagQueried { phase, query, hits } => {
-                                    if render_rag_debug {
-                                        Some(format_rag_debug_line(phase, &query, &hits))
-                                    } else {
-                                        None
-                                    }
-                                }
                                 // Metrics — opt-in via TENGU_TUI_METRICS=1.
                                 // The aggregator absorbs every record so even
                                 // when the panel is OFF the totals are kept
@@ -420,7 +315,6 @@ pub fn run_tui(
     let engine_agent_config = agent_config.clone();
     let secret_registry_clone = Arc::clone(&secret_registry);
     let engine_orchestrator = orchestrator.clone();
-    let engine_orchestrator_snapshots = Arc::clone(&orchestrator_snapshots);
 
     std::thread::spawn(move || {
         let secret_registry = secret_registry_clone;
@@ -502,13 +396,10 @@ pub fn run_tui(
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_bridge_tools: Vec<ToolDef> = vec![];
-        let mut current_executor: Option<
-            Arc<crate::application::tools::registry::PluginToolExecutor>,
-        > = None;
+        let mut current_executor: Option<Arc<dyn ToolExecutor>> = None;
         let mut current_system_prompt = system_prompt;
 
-        let mut runtime_state =
-            crate::application::chat::service::create_chat_loop_state(&engine_agent_config);
+        let mut runtime_state = crate::application::chat::service::create_chat_loop_state();
 
         // Memory recall during chat turns goes through the
         // `MemoryManager` directly (ChatRuntimeService::memory_manager).
@@ -600,7 +491,7 @@ pub fn run_tui(
                                 &base_tools,
                                 &skill_registry,
                             );
-                            current_executor = crate::bootstrap::tools::build_tool_executor(
+                            let stack = crate::bootstrap::tools::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
@@ -611,19 +502,15 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 &mcp_servers,
-                            )
-                            .map(Arc::new);
-                            if let Some(ref exec) = current_executor {
-                                let extra = exec.additional_tool_defs(&current_tools);
-                                if !extra.is_empty() {
-                                    current_tools.extend(extra);
-                                }
+                            );
+                            // The stack advertises the `[[mcp_servers]]` tools found on connect.
+                            if let Some(stack) = &stack {
+                                current_tools = stack.tools.clone();
                             }
+                            current_executor = stack.map(|s| s.executor);
                             current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
-                                advertise_workspace_tools,
                                 &skill_registry,
-                                &current_tools,
                             );
                             tools_dirty = false;
                         }
@@ -680,7 +567,7 @@ pub fn run_tui(
                                     &base_tools,
                                     &skill_registry,
                                 );
-                                current_executor = crate::bootstrap::tools::build_tool_executor(
+                                let stack = crate::bootstrap::tools::build_tool_executor(
                                     ws,
                                     &current_tools,
                                     &skill_registry,
@@ -691,20 +578,16 @@ pub fn run_tui(
                                     Some(&memory_config),
                                     &engine_agent_config,
                                     &mcp_servers,
-                                )
-                                .map(Arc::new);
-                                if let Some(ref exec) = current_executor {
-                                    let extra = exec.additional_tool_defs(&current_tools);
-                                    if !extra.is_empty() {
-                                        current_tools.extend(extra);
-                                    }
+                                );
+                                // The stack advertises the `[[mcp_servers]]` tools found on connect.
+                                if let Some(stack) = &stack {
+                                    current_tools = stack.tools.clone();
                                 }
+                                current_executor = stack.map(|s| s.executor);
                                 current_system_prompt =
                                     crate::bootstrap::tools::rebuild_system_prompt(
                                         &engine_agent_config,
-                                        advertise_workspace_tools,
                                         &skill_registry,
-                                        &current_tools,
                                     );
                                 if manages_workspace {
                                     current_bridge_tools = crate::bootstrap::tools::rebuild_tools(
@@ -718,11 +601,7 @@ pub fn run_tui(
 
                         // Process as a chat turn with the injected prompt.
                         rt.block_on(async {
-                            let sanitized_executor = current_executor.as_ref().map(|e| {
-                                let inner: std::sync::Arc<dyn ToolExecutor> =
-                                    Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
-                                SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
-                            });
+                            let sanitized_executor = current_executor.clone();
                             let tool_defs = current_tools.clone();
 
                             let chat_runtime = ChatRuntimeService {
@@ -733,9 +612,7 @@ pub fn run_tui(
                                 compaction_policy,
                                 system_prompt: current_system_prompt.clone(),
                                 tools: &tool_defs,
-                                tool_executor: sanitized_executor
-                                    .as_ref()
-                                    .map(|e| e as &dyn ToolExecutor),
+                                tool_executor: sanitized_executor.as_deref(),
                                 memory_manager: memory_manager_handle.as_deref(),
                                 max_recall_entries: memory_config.max_recall_entries,
                                 max_recall_tokens: memory_config.max_recall_tokens,
@@ -747,11 +624,11 @@ pub fn run_tui(
                                     Some(&current_bridge_tools)
                                 },
                                 mcp_servers: &mcp_servers,
-                                suppress_grounding_nudge: false,
                             };
 
                             match chat_runtime
                                 .process_user_text(&mut runtime_state, &injected)
+                                .instrument(crate::bootstrap::trace::turn_span(Some(&session_id)))
                                 .await
                             {
                                 Ok(res) => {
@@ -825,7 +702,7 @@ pub fn run_tui(
                                 &base_tools,
                                 &skill_registry,
                             );
-                            current_executor = crate::bootstrap::tools::build_tool_executor(
+                            let stack = crate::bootstrap::tools::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
@@ -836,19 +713,15 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 &mcp_servers,
-                            )
-                            .map(Arc::new);
-                            if let Some(ref exec) = current_executor {
-                                let extra = exec.additional_tool_defs(&current_tools);
-                                if !extra.is_empty() {
-                                    current_tools.extend(extra);
-                                }
+                            );
+                            // The stack advertises the `[[mcp_servers]]` tools found on connect.
+                            if let Some(stack) = &stack {
+                                current_tools = stack.tools.clone();
                             }
+                            current_executor = stack.map(|s| s.executor);
                             current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
-                                advertise_workspace_tools,
                                 &skill_registry,
-                                &current_tools,
                             );
                             // Claude Code reaches tengu tools only through the
                             // MCP bridge — same rebuild as the skill-command path.
@@ -867,57 +740,10 @@ pub fn run_tui(
                     // Orchestrator dispatch path. When orchestration is
                     // configured we route the user message through
                     // `Orchestrator::handle` instead of a single
-                    // `ChatRuntimeService` turn. The snapshot map is shared
-                    // with the factory closure; we publish a fresh entry for
-                    // this agent each turn so hot-reloaded tools / system
-                    // prompt / owned executor are visible when the DAG
-                    // executor spawns a step.
+                    // `ChatRuntimeService` turn: the planner calls its own
+                    // engine, each step is a `run-agent` child that reloads
+                    // the sandbox config itself.
                     if let Some(ref orch) = engine_orchestrator {
-                        // Move the current executor into an `Arc` and wrap
-                        // with the owned sanitizer. Because the executor is
-                        // rebuilt whenever `tools_dirty` fires, this snapshot
-                        // is safe to share across spawned orchestrator tasks.
-                        let sanitized_exec_arc: Option<Arc<dyn ToolExecutor>> =
-                            current_executor.take().map(|exec| {
-                                let inner: Arc<dyn ToolExecutor> = exec as Arc<dyn ToolExecutor>;
-                                let wrapped: Arc<dyn ToolExecutor> = Arc::new(
-                                    crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-                                        Arc::clone(&inner),
-                                        Arc::clone(&secret_registry),
-                                    ),
-                                );
-                                wrapped
-                            });
-
-                        let bridge_tools_opt = if current_bridge_tools.is_empty() {
-                            None
-                        } else {
-                            Some(current_bridge_tools.clone())
-                        };
-
-                        let snapshot = crate::bootstrap::orchestrator::ChatTurnInputs {
-                            engine: Arc::clone(&engine),
-                            agent_id: engine_agent_id.clone(),
-                            agent_config: Arc::new(engine_agent_config.clone()),
-                            history_turn_limit,
-                            compaction_policy,
-                            system_prompt: current_system_prompt.clone(),
-                            tools: current_tools.clone(),
-                            tool_executor: sanitized_exec_arc,
-                            memory_manager: memory_manager_handle.clone(),
-                            max_recall_entries: memory_config.max_recall_entries,
-                            max_recall_tokens: memory_config.max_recall_tokens,
-                            bridge_tools: bridge_tools_opt,
-                            mcp_servers: mcp_servers.clone(),
-                            tool_observer: None,
-                            cancel: None,
-                        };
-                        if let Ok(mut guard) = engine_orchestrator_snapshots.write() {
-                            guard.insert(engine_agent_id.clone(), snapshot);
-                        } else {
-                            tracing::error!("orchestrator snapshots lock poisoned");
-                        }
-
                         let final_output = rt.block_on(orch.handle(text.clone()));
 
                         let redacted = secret_registry.redact(&final_output);
@@ -934,21 +760,11 @@ pub fn run_tui(
                             }
                         }));
 
-                        // The orchestrator took ownership of the executor
-                        // (via the sanitized Arc). Mark tools dirty so the
-                        // next direct or orchestrator turn rebuilds a fresh
-                        // one against the latest skill registry.
-                        tools_dirty = true;
                         continue;
                     }
 
                     rt.block_on(async {
-                        // Wrap tool executor with secret redaction decorator.
-                        let sanitized_executor = current_executor.as_ref().map(|e| {
-                            let inner: std::sync::Arc<dyn ToolExecutor> =
-                                Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
-                            SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
-                        });
+                        let sanitized_executor = current_executor.clone();
                         let tool_defs = current_tools.clone();
 
                         let chat_runtime = ChatRuntimeService {
@@ -959,9 +775,7 @@ pub fn run_tui(
                             compaction_policy,
                             system_prompt: current_system_prompt.clone(),
                             tools: &tool_defs,
-                            tool_executor: sanitized_executor
-                                .as_ref()
-                                .map(|e| e as &dyn ToolExecutor),
+                            tool_executor: sanitized_executor.as_deref(),
                             memory_manager: memory_manager_handle.as_deref(),
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
@@ -973,11 +787,11 @@ pub fn run_tui(
                                 Some(&current_bridge_tools)
                             },
                             mcp_servers: &mcp_servers,
-                            suppress_grounding_nudge: false,
                         };
 
                         match chat_runtime
                             .process_user_text(&mut runtime_state, &text)
+                            .instrument(crate::bootstrap::trace::turn_span(Some(&session_id)))
                             .await
                         {
                             Ok(ChatTurnResult {

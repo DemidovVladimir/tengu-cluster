@@ -1,4 +1,4 @@
-//! The Studio builder's config side (`docs/studio-builder-2026-10-10.md`):
+//! The Studio builder's config side (`docs/builder.md`):
 //! the palette the page draws from, the compiler from a blueprint
 //! (`domain/blueprint.rs`) to `config.toml`, the starting templates and the
 //! load report. Pure but for [`load_report`], which runs the real loader

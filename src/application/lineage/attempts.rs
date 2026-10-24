@@ -1,4 +1,4 @@
-//! Search accounting input (`docs/lineage-2026-10-06.md` § 5, handoff § 21):
+//! Search accounting input (`docs/lineage.md` § 5, handoff § 21):
 //! every backtest run dir and holdout read of the scanned state dirs
 //! (`<TENGU_HOME>/state/<state>/backtests/`), read through
 //! `ports::lineage::AttemptSource` — never written.

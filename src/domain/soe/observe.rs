@@ -18,9 +18,6 @@
 //! its `origin` — lives only in `domain/source/asof.rs`; this module reads
 //! its result (`EventRow.origins`), never re-counts.
 
-// Consumers land with the cycle (application `run_cycle`) and the tools.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;

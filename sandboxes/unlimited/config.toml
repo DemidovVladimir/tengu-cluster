@@ -1,7 +1,5 @@
 # Tengu Cluster — "unlimited" sandbox
 
-runtime_profile = "auto"
-
 # Network: OPEN — no Tor. http_request, shell, and the LLM API all go direct
 # over the host's real network. Flip back to `network = "tor"` (with
 # `route_llm_api = false`, since OpenRouter's Cloudflare 403s Tor exits) to
@@ -13,7 +11,6 @@ network = "open"
 enabled = true          # disk vector store; add --features postgres_memory for Open Brain
 
 [telegram]
-tool_approvals = false
 allowed_users = ['848344935']  # required: empty = `tengu telegram` refuses to start
 
 [scaffold]
@@ -30,7 +27,6 @@ engine = "openrouter"
 model = "qwen/qwen3.8-27b"
 role = "opsec"
 workspace = "~/unlimited-workspace"
-default_lens = "standard"
 # Explicit allow-list = no `run_command`, so no shelling out to python3/curl/etc.
 # Web research goes through the Rust-native `http_request` tool. Omitting this
 # line would grant ALL base tools (including run_command with a permissive

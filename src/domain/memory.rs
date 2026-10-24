@@ -41,8 +41,7 @@ pub struct ChunkMetadata {
     pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
-/// Single search hit returned by `MemoryProvider::prefetch` underlying
-/// backends. Rendered into the `PinnedMemoryBlock.body` by the provider.
+/// Single search hit returned by `VectorStore::search`.
 #[derive(Debug, Clone)]
 pub struct MemoryHit {
     pub text: String,

@@ -8,6 +8,7 @@
 //! |---|---|
 //! | Every `tengu tool list` name has a case (a catalog row cannot land without one); every case names a listed tool | `every_catalog_tool_has_a_case` |
 //! | Per step: same `is_error`, same normalised text; the case's expected outcome | `bridge_matches_in_process` |
+//! | Per step: a tool that returns outside text (web, A2A, MCP, memory) comes back from the bridge in one `untrusted` fence (compared without it) | same |
 //! | Per case: same files left under the workspace and `TENGU_HOME` — SQLite stores as sorted table rows (`observations` without `observed_at_ms`), text as content | same |
 //! | Per case: same upstream requests to the mock (sorted, normalised) | same |
 //! | Two bridge processes on one sandbox, the same JSON-RPC ids: two orders, never a replay | `two_bridge_sessions_place_two_orders` |
@@ -299,7 +300,7 @@ impl Case {
         self
     }
     /// Solana tools: store, mock RPC host, `SOLANA_RPC_URL` → the mock
-    /// (`docs/typed-observations-2026-09-24.md`).
+    /// (`docs/observations.md`).
     fn solana(self) -> Self {
         self.scoped("SOLANA_RPC_URL")
     }
@@ -1056,6 +1057,14 @@ fn paper_buy() -> Value {
 /// A paper case: `hl_ctx` first (the `mkt_ctx/1` + `mkt_instrument/1`
 /// rows the gate and the fill read), the $100 budget, the live book (its
 /// `time` = now) on the mock, the opportunity row seeded.
+/// A configured scope for a Privy tool: the env it reads, the default
+/// wallet label and the Privy host (the fallback grants no env var).
+fn privy_scope(tool: &str) -> String {
+    format!(
+        "[default_scopes.{tool}]\nwallets = [\"default\"]\nnet_hosts = [\"api.privy.io\"]\nenv_reads = [\"CHAIN_ID\", \"PRIVY_APP_ID\", \"PRIVY_APP_SECRET\", \"PRIVY_WALLET_ID\", \"PRIVY_API_URL\"]\n"
+    )
+}
+
 fn paper(c: Case) -> Case {
     hl_xyz(c.before("hl_ctx", json!({"coins": ["xyz:TSLA"]})))
         .toml(XM_RISK_TOML)
@@ -1280,13 +1289,17 @@ fn cases() -> Vec<Case> {
             .err("tengu calls only the configured hosts"),
         // ── crypto (Privy is not configured in tests) ──────────────────
         case("sign_and_send_transaction", json!({"to": WALLET, "value": "1"}))
-            .err("PRIVY_APP_ID"),
-        case("sign_message", json!({"message": "hello"})).err("PRIVY_APP_ID"),
+            .toml(&privy_scope("sign_and_send_transaction"))
+            .err("Missing environment variable PRIVY_APP_ID"),
+        // The fallback scope reads no env var (2026-10-22).
+        case("sign_message", json!({"message": "hello"}))
+            .err("env var 'PRIVY_APP_ID' not in allowed env_reads []"),
         case("get_wallet_address", json!({})).err("PRIVY_APP_ID"),
         // Privy requests pass `[egress]` like `http_request`: api.privy.io
         // is outside `allow_hosts`, nothing is sent.
         case("get_wallet_address", json!({}))
             .named("egress_denied")
+            .toml(&privy_scope("get_wallet_address"))
             .env("PRIVY_APP_ID", "conformance-app")
             .env("PRIVY_APP_SECRET", "conformance-app-secret")
             .env("PRIVY_WALLET_ID", "conformance-wallet")
@@ -1465,6 +1478,7 @@ fn cases() -> Vec<Case> {
         // ── xmarket risk: `[risk]` + `[paper]` + the ledger reach the bridge
         case("risk_status", json!({}))
             .toml(XM_RISK_TOML)
+            .toml("[default_scopes.risk_status]\nfs_roots = [\"{ws}\"]\n")
             .ok("risk account=conf halt=none equity=100.00 daily_pnl=0.00 total_pnl=0.00 headroom=10.00"),
         // Without `[risk]`: refused alike (tracker convention 9).
         case("risk_status", json!({}))
@@ -2378,6 +2392,29 @@ fn db_rows(path: &Path, rel: &str) -> Result<Vec<String>, String> {
 // Running a case
 // ---------------------------------------------------------------------------
 
+/// The fence origin the bridge gives `tool`'s result (`tengu mcp-bridge`
+/// feeds it through `tool_loop::tool_result_content`, which fences outside
+/// text by `domain::untrusted::tool_origin`); `None` = unfenced.
+fn fence_origin(tool: &str) -> Option<String> {
+    match tool {
+        "http_request" | "a2a" | "agentic_memory" | "memory_search" => Some(tool.to_string()),
+        _ => tool.split_once("__").map(|(s, _)| format!("mcp:{s}")),
+    }
+}
+
+/// The bridge text without its fence — the in-process side (the executor,
+/// before any LLM sink) has none. A tool that returns outside text must
+/// come back fenced.
+fn unfence(tool: &str, text: &str) -> Result<String, String> {
+    let Some(origin) = fence_origin(tool) else {
+        return Ok(text.to_string());
+    };
+    text.strip_prefix(&format!("<untrusted origin=\"{origin}\">\n"))
+        .and_then(|t| t.strip_suffix("\n</untrusted>"))
+        .map(str::to_string)
+        .ok_or_else(|| format!("bridge result not fenced as `{origin}`:\n{text}"))
+}
+
 fn run_case(case: &Case) -> Result<(), String> {
     let mock = Mock::start(case.routes.clone());
     let local = Side::new(case, &mock.base);
@@ -2420,7 +2457,13 @@ fn run_case(case: &Case) -> Result<(), String> {
     for (i, step) in case.steps.iter().enumerate() {
         let (x, y) = (&a[i], &b[i]);
         let tx = normalize(&x.text, &local.roots);
-        let ty = normalize(&y.text, &bridged.roots);
+        let ty = match unfence(&step.tool, &y.text) {
+            Ok(inner) => normalize(&inner, &bridged.roots),
+            Err(e) => {
+                problems.push(format!("step {i} ({}): {e}", step.tool));
+                continue;
+            }
+        };
         if x.is_error != y.is_error || tx != ty {
             problems.push(format!(
                 "step {i} ({}): in-process is_error={}:\n{tx}\n--- bridge is_error={}:\n{ty}",

@@ -508,6 +508,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
         <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code> and its load rules</td></tr>
         <tr><td><code>src/domain/backtest/ranking.rs</code></td><td><code>RunFacts</code>, <code>StrategyStanding</code>, <code>select</code>, <code>rank</code>, <code>ranking.md</code>, the compact lines, <code>content_sha256</code></td></tr>
         <tr><td><code>src/application/backtest/mod.rs</code></td><td>the cohort identity, the cited runs retention keeps</td></tr>
+        <tr><td><code>src/application/backtest/tests.rs</code></td><td>its tests: retention keeps every run a registry or a <code>latest.json</code> cites, the cohort identity in the report</td></tr>
         <tr><td><code>src/application/ranking/mod.rs</code></td><td><code>run_ranking</code>: seal check, date and cutoff, lease, resume, freshness, backtests, rank, publish</td></tr>
         <tr><td><code>src/application/ranking/store.rs</code></td><td>the manifest, the dated files, <code>latest</code>, atomic writes</td></tr>
         <tr><td><code>src/adapters/inbound/cli/ranking.rs</code></td><td><code>tengu ranking run</code> and <code>show</code></td></tr>
@@ -515,14 +516,14 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
         <tr><td><code>sandboxes/xlab-w2/config.toml</code></td><td><code>[strategy_ranking]</code>, <code>xl_ranker</code>, the three feeds</td></tr>
         <tr><td class="wrap"><code>lineage/rankings/</code> · <code>lineage/capabilities/intel.strategy_ranking.toml</code></td><td>the two draft contracts · the tool's capability (CANDIDATE)</td></tr>
         <tr><td class="wrap"><code>tests/strategy_ranking.rs</code> · <code>tests/fixtures/strategy_ranking/</code></td><td>the binary acceptance tests and their sealed fixture</td></tr>
-        <tr><td><code>docs/strategy-ranking-automation-2026-10-08.md</code></td><td>the audit, deviations, task states and the operator's decisions</td></tr>
+        <tr><td><code>docs/ranking.md</code></td><td>the audit, deviations, task states and the operator's decisions</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

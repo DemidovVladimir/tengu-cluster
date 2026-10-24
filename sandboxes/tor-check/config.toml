@@ -1,6 +1,4 @@
 # Minimal sandbox to verify tengu's egress path over Tor (Arti + lyrebird-rs).
-runtime_profile = "auto"
-
 [egress]
 network = "tor"   # socks5h://127.0.0.1:9050, route_llm_api = true, fail-closed
 
@@ -13,6 +11,7 @@ engine = "claude_code"            # the Claude subscription (operator rule 2026-
 model = "claude-haiku-5-5"
 role = "probe"
 workspace = "~/tor-check-workspace"
+tools = ["http_request"]          # explicit: an empty list = every default tool (run_command, sign_* included)
 
 [agents.probe.claude_code]
 builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins

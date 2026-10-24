@@ -17,11 +17,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::dlmm::{opt_u64_arg, pubkey_arg};
+use super::dlmm::pubkey_arg;
 use super::{defs, SolanaShared};
 use crate::adapters::outbound::solana::accounts::fetch_accounts;
 use crate::adapters::outbound::solana::plan::{self, failed_observation, read_failure};
 use crate::adapters::outbound::solana::rpc::SolanaRpc;
+use crate::adapters::outbound::tools::args::opt_u64_arg;
 use crate::application::observe::observe;
 use crate::domain::lp::perps::{build_perps, PerpsState};
 use crate::domain::message::ToolDef;
@@ -338,7 +339,7 @@ mod tests {
         );
     }
 
-    // ── live (public mainnet; `cargo test --bin tengu live_ -- --ignored --test-threads 1`) ──
+    // ── live (public mainnet; `cargo test --lib live_ -- --ignored --test-threads 1`) ──
 
     #[tokio::test]
     #[ignore]

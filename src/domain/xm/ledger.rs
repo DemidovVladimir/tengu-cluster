@@ -20,10 +20,6 @@
 //!
 //! Not yet: maintenance margin from the HL margin tables (P1).
 
-// Consumers land in wave W1 (`risk-paper-ledger-store`, `risk-gate-domain`,
-// `risk-paper-tools`, `x-exit-rules`).
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -169,6 +165,7 @@ impl FundingSettlement {
     }
 
     /// Σ payments booked (positive = paid).
+    #[cfg(test)]
     pub fn paid_usd(&self) -> f64 {
         total(self.booked.iter().map(|h| h.payment_usd))
     }
@@ -601,7 +598,9 @@ impl PaperAccount {
     }
 
     /// [`Position::accrue_funding`] for `instrument`; cash moves by the
-    /// payment. `Ok(None)` for an instrument never traded.
+    /// payment. `Ok(None)` for an instrument never traded. The stores book
+    /// funding through [`PaperAccount::settle_funding`].
+    #[cfg(test)]
     pub fn accrue_funding(
         &mut self,
         instrument: &str,

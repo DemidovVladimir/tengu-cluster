@@ -497,7 +497,8 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
         <tr><td><code>src/domain/lineage/validate.rs</code></td><td>every always-on <code>verify</code> code</td></tr>
         <tr><td><code>src/domain/lineage/query.rs</code></td><td><code>trace</code>, <code>family_report</code> (search accounting), <code>attempt_rows</code></td></tr>
         <tr><td><code>src/domain/lineage/acceptance.rs</code></td><td>the 21 Rule-W answers</td></tr>
-        <tr><td><code>src/domain/lineage/pins.rs</code></td><td>record digests, <code>config:</code> / <code>spec:</code> / <code>tool_schema:</code> pin hashes</td></tr>
+        <tr><td><code>src/domain/lineage/pins.rs</code></td><td><code>config:</code> / <code>spec:</code> / <code>tool_schema:</code> pin hashes</td></tr>
+        <tr><td><code>src/domain/canonical.rs</code></td><td>record digests (<code>toml_digest</code>: canonical JSON of the TOML, comments and layout do not count)</td></tr>
         <tr><td><code>src/ports/lineage.rs</code></td><td><code>ContractProbe</code>, <code>EvidenceResolver</code>, <code>ResultSource</code>, <code>AttemptSource</code></td></tr>
         <tr><td><code>src/application/lineage/verify.rs</code></td><td>the <code>--pins</code> and <code>--evidence</code> passes, pin status</td></tr>
         <tr><td><code>src/application/lineage/attempts.rs</code></td><td>the run-dir and holdout-read scan</td></tr>
@@ -512,7 +513,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -520,7 +521,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
 <script>
 /* page-only: quadrant (domain/lineage/episode.rs quadrant_of, read by Episode::quadrant),
    time order (domain/lineage/value.rs Time::order, validate.rs future_leakage),
-   load errors (config/lineage.rs binding_errors, config/mod.rs fail_on),
+   load errors (config/lineage.rs binding_errors, config/load.rs fail_on),
    code filter */
 (function () {
   function $(id) { return document.getElementById(id); }

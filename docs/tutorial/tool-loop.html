@@ -70,7 +70,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · One turn</div>
   <h1>Chat turn and tool loop</h1>
-  <p class="lede">One message, one or many engine rounds. The model asks for tools, Tengu runs each inside its scope, feeds the result back, and repeats until the model answers or the round cap hits.</p>
+  <p class="lede">One message, one or many engine rounds. Plan steps run the same loop. The model asks for tools, Tengu runs each inside its scope, feeds the result back, and repeats until the model answers or the round cap hits.</p>
   <ul class="facts">
     <li><b>70</b> rounds per turn</li>
     <li>a result enters at most <b>300 000</b> chars</li>
@@ -134,7 +134,7 @@
           <text x="305" y="172" text-anchor="middle" class="zone-label">Prompt</text>
           <text x="305" y="196" text-anchor="middle" class="t-title">assembled</text>
           <text x="305" y="222" text-anchor="middle" class="t-small">system prompt</text>
-          <text x="305" y="242" text-anchor="middle" class="t-small">[Relevant memories]</text>
+          <text x="305" y="242" text-anchor="middle" class="t-small">fenced memories (user turn)</text>
           <text x="305" y="262" text-anchor="middle" class="t-small">newest history that fits</text>
           <text x="305" y="282" text-anchor="middle" class="t-small">≤ 20 messages</text>
         </g>
@@ -206,7 +206,7 @@
     <div class="stage-side">
       <ol class="captions">
         <li>A message arrives from the TUI, Telegram or a webhook. It joins the flow; turns beyond the history limit drop out (20 user turns by default).</li>
-        <li>With a memory manager, the top 5 hits for the message become a <code>[Relevant memories]</code> system block. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
+        <li>With a memory manager, the top 5 hits, capped at <code>max_recall_tokens</code>, go at the head of the user message, after a system note, in one <code>&lt;untrusted origin="memory"&gt;</code> fence. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
         <li>The prompt: system prompt, memories, then the newest history that fits the input budget, at most 20 messages. Nothing fits: "Context budget exhausted".</li>
         <li>One engine round gets every message plus the tool definitions. No stream event for <code>stream_event_timeout_secs</code> (120 s) fails the turn.</li>
         <li>Each tool call goes to the executor with its own call id. The tool gets the scope configured for it and checks it before it acts.</li>
@@ -381,7 +381,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
       <thead><tr><th>Caller</th><th>Call id</th></tr></thead>
       <tbody>
         <tr><td>chat: TUI, Telegram, webhooks, eval, <code>tool turn</code>, doctor</td><td class="wrap"><code>chat:&lt;turn nonce&gt;:&lt;round&gt;:&lt;i&gt;:&lt;provider id&gt;</code></td></tr>
-        <tr><td><code>run-agent</code> step</td><td>the model's own tool-call id</td></tr>
+        <tr><td><code>run-agent</code> step (this loop)</td><td class="wrap"><code>step:&lt;session&gt;:&lt;step&gt;:&lt;loop nonce&gt;:&lt;round&gt;:&lt;i&gt;:&lt;provider id&gt;</code></td></tr>
         <tr><td><a href="mcp-bridge.html">MCP bridge</a>, <code>tengu tool call</code></td><td class="wrap"><code>mcp:&lt;process nonce&gt;:&lt;JSON-RPC id&gt;</code></td></tr>
         <tr><td><a href="decision-loop.html">decision loop</a></td><td class="wrap"><code>{loop}:{session_id}:{t}</code></td></tr>
         <tr><td><code>[feeds.&lt;n&gt;]</code> tool feed</td><td class="wrap"><code>feed:&lt;name&gt;:&lt;slot ms&gt;:&lt;i&gt;</code></td></tr>
@@ -416,6 +416,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
     <li><span><b>A tool runs with its own scope.</b> Configured entry first; a tool with none gets the fallback rooted in the workspace (no shell in a hardened sandbox). See <a href="scopes.html">Scopes</a>.</span></li>
     <li><span><b>Unknown names never run.</b> The executor answers with the agent's real tool list, so the model can retry.</span></li>
     <li><span><b>No result enters whole above the cap.</b> <code>max_tool_result_chars</code> on every engine; local engines ≤ 1/8 of the window, footer included.</span></li>
+    <li><span><b>Outside text goes in fenced.</b> Results of <code>http_request</code>, <code>a2a</code>, MCP tools, <code>agentic_memory</code> and <code>memory_search</code> sit in one <code>&lt;untrusted origin="…"&gt;</code> fence after the cut (<code>domain/untrusted.rs</code>); compaction keeps it, and <code>tengu mcp-bridge</code> uses the same sink. A label, not a wall: scopes are what stop a hostile page.</span></li>
     <li><span><b>Older rounds shrink to line 1.</b> Chat and <code>run-agent</code> apply the same rule, on every engine.</span></li>
     <li><span><b>Secrets never reach the model.</b> Every surface wraps its executor in <code>SanitizedToolExecutor</code>: text, typed rows and errors redacted.</span></li>
     <li><span><b>Call ids never repeat.</b> A fresh uuid nonce per loop, plus round and index.</span></li>
@@ -450,14 +451,15 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/application/chat/service.rs</code></td><td><code>process_user_text</code>, recall, flow budget, slash commands</td></tr>
-        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td><code>collect_engine_response</code>: rounds, caps, compaction, call ids, cancel</td></tr>
+        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td><code>collect_engine_response</code>: rounds, caps, compaction, call ids, cancel; <code>LoopOpts</code> (the knobs), <code>LoopHooks</code> (a step's <code>compress_and_store</code> and metrics); <code>AgentTurnMetrics</code>: an in-process agent's record per engine turn (kind <code>agent</code>), a failed turn too (<code>ok=false</code>)</td></tr>
         <tr><td><code>src/application/chat/prompt_budget.rs</code></td><td>reserve, input budget, history assembly</td></tr>
         <tr><td><code>src/application/chat/flow.rs</code></td><td>flow key, history limit, flow compaction</td></tr>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>PluginToolExecutor</code>: per-call <code>ToolCtx</code> and scope</td></tr>
-        <tr><td><code>src/application/skills/registry.rs</code></td><td><code>build_system_prompt_with_tools</code></td></tr>
+        <tr><td><code>src/application/skills/registry.rs</code></td><td><code>build_system_prompt</code> (no tool list: the engine gets the tool definitions)</td></tr>
         <tr><td><code>src/domain/token.rs</code></td><td>bytes / 4 estimate, the 1/8 window budget</td></tr>
+        <tr><td><code>src/domain/untrusted.rs</code></td><td>the one fence for outside text: <code>fence</code>, the fixpoint <code>clean</code>, <code>tool_origin</code></td></tr>
         <tr><td><code>src/domain/session.rs</code> · <code>usage.rs</code> · <code>message.rs</code></td><td>loop state, usage totals, <code>StreamEvent</code></td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>LimitsConfig</code>, <code>FlowConfig</code>, <code>PromptBudgetConfig</code></td></tr>
+        <tr><td><code>src/config/{agent,memory}.rs</code></td><td><code>LimitsConfig</code>, <code>FlowConfig</code> (<code>agent.rs</code>), <code>PromptBudgetConfig</code> (<code>memory.rs</code>)</td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>executor build, scope resolution, fallback scope</td></tr>
         <tr><td><code>src/adapters/outbound/secrets.rs</code></td><td><code>SanitizedToolExecutor</code></td></tr>
       </tbody>
@@ -466,7 +468,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

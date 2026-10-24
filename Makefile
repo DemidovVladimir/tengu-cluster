@@ -82,7 +82,7 @@ up: check-config ## Start tengu (Telegram) on ./config.toml, or SANDBOX=<name>; 
 	$(COMPOSE) up -d --build
 
 up-memory: check-config ## Start tengu + Postgres/pgvector agentic memory (image rebuilt with postgres_memory)
-	TENGU_FEATURES=openrouter,telegram,postgres_memory $(COMPOSE) --profile postgres-memory up -d --build
+	TENGU_FEATURES=postgres_memory $(COMPOSE) --profile postgres-memory up -d --build
 
 chat: check-config ## Interactive TUI in a throwaway container (same SANDBOX / NETWORK wiring as `make up`)
 	$(COMPOSE) run --rm tengu chat

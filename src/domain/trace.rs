@@ -1,5 +1,5 @@
 //! Execution trace — the versioned, correlated event envelope every runtime
-//! component writes once (`TENGU_STUDIO_PLAN.md` § 5) and Studio / `tengu
+//! component writes once (`docs/plans/TENGU_STUDIO_PLAN.md` § 5) and Studio / `tengu
 //! trace` read back. Pure data + ordering / bounding rules; the JSONL store
 //! is `adapters/outbound/trace_store.rs`, the port `ports/trace.rs`.
 //!
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::runtime::scrub_urls;
-use crate::domain::secrets::SecretRegistry;
+use crate::domain::secrets::{map_strings, SecretRegistry};
 
 /// Version of the [`ExecutionEvent`] JSON shape.
 pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
@@ -137,7 +137,7 @@ impl Status {
     ];
 
     /// How Studio colours a node or an edge whose latest event has this
-    /// status ([`Tone`]; `TENGU_STUDIO_PLAN.md` § 4). The one mapping:
+    /// status ([`Tone`]; `docs/plans/TENGU_STUDIO_PLAN.md` § 4). The one mapping:
     /// the board and the page's legend both read it.
     pub(crate) fn tone(self) -> Tone {
         match self {
@@ -170,7 +170,7 @@ impl Status {
     }
 }
 
-/// A Studio colour (`TENGU_STUDIO_PLAN.md` § 4 "Visual semantics"): decided
+/// A Studio colour (`docs/plans/TENGU_STUDIO_PLAN.md` § 4 "Visual semantics"): decided
 /// in Rust ([`Status::tone`], the board's legal set), served as a name; the
 /// page maps the name to a CSS token and decides nothing.
 ///
@@ -289,7 +289,8 @@ pub(crate) enum RunKind {
     /// `studio.control` (Play / Stop / send-event: requested, then ok /
     /// refused / failed), `studio.stopped`.
     Studio,
-    /// One `tengu webhooks` process (outside `tengu run`): a
+    /// A `tengu webhooks` process before 2026-10-23, outside `tengu run`
+    /// (read only: one now records as [`RunKind::Run`]): a
     /// `trigger.webhook` root per request, its loop / orchestration events
     /// under it, [`RUN_CLOSED`] at the stop.
     Webhooks,
@@ -338,9 +339,9 @@ pub(crate) struct RunIds {
 }
 
 /// What the caller knows of an event; the sink stamps the rest
-/// ([`RunContext::stamp`]). Serializable: a `run-agent` child hands its
-/// tool events to the parent over IPC (`AgentIpcOutput.trace`), which
-/// writes them into its own recording (`keep` does not cross).
+/// ([`RunContext::stamp`]). Serializable: a `run-agent` step journals its
+/// tool events (`trace_store::JournalSink`) for the parent, which writes
+/// them into its own recording (`keep` does not cross).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct EventDraft {
     pub component: Component,
@@ -485,24 +486,10 @@ impl RunContext {
 /// (`SecretRegistry::redact` → `[REDACTED]`), then URLs (`scrub_urls` →
 /// `<url>`: an RPC URL carries its key, and a `${VAR}` substituted into
 /// the config may not be a registered secret). The trace store applies it to
-/// every payload before the write, the Studio graph to every attr. Two keys
-/// that redact alike keep the last one's value.
+/// every payload before the write, the Studio graph to every attr. The walk
+/// is `secrets::map_strings` (two keys that end alike keep one value).
 pub(crate) fn scrub_value(v: &mut Value, secrets: &SecretRegistry) {
-    match v {
-        Value::String(s) => {
-            if let Some(c) = scrub_str(s, secrets) {
-                *s = c;
-            }
-        }
-        Value::Array(a) => a.iter_mut().for_each(|x| scrub_value(x, secrets)),
-        Value::Object(o) => {
-            for (k, mut x) in std::mem::take(o) {
-                scrub_value(&mut x, secrets);
-                o.insert(scrub_str(&k, secrets).unwrap_or(k), x);
-            }
-        }
-        _ => {}
-    }
+    map_strings(v, &|s| scrub_str(s, secrets));
 }
 
 /// `s` with registered secrets and URLs replaced; `None` = nothing to hide.

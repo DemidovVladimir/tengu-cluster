@@ -2,8 +2,6 @@
 //! passed to them. Implementations live in `adapters/outbound/tools/` (listed
 //! in its `catalog()`); dispatch lives in `application/tools/registry.rs`.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -16,7 +14,6 @@ use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::memory::MemoryService;
 use crate::ports::shell::ShellExecutionPort;
-use crate::ports::tool_activity::ToolActivityPort;
 
 // ---------------------------------------------------------------------------
 // Core trait
@@ -110,9 +107,7 @@ pub(crate) struct ToolCtx<'a> {
     pub scope: &'a ToolScope,
     pub shell: &'a dyn ShellExecutionPort,
     pub http: &'a reqwest::Client,
-    pub memory_manager: Option<&'a dyn MemoryService>,
     pub secret_registry: &'a SecretRegistry,
-    pub activity: &'a dyn ToolActivityPort,
     pub conversation: ConversationView<'a>,
     /// Calling agent's resolved config. `Some(_)` for tool calls dispatched
     /// from inside an agent loop (populated by `PluginToolExecutor` from the
@@ -129,7 +124,7 @@ pub(crate) struct ToolCtx<'a> {
     /// | `[feeds.<n>]` tool feed | `feed:<name>:<slot ms>:<i>` | across slots; a retry of a slot reuses it |
     /// | `tengu mcp-bridge`, `tengu tool call` | `mcp:<process nonce>:<JSON-RPC id>` | across processes (`mcp_bridge::call_nonce`) |
     /// | in-process chat (`chat/tool_loop.rs`: TUI, Telegram, webhooks, eval, `tengu tool turn`, doctor) | `chat:<turn nonce>:<round>:<i>:<provider id>` | across processes, turns, rounds and calls (a provider may reuse its own ids) |
-    /// | `run-agent` step | the model's tool-call id | engine-dependent; exec tools never run there (routable agents only) |
+    /// | `run-agent` step (the same loop) | `step:<session>:<step>:<loop nonce>:<round>:<i>:<provider id>` | across processes, steps, rounds and calls; exec tools never run there (routable agents only) |
     ///
     /// Exec-tool contract (`tools/xm/exec_common.rs`): `client_order_id` =
     /// the tool's `client_order_id` arg if given, else `call_id`; refuse
@@ -142,9 +137,7 @@ pub(crate) struct PluginCtx<'a> {
     pub workspace: &'a Path,
     pub config: &'a crate::config::AgentConfig,
     pub http: reqwest::Client,
-    pub shell: Arc<dyn ShellExecutionPort>,
     pub memory_manager: Option<Arc<dyn MemoryService>>,
-    pub secret_registry: Arc<SecretRegistry>,
 }
 
 /// Every tool definition the planner's registry lists: the built-in catalog

@@ -4,8 +4,6 @@
 //! One instance exists per advertised remote tool. The tool name is always
 //! `{server_name}__{remote_tool_name}` so multiple MCP servers cannot collide.
 
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -43,20 +41,13 @@ mod tests {
     use super::*;
     use crate::adapters::outbound::mcp_client::protocol::McpRemoteTool;
     use crate::adapters::outbound::shell::LocalShellExecutor;
-    use crate::domain::message::ToolCall;
     use crate::domain::scope::ToolScope;
     use crate::domain::secrets::SecretRegistry;
     use crate::ports::shell::ShellExecutionPort;
-    use crate::ports::tool_activity::ToolActivityPort;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
-
-    struct NoopActivity;
-    impl ToolActivityPort for NoopActivity {
-        fn publish_tool_activity(&self, _call: &ToolCall) {}
-    }
 
     /// Stub MCP caller — records the most recent call and returns a canned
     /// string. Exists only to verify that the proxy tool forwards the right
@@ -96,16 +87,13 @@ mod tests {
         let shell: Arc<dyn ShellExecutionPort> = Arc::new(LocalShellExecutor::new());
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
         let scope = ToolScope::default();
         let ctx = ToolCtx {
             workspace: &workspace,
             scope: &scope,
             shell: shell.as_ref(),
             http: &http,
-            memory_manager: None,
             secret_registry: &secrets,
-            activity: activity.as_ref(),
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
             call_id: None,

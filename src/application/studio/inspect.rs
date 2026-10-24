@@ -1,5 +1,5 @@
 //! Studio inspector — the validated config behind one graph node
-//! (`TENGU_STUDIO_PLAN.md` § 4 "Inspector": "selected node's validated
+//! (`docs/plans/TENGU_STUDIO_PLAN.md` § 4 "Inspector": "selected node's validated
 //! config"). Read from the parsed `Config` structs after `Config::load`
 //! (defaults filled in, `[default_scopes]` folded, an execution map applied
 //! by `ExecutionMap::apply`) — never from the TOML text, so a comment or a
@@ -117,7 +117,6 @@ pub(crate) fn config_slice(
                 "orchestrator".into(),
                 json!({
                     "agent": o.agent,
-                    "engine": o.engine,
                     "max_attempts_per_step": o.max_attempts_per_step,
                     "max_replans": o.max_replans,
                     "routable_agents": routable,

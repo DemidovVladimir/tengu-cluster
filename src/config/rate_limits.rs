@@ -133,7 +133,7 @@ mod tests {
     /// held ≈ 1 243 / min for 27 min, so the weekend run's book reads would
     /// get 429s). The worst 60 s window of xlab's bucket (burst +
     /// per_minute) leaves room for xmarket-weekend's measured peak and
-    /// xmarket's steady use (`docs/runtime-2026-09-30.md`).
+    /// xmarket's steady use (`docs/runtime.md`).
     #[test]
     fn the_xlab_hl_budget_leaves_room_for_the_xmarket_runs() {
         const HL_PER_IP: u32 = 1_200;

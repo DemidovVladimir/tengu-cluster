@@ -1,8 +1,7 @@
-//! Messages, tool calls/definitions, stream events, and the precision `Lens`
-//! — the vocabulary every layer speaks. Pure data, no IO.
+//! Messages, tool calls/definitions and stream events — the vocabulary
+//! every layer speaks. Pure data, no IO.
 
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -161,10 +160,15 @@ pub enum StreamEvent {
     /// Optional thinking/reasoning text chunk.
     ThinkingDelta { text: String },
 
-    /// Usage accounting snapshot for the current turn.
+    /// Usage accounting snapshot for the current turn. `input_tokens` is the
+    /// whole prompt, cache reads and writes included; `cached_input_tokens`
+    /// the part of it read from the provider's prompt cache (0 when the
+    /// engine does not say).
     Usage {
         input_tokens: u32,
         output_tokens: u32,
+        #[serde(default)]
+        cached_input_tokens: u32,
     },
 
     /// A tool call the engine ran itself (Claude Code: the CLI through
@@ -177,40 +181,6 @@ pub enum StreamEvent {
 
     /// Terminal event indicating generation failure.
     Error { message: String },
-}
-
-// ---------------------------------------------------------------------------
-// Lens — user-controlled precision mode
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lens {
-    Eco,
-    Standard,
-    Precise,
-}
-
-impl Lens {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Lens::Eco => "eco",
-            Lens::Standard => "standard",
-            Lens::Precise => "precise",
-        }
-    }
-}
-
-impl FromStr for Lens {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "standard" => Lens::Standard,
-            "precise" => Lens::Precise,
-            "eco" => Lens::Eco,
-            _ => return Err(()),
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -24,22 +24,20 @@
 //! | Raw replies (O2) | `submissions_reply` / `older_page_reply` / `index_reply`: the same requests, the 2xx [`Reply`] undecoded (URL, status, content type, body) — the source store keeps the bytes (`outbound/sources/sec.rs`); `with_budget` names the `[sources]` row's budget, `user_agent_from` its User-Agent variable |
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use reqwest::header::{HeaderValue, ACCEPT, CONTENT_TYPE, USER_AGENT};
+use reqwest::header::{HeaderValue, ACCEPT, USER_AGENT};
 use reqwest::Url;
 use serde_json::{json, Value};
 
-use super::{ReportRow, Retry};
+use super::ReportRow;
 use crate::adapters::outbound::egress;
-use crate::adapters::outbound::http_class::{
-    http_status_error, reqwest_error, retry_after_ms, HttpError, Scrubber,
-};
-use crate::adapters::outbound::rate_limit::{limiters, Limiters, Priority};
+use crate::adapters::outbound::http_class::{Budget, GatedHttp, HttpError, Retry, Scrubber};
+use crate::adapters::outbound::rate_limit::{limiters, Limiters};
 use crate::config::rate_limits::RateLimitConfig;
 use crate::config::sections::SandboxSections;
-use crate::domain::marketdata::{fmt_time, EventCoverage, MarketEvent};
+use crate::domain::marketdata::{EventCoverage, MarketEvent};
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
 use crate::domain::sec::{
@@ -47,6 +45,7 @@ use crate::domain::sec::{
     json_clock, older_pages_to_read, sec_ticker, submissions, ticker_ciks, Filing, IndexAcceptance,
     JsonClock, Submissions,
 };
+use crate::domain::time::fmt_time;
 use crate::ports::market_data::MarketDataStore;
 
 /// `company_tickers.json` and the filing archive.
@@ -202,110 +201,38 @@ impl SecClient {
         url.set_path(path);
         let host = url.host_str().unwrap_or_default().to_string();
         let scrub = Scrubber::for_api(&url);
-        let gate = egress::policy()
-            .check_url(&url)
-            .and_then(|_| self.scope.check_net_host(&host));
-        if let Err(e) = gate {
-            let err = HttpError::new(ErrorClass::Fatal, format!("{e:#}"));
-            self.audit(&url, &host, Err(&err), None);
-            return Err(err.into());
-        }
-        let budget = self.budget.as_ref();
-        if let Err(err) = self
-            .limiters
-            .acquire(
-                &self.budget_name,
-                budget,
-                1,
-                Priority::Read,
-                self.max_budget_wait,
-            )
-            .await
-        {
-            self.audit(&url, &host, Err(&err), None);
-            return Err(err.into());
-        }
-        let started = Instant::now();
-        let sent = self
+        let req = self
             .http
             .get(url.clone())
             .timeout(self.timeout)
             .header(USER_AGENT, self.user_agent.clone())
-            .header(ACCEPT, accept)
-            .send()
-            .await;
-        let result = match sent {
-            Err(e) => Err(reqwest_error(e, &host, &scrub)),
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let retry_after = retry_after_ms(resp.headers());
-                let content_type = resp
-                    .headers()
-                    .get(CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or(accept)
-                    .to_string();
-                match resp.text().await {
-                    Err(e) => Err(reqwest_error(e, &host, &scrub)),
-                    Ok(body) if (200..300).contains(&status) => Ok(Reply {
-                        url: url.to_string(),
-                        status,
-                        content_type,
-                        body,
-                    }),
-                    Ok(body) => Err(http_status_error(status, retry_after, &body, &host, &scrub)),
-                }
-            }
-        };
-        let ms = Some(started.elapsed().as_millis() as u64);
-        match result {
-            Ok(reply) => {
-                self.audit(&url, &host, Ok(reply.status), ms);
-                Ok(reply)
-            }
-            Err(err) => {
-                if err.class == ErrorClass::RateLimited {
-                    self.limiters
-                        .penalize(&self.budget_name, budget, err.retry_after_ms);
-                }
-                self.audit(&url, &host, Err(&err), ms);
-                Err(err.into())
-            }
-        }
-    }
-
-    fn audit(
-        &self,
-        url: &Url,
-        host: &str,
-        outcome: std::result::Result<u16, &HttpError>,
-        ms: Option<u64>,
-    ) {
-        let mut event = json!({
-            "tool": "sec_edgar",
-            "host": host,
-            "path": url.path(),
-            "ms": ms,
+            .header(ACCEPT, accept);
+        let gated = GatedHttp::new(
+            &self.scope,
+            &scrub,
+            json!({"tool": "sec_edgar", "path": url.path()}),
+        )
+        .budget(Budget {
+            limiters: self.limiters,
+            name: &self.budget_name,
+            config: self.budget.as_ref(),
+            weight: 1,
+            max_wait: self.max_budget_wait,
         });
-        match outcome {
-            Ok(status) => {
-                event["verdict"] = "allowed".into();
-                event["status"] = status.into();
-            }
-            Err(e) => {
-                event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
-                event["class"] = e.class.as_str().into();
-                event["reason"] = e.message.clone().into();
-                if let Some(s) = e.http_status {
-                    event["status"] = s.into();
-                }
-            }
-        }
         #[cfg(test)]
-        if let Some(tap) = &self.audit_tap {
-            tap.lock().unwrap().push(event.clone());
-        }
-        egress::policy().audit(event);
+        let gated = gated.tap(self.audit_tap.as_deref());
+        let reply = gated
+            .send(req, |r| {
+                let r = r.success(&host, &scrub)?;
+                Ok(Reply {
+                    url: url.to_string(),
+                    status: r.status,
+                    content_type: r.content_type().unwrap_or(accept).to_string(),
+                    body: r.body,
+                })
+            })
+            .await?;
+        Ok(reply)
     }
 
     async fn get_json(&self, base: &Url, path: &str) -> Result<Value> {
@@ -655,13 +582,13 @@ impl Run<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::backfill::test_support::FAST;
     use crate::adapters::outbound::http_class::read_error;
+    use crate::adapters::outbound::http_class::test_support::FAST;
     use crate::adapters::outbound::http_class::test_support::{
         canned, local_scope, serve, test_client, Canned,
     };
     use crate::adapters::outbound::market_data::SqliteMarketData;
-    use crate::domain::marketdata::parse_time;
+    use crate::domain::time::parse_time;
 
     const AAPL: &str = "hyperliquid:xyz:AAPL";
 

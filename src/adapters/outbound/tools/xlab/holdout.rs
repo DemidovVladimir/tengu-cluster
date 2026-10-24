@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::backtest::{BacktestJob, Prepared};
 use crate::domain::backtest::spec::SplitSpec;
-use crate::domain::marketdata::fmt_time;
+use crate::domain::time::fmt_time;
 use crate::domain::tools as names;
 
 /// The ledger's file name in the backtests dir (module table).

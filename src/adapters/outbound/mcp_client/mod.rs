@@ -19,8 +19,6 @@
 //! the tool and each rule ([`linted_tool`], on every discovery path) — one bad
 //! external tool must not break a Gemini or Ollama turn.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -168,26 +166,11 @@ pub(crate) fn linted_tool(server: &str, remote: &protocol::McpRemoteTool) -> Opt
     None
 }
 
-/// Separator between server and tool name. Provider function names allow only
-/// `[a-zA-Z0-9_-]`, so a `.` would be rejected by the model API.
-pub(crate) const MCP_NAME_SEPARATOR: &str = "__";
+pub(crate) use crate::domain::tools::MCP_NAME_SEPARATOR;
 
 /// Name an external MCP tool is exposed under: `{server}__{tool}`.
 pub(crate) fn qualified_tool_name(server: &str, tool: &str) -> String {
     format!("{server}{MCP_NAME_SEPARATOR}{tool}")
-}
-
-/// Environment variables a server config reads through `$VAR` values
-/// (`env` entries and the http bearer token). A child process that
-/// reconnects to the server (the MCP bridge) needs them forwarded.
-pub(crate) fn referenced_env_vars(cfg: &McpServerConfig) -> Vec<String> {
-    cfg.env
-        .values()
-        .chain(cfg.auth.as_ref().map(|a| &a.token))
-        .filter_map(|v| v.trim().strip_prefix('$'))
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 /// Whether `tool_name` belongs to the `[[mcp_servers]]` entry named `server`.
@@ -217,17 +200,13 @@ pub(crate) mod tests {
             workspace,
             config: agent,
             http: reqwest::Client::new(),
-            shell: Arc::new(LocalShellExecutor::new()),
             memory_manager: None,
-            secret_registry: Arc::new(SecretRegistry::new()),
         }
     }
 
     #[test]
     fn mcp_config_deserializes() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [agents.main]
             default = true
             engine = "openrouter"
@@ -343,18 +322,12 @@ pub(crate) mod tests {
         let shell = LocalShellExecutor::new();
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        struct NoActivity;
-        impl crate::ports::tool_activity::ToolActivityPort for NoActivity {
-            fn publish_tool_activity(&self, _call: &crate::domain::message::ToolCall) {}
-        }
         let tool_ctx = crate::ports::tool::ToolCtx {
             workspace: tmp.path(),
             scope: &scope,
             shell: &shell,
             http: &http,
-            memory_manager: None,
             secret_registry: &secrets,
-            activity: &NoActivity,
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
             call_id: None,

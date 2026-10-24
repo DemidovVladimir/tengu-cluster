@@ -1,5 +1,5 @@
 //! `tengu run` use cases, composed by `bootstrap/runtime.rs` (operator doc
-//! `docs/runtime-2026-09-30.md`):
+//! `docs/runtime.md`):
 //!
 //! | Piece | Role |
 //! |---|---|

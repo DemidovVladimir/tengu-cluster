@@ -1,5 +1,6 @@
-//! Filesystem locations the config layer resolves: `TENGU_HOME`, the default
-//! config file, and `~` expansion for configured paths.
+//! Filesystem locations the config layer resolves: `TENGU_HOME`, the
+//! [`Layout`] under it, the default config file, the skill tiers and `~`
+//! expansion for configured paths.
 
 use std::path::{Path, PathBuf};
 
@@ -40,7 +41,7 @@ pub(crate) const TENGU_CONFIG_ENV: &str = "TENGU_CONFIG";
 pub(crate) fn default_config_path() -> PathBuf {
     std::env::var_os(TENGU_CONFIG_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| resolve_tengu_home().join("config.toml"))
+        .unwrap_or_else(|| Layout::current().config())
 }
 
 /// `path` made absolute — canonical when it exists, else joined onto the
@@ -71,6 +72,35 @@ pub fn sandbox_of_config_file(path: &Path) -> Option<String> {
     (dir.parent()?.file_name()? == "sandboxes" && !name.is_empty()).then(|| name.to_string())
 }
 
+/// The skill tiers of `workspace`, highest priority first — a skill name
+/// in an earlier tier shadows the same name in a later one:
+///
+/// | Tier | Dir |
+/// |---|---|
+/// | `managed` | `<TENGU_HOME>/skills` (`tengu skill install --tier managed`) |
+/// | `workspace` | `<workspace>/.tengu/skills` |
+/// | `project` | `<workspace>/skills` |
+///
+/// The skill loader (`skills::registry::skill_directories`, which adds the
+/// repo's `skills/` where tengu runs), `view_skill`, `manage_skill`,
+/// `skill_distill`, `tengu skill` and `tengu eval` all walk this list.
+pub fn skill_tiers(workspace: &Path) -> [(&'static str, PathBuf); 3] {
+    [
+        ("managed", Layout::current().skills()),
+        ("workspace", workspace.join(".tengu").join("skills")),
+        ("project", workspace.join("skills")),
+    ]
+}
+
+/// The dir of skill tier `tier` (`managed` | `workspace` | `project`) for
+/// `workspace` ([`skill_tiers`]); `None` for any other name.
+pub fn skill_tier_root(workspace: &Path, tier: &str) -> Option<PathBuf> {
+    skill_tiers(workspace)
+        .into_iter()
+        .find(|(name, _)| *name == tier)
+        .map(|(_, dir)| dir)
+}
+
 pub(crate) fn resolve_tengu_home() -> PathBuf {
     if let Ok(home) = std::env::var("TENGU_HOME") {
         if home.starts_with('~') {
@@ -83,6 +113,90 @@ pub(crate) fn resolve_tengu_home() -> PathBuf {
     dirs_next::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".tengu")
+}
+
+/// The `TENGU_HOME` tree — the one place its names are joined:
+///
+/// | Path | Holds |
+/// |---|---|
+/// | `config.toml` | the base config (no `--sandbox`, `-c` or `TENGU_CONFIG`) |
+/// | `state/` | `runtime.db` + heartbeat of a sandbox with no state dir, `solana-writes.db` |
+/// | `state/<name>/` | a sandbox's stores: `[xmarket] state`, `[sources] state` (`soe`: the SOE profile) |
+/// | `state/evidence/<vault>/` | read-only evidence vaults (`tengu evidence snapshot`) |
+/// | `logs/` | `tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl`, `trace/<sandbox>/`, `maps/` |
+/// | `skills/` | the managed skill tier |
+/// | `memory/` | the vectors of an agent with no workspace and no `[memory] store_path` |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    home: PathBuf,
+}
+
+impl Layout {
+    /// The tree at [`resolve_tengu_home`].
+    pub fn current() -> Self {
+        Self::at(resolve_tengu_home())
+    }
+
+    pub fn at(home: impl Into<PathBuf>) -> Self {
+        Self { home: home.into() }
+    }
+
+    pub fn config(&self) -> PathBuf {
+        self.home.join("config.toml")
+    }
+
+    pub fn state(&self) -> PathBuf {
+        self.home.join("state")
+    }
+
+    /// `state/<name>`.
+    pub fn state_dir(&self, name: &str) -> PathBuf {
+        self.state().join(name)
+    }
+
+    /// `state/evidence/<vault>`.
+    pub fn vault(&self, vault: &str) -> PathBuf {
+        self.state_dir("evidence").join(vault)
+    }
+
+    pub fn logs(&self) -> PathBuf {
+        self.home.join("logs")
+    }
+
+    pub fn tengu_log(&self) -> PathBuf {
+        self.logs().join("tengu.log")
+    }
+
+    /// The egress audit unless `[egress] audit_log` names another file.
+    pub fn egress_log(&self) -> PathBuf {
+        self.logs().join("egress.jsonl")
+    }
+
+    pub fn decisions_log(&self) -> PathBuf {
+        self.logs().join("decisions.jsonl")
+    }
+
+    pub fn risk_log(&self) -> PathBuf {
+        self.logs().join("risk.jsonl")
+    }
+
+    /// `logs/trace` — one dir per sandbox.
+    pub fn trace(&self) -> PathBuf {
+        self.logs().join("trace")
+    }
+
+    /// `logs/maps` — the execution maps `tengu decide --map` ran.
+    pub fn maps(&self) -> PathBuf {
+        self.logs().join("maps")
+    }
+
+    pub fn skills(&self) -> PathBuf {
+        self.home.join("skills")
+    }
+
+    pub fn memory(&self) -> PathBuf {
+        self.home.join("memory")
+    }
 }
 
 #[cfg(test)]
@@ -110,6 +224,39 @@ mod tests {
         let missing = absolute_path(Path::new("sandboxes/none/config.toml"));
         assert!(missing.is_absolute(), "{}", missing.display());
         assert!(missing.ends_with("sandboxes/none/config.toml"));
+    }
+
+    /// The managed skill tier sits under `TENGU_HOME`, never a hard-coded
+    /// `~/.tengu`: a lab home reads and writes its own managed skills.
+    #[test]
+    fn skill_tiers_are_rooted_at_tengu_home() {
+        let ws = Path::new("/ws");
+        let tiers = skill_tiers(ws);
+        let names: Vec<&str> = tiers.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["managed", "workspace", "project"]);
+        assert_eq!(tiers[0].1, resolve_tengu_home().join("skills"));
+        assert_eq!(tiers[1].1, ws.join(".tengu/skills"));
+        assert_eq!(tiers[2].1, ws.join("skills"));
+        assert_eq!(skill_tier_root(ws, "project"), Some(ws.join("skills")));
+        assert_eq!(skill_tier_root(ws, "global"), None);
+    }
+
+    /// Every name under the home is joined here once.
+    #[test]
+    fn layout_names_the_home_tree() {
+        let l = Layout::at("/h");
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(l.config(), p("/h/config.toml"));
+        assert_eq!(l.state_dir("xm"), p("/h/state/xm"));
+        assert_eq!(l.vault("w1"), p("/h/state/evidence/w1"));
+        assert_eq!(l.tengu_log(), p("/h/logs/tengu.log"));
+        assert_eq!(l.egress_log(), p("/h/logs/egress.jsonl"));
+        assert_eq!(l.decisions_log(), p("/h/logs/decisions.jsonl"));
+        assert_eq!(l.risk_log(), p("/h/logs/risk.jsonl"));
+        assert_eq!(l.trace(), p("/h/logs/trace"));
+        assert_eq!(l.maps(), p("/h/logs/maps"));
+        assert_eq!(l.skills(), p("/h/skills"));
+        assert_eq!(l.memory(), p("/h/memory"));
     }
 
     /// `--sandbox <name>` and the same file by absolute path (the bridge's

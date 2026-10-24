@@ -1,5 +1,5 @@
 //! Studio control — Play / Stop / send-event on the sandbox's runtime
-//! (`TENGU_STUDIO_PLAN.md` § 6, ST-30 / ST-31). The rules (which action now,
+//! (`docs/plans/TENGU_STUDIO_PLAN.md` § 6, ST-30 / ST-31). The rules (which action now,
 //! or why not) are `application::studio::control`; this file does the IO
 //! with the runtime `tengu run` starts — never a copy of it.
 //!

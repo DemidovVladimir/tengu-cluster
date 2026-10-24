@@ -1,5 +1,5 @@
 //! A backtest's run dir, `<state dir>/backtests/<run id>/` (xlab,
-//! `docs/xlab-2026-10-01.md` § 6; `docs/runtime-2026-09-30.md` § State
+//! `docs/xlab-2026-10-01.md` § 6; `docs/runtime.md` § State
 //! layout): the run id and the files [`write_run_dir`] writes. The files are
 //! written in full before the path is returned (the CLI prints it last).
 //!

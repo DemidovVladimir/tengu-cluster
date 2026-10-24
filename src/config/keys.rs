@@ -1,4 +1,4 @@
-//! `[keys]` — the seal proxy (`docs/sealed-keys-2026-10-09.md`).
+//! `[keys]` — the seal proxy (`docs/sealed-keys.md`).
 //!
 //! Provider keys never sit on this machine: they are secrets of the
 //! `tengu-seal` Cloudflare Worker (set by the operator in Cloudflare). At

@@ -8,14 +8,15 @@ WORKDIR /usr/src/tengu
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
-# Create stub main.rs for dependency caching
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs
+# Create stub lib.rs + main.rs for dependency caching
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs && touch src/lib.rs
 
 # Pre-build dependencies (cached unless Cargo.toml changes)
-# The Cargo.toml default features (openrouter, telegram, studio, codex, a2a) are always on:
-# no --no-default-features here, so FEATURES only adds to them.
-# Optional extras: postgres_memory, claude_code, webhooks (no qdrant feature exists)
-ARG FEATURES="openrouter,telegram"
+# The Cargo.toml default features (telegram, studio, a2a, webhooks) and every
+# engine (openrouter, local, claude_code, codex) are always on: no
+# --no-default-features here, so FEATURES only adds to them.
+# Optional extra: postgres_memory
+ARG FEATURES="telegram"
 RUN cargo build --release --features "${FEATURES}" 2>/dev/null || true
 
 # Copy real source + skills + sandboxes; web/ = the Studio page, compiled into
@@ -26,7 +27,7 @@ COPY skills skills
 COPY sandboxes sandboxes
 
 # Touch source to invalidate the stub build
-RUN touch src/main.rs
+RUN touch src/main.rs src/lib.rs
 
 # Build the real binary
 RUN cargo build --release --features "${FEATURES}"
@@ -52,10 +53,10 @@ COPY sandboxes /opt/tengu/sandboxes
 # The lineage registry: a sandbox with `[generation]` loads it at every config
 # load (`registry = "../../lineage"` → /opt/tengu/lineage — the sandbox's config
 # is mounted at /opt/tengu/sandboxes/<name>/config.toml, `make up SANDBOX=`);
-# without it the load fails closed (docs/lineage-2026-10-06.md § 4)
+# without it the load fails closed (docs/lineage.md § 4)
 COPY lineage /opt/tengu/lineage
 
-# Default working directory (planner registry + TENGU_PLAN.md are written here)
+# Default working directory (the planner registry is written here)
 WORKDIR /opt/tengu
 
 # Persistent data directory
@@ -65,8 +66,8 @@ RUN mkdir -p /opt/tengu/data
 ENV TENGU_CONFIG=/opt/tengu/config.toml \
     TENGU_HOME=/opt/tengu/data
 
-# Webhook listener port (`tengu webhooks`, feature `webhooks`). Nothing listens
-# on [hub].port — the hub is config-only.
+# Webhook listener port (`tengu run` / `tengu webhooks` — the runtime with no
+# feeds; feature `webhooks`).
 EXPOSE 7080
 
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 --start-period=10s \

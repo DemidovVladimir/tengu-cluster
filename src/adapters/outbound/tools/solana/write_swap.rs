@@ -834,7 +834,7 @@ mod tests {
 
     /// Live, keyless: a real Ultra order for 0.01 SOL → USDC as the funded
     /// operator wallet, gated on the live Jupiter price and simulated on
-    /// mainnet. `cargo test --bin tengu -- --ignored live_jupiter_swap --nocapture`.
+    /// mainnet. `cargo test --lib -- --ignored live_jupiter_swap --nocapture`.
     #[tokio::test]
     #[ignore]
     async fn live_jupiter_swap_simulate() {

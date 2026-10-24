@@ -1,4 +1,4 @@
-//! Lineage use cases (`docs/lineage-2026-10-06.md` § 5): `tengu lineage
+//! Lineage use cases (`docs/lineage.md` § 5): `tengu lineage
 //! verify` and the views that need more than the registry — pins, evidence
 //! files, run dirs — through `ports/lineage.rs`. The registry itself, its
 //! checks and its queries are pure (`domain/lineage/`).

@@ -1,4 +1,4 @@
-//! Book replay (`tengu evidence regrade`, `docs/lineage-2026-10-06.md` § 3):
+//! Book replay (`tengu evidence regrade`, `docs/lineage.md` § 3):
 //! rule W — or a variant — re-graded from recorded rows: signals from
 //! `mkt_ctx/1` prices ([`ctx_price`], [`signal_of`]), the selection
 //! ([`select_capped`]), fills by a depth walk of the recorded `hl_book/1`

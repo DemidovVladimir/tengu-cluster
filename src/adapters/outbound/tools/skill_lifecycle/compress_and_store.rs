@@ -15,12 +15,9 @@
 //! Durable capture (when the `postgres_memory` feature is enabled) happens in
 //! `run-agent` via `try_persist_agentic_step_summary` → Open Brain Postgres.
 //!
-//! This module now owns only the canonical tool *definition*. The legacy
-//! Qdrant `write_summary` + `CompressAndStoreTool` / `CompressAndStorePlugin`
-//! handler were removed in Phase 6 — Open Brain Postgres is the durable
-//! backend, and the runner's out-of-band intercept + backstop cover capture.
-
-#![allow(dead_code)]
+//! This module owns only the canonical tool *definition*: there is no
+//! handler — the runner's out-of-band intercept + backstop capture the
+//! summary, Open Brain Postgres is the durable backend.
 
 use crate::domain::message::ToolDef;
 

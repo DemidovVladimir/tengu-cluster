@@ -12,7 +12,7 @@ impl StepId {
     }
 }
 
-/// Phase 6.7 (C→B B-half) — optional override that lets the planner LLM
+/// Optional override that lets the planner LLM
 /// compose a transient agent on the fly when no listed agent fits the
 /// request.
 ///
@@ -49,7 +49,7 @@ pub struct Step {
     pub goal: String,
     #[serde(default)]
     pub depends_on: Vec<StepId>,
-    /// Phase 6.7 (C→B B-half) — if set, the runner builds a transient
+    /// If set, the runner builds a transient
     /// agent from `compose.base_agent` overriding `skills`/`tools`,
     /// rather than using `[agents.<step.agent>]` verbatim. `step.agent`
     /// becomes a label for the composed agent (used in events / logs);
@@ -64,25 +64,57 @@ pub struct Plan {
     pub steps: Vec<Step>,
 }
 
-// `PlanError` and `Plan::validate` belong to the static-mode planner path
-// (`OrchestratorAgentPlanner`). The v2 RagPlanner emits plans pre-validated
-// by the LLM against `plan_schema.json` and surfaces structural problems
-// via the existing `parse_verdict` path. Phase 7.1 will delete this module.
-#[allow(dead_code)]
+/// Why a plan cannot run as written (`Plan::validate`). `replan::drive`
+/// checks every plan the planner returns before any step runs, and sends a
+/// broken one straight back to the planner with this text.
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
-    #[error("plan has a cycle including step {0:?}")]
-    Cycle(StepId),
-    #[error("step {0:?} depends on unknown step {1:?}")]
-    UnknownDependency(StepId, StepId),
-    #[error("plan has no leaf (all steps have dependents)")]
-    NoLeaf,
-    #[error("plan has multiple leaves {0:?} — include a synthesizer step")]
-    MultipleLeaves(Vec<StepId>),
-    #[error("step {0:?} references unknown agent {1:?}")]
-    UnknownAgent(StepId, String),
+    #[error("the plan has no steps")]
+    Empty,
     #[error("duplicate step id {0:?}")]
     DuplicateId(StepId),
+    #[error(
+        "step {0:?} names agent {1:?}, which is not a routable agent \
+         (an `[agents.<name>]` block with a `description`); routable agents: {2:?}"
+    )]
+    UnknownAgent(StepId, String, Vec<String>),
+    #[error("step {0:?} depends on unknown step {1:?}")]
+    UnknownDependency(StepId, StepId),
+    #[error("the plan has a cycle including step {0:?}")]
+    Cycle(StepId),
+}
+
+/// A failed step attempt that says how retryable it is
+/// (`WorkerHandle::run_step`); `application/orchestrator/retry.rs` reads
+/// `class` (`domain::backoff::next_delay`). Any other error counts as
+/// `Transient`.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct StepFailure {
+    pub class: crate::domain::observation::ErrorClass,
+    pub message: String,
+}
+
+impl StepFailure {
+    pub fn new(class: crate::domain::observation::ErrorClass, message: impl Into<String>) -> Self {
+        Self {
+            class,
+            message: message.into(),
+        }
+    }
+}
+
+impl PlanError {
+    /// The step the error is about (`None`: the plan as a whole).
+    pub fn step(&self) -> Option<&StepId> {
+        match self {
+            PlanError::Empty => None,
+            PlanError::DuplicateId(s)
+            | PlanError::UnknownAgent(s, ..)
+            | PlanError::UnknownDependency(s, _)
+            | PlanError::Cycle(s) => Some(s),
+        }
+    }
 }
 
 impl Plan {
@@ -97,11 +129,15 @@ impl Plan {
             .collect()
     }
 
-    /// Full topology validation: no duplicate IDs, no cycles, no unknown
-    /// dependencies, exactly one leaf, every agent present in
-    /// `known_agents`.
-    #[allow(dead_code)]
-    pub fn validate(&self, known_agents: &[&str]) -> Result<(), PlanError> {
+    /// Can this plan run: at least one step, no duplicate ids, every agent
+    /// known, no unknown dependency, no cycle. A step's agent is
+    /// `compose.base_agent` when it composes one, else `agent`.
+    /// `known_agents = None` skips the agent check. Several leaves are fine:
+    /// the executor joins their outputs.
+    pub fn validate(&self, known_agents: Option<&[String]>) -> Result<(), PlanError> {
+        if self.steps.is_empty() {
+            return Err(PlanError::Empty);
+        }
         // duplicate IDs
         let mut seen = HashSet::new();
         for s in &self.steps {
@@ -110,9 +146,19 @@ impl Plan {
             }
         }
         // agent resolution
-        for s in &self.steps {
-            if !known_agents.iter().any(|a| *a == s.agent) {
-                return Err(PlanError::UnknownAgent(s.id.clone(), s.agent.clone()));
+        if let Some(known) = known_agents {
+            for s in &self.steps {
+                let name = s
+                    .compose
+                    .as_ref()
+                    .map_or(s.agent.as_str(), |c| c.base_agent.as_str());
+                if !known.iter().any(|a| a == name) {
+                    return Err(PlanError::UnknownAgent(
+                        s.id.clone(),
+                        name.to_string(),
+                        known.to_vec(),
+                    ));
+                }
             }
         }
         // dependency resolution
@@ -158,20 +204,7 @@ impl Plan {
                 .unwrap();
             return Err(PlanError::Cycle(cycle_id));
         }
-        // single leaf
-        let has_dep_on: HashSet<&StepId> = self.steps.iter().flat_map(|s| &s.depends_on).collect();
-        let leaves: Vec<&Step> = self
-            .steps
-            .iter()
-            .filter(|s| !has_dep_on.contains(&s.id))
-            .collect();
-        match leaves.len() {
-            0 => Err(PlanError::NoLeaf),
-            1 => Ok(()),
-            _ => Err(PlanError::MultipleLeaves(
-                leaves.into_iter().map(|s| s.id.clone()).collect(),
-            )),
-        }
+        Ok(())
     }
 
     /// Steps no other step depends on, in plan order: the outputs that make
@@ -211,6 +244,10 @@ mod tests {
         }
     }
 
+    fn known() -> Vec<String> {
+        vec!["x".to_string()]
+    }
+
     #[test]
     fn ready_steps_respects_dependencies() {
         let plan = Plan {
@@ -226,7 +263,10 @@ mod tests {
         let plan = Plan {
             steps: vec![step("a", "x", &["b"]), step("b", "x", &["a"])],
         };
-        assert!(matches!(plan.validate(&["x"]), Err(PlanError::Cycle(_))));
+        assert!(matches!(
+            plan.validate(Some(&known())),
+            Err(PlanError::Cycle(_))
+        ));
     }
 
     #[test]
@@ -235,7 +275,7 @@ mod tests {
             steps: vec![step("a", "x", &["ghost"])],
         };
         assert!(matches!(
-            plan.validate(&["x"]),
+            plan.validate(Some(&known())),
             Err(PlanError::UnknownDependency(_, _))
         ));
     }
@@ -246,20 +286,56 @@ mod tests {
             steps: vec![step("a", "ghost-agent", &[])],
         };
         assert!(matches!(
-            plan.validate(&["x"]),
-            Err(PlanError::UnknownAgent(_, _))
+            plan.validate(Some(&known())),
+            Err(PlanError::UnknownAgent(..))
         ));
     }
 
+    /// Parallel leaves are a valid plan: the executor joins their outputs.
     #[test]
-    fn validate_rejects_multiple_leaves() {
+    fn validate_accepts_parallel_leaves() {
         let plan = Plan {
             steps: vec![step("a", "x", &[]), step("b", "x", &[])],
         };
+        assert!(plan.validate(Some(&known())).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_and_duplicate_ids() {
         assert!(matches!(
-            plan.validate(&["x"]),
-            Err(PlanError::MultipleLeaves(_))
+            Plan { steps: vec![] }.validate(None),
+            Err(PlanError::Empty)
         ));
+        let dup = Plan {
+            steps: vec![step("a", "x", &[]), step("a", "x", &[])],
+        };
+        assert!(matches!(dup.validate(None), Err(PlanError::DuplicateId(_))));
+    }
+
+    /// A composed step is checked by its base agent (its `agent` is only a
+    /// label); `None` skips the agent check.
+    #[test]
+    fn validate_resolves_compose_base_agent() {
+        let mut composed = step("a", "label-only", &[]);
+        composed.compose = Some(AgentCompose {
+            base_agent: "x".into(),
+            skills: vec![],
+            tools: vec![],
+        });
+        let plan = Plan {
+            steps: vec![composed],
+        };
+        assert!(plan.validate(Some(&known())).is_ok());
+        let unknown_base = Plan {
+            steps: vec![step("a", "ghost", &[])],
+        };
+        let err = unknown_base.validate(Some(&known())).unwrap_err();
+        assert_eq!(err.step(), Some(&StepId::new("a")));
+        assert!(
+            err.to_string().contains("routable agents: [\"x\"]"),
+            "{err}"
+        );
+        assert!(unknown_base.validate(None).is_ok());
     }
 
     #[test]
@@ -271,7 +347,7 @@ mod tests {
                 step("c", "x", &["a", "b"]),
             ],
         };
-        assert!(plan.validate(&["x"]).is_ok());
+        assert!(plan.validate(Some(&known())).is_ok());
     }
 
     #[test]

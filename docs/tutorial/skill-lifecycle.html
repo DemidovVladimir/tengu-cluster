@@ -212,7 +212,7 @@
     <div class="stage-side">
       <ol class="captions">
         <li><code>tengu eval &lt;skill&gt;</code> reads <code>evals/prompts.yaml</code> (a list of rows, or the <code>fixtures</code> file the skill tools write; or <code>.md</code>) and <code>evals/config.toml</code>. Each row runs the config's default agent; <code>{TMP_WORKSPACE}</code> there becomes a fresh temp folder per row. With <code>[orchestrator]</code> a row runs through the planner and is recorded as its own trace run (<code>plan.*</code>, <code>step.*</code>).</li>
-        <li>A row's stubs answer its tool calls in order; other tools run for real. The judge sees the expected behaviour, every tool call and the final text, and answers pass or fail.</li>
+        <li>A row's stubs answer its tool calls in order; other tools run for real. An orchestrated row's steps are <code>run-agent</code> children, which stubs do not reach; its judge sees the plan and step events. The judge sees the expected behaviour, every tool call and the final text, and answers pass or fail.</li>
         <li>When <code>SKILL.md</code> declares <code>metrics</code>, every row is also scored by each one: six kinds, from a shell check to an LLM rubric.</li>
         <li>Each run appends one <code>history.jsonl</code> line per metric. <code>metrics.json</code> keeps the mean of the last 10 runs; below <code>min_pass_rate</code> a metric is gated.</li>
         <li><code>tengu skill evolve</code> scores a baseline first. The target is the gated metric with the lowest pass rate, or <code>--target-metric</code>, which must be gated.</li>
@@ -283,7 +283,7 @@
     <div class="card heart"><h3><code>llm_judge</code></h3><span class="k2">rubric_file</span><p>The judge reads the rubric, prompt, transcript and expected outcome; its <code>verdict</code> is the metric's result for that row.</p></div>
     <div class="card heart"><h3><code>description_trigger</code></h3><span class="k2">queries_file · runs_per_query 3 · holdout 0.4</span><p>Would the planner pick this skill? Strict majority of 3 votes per held-out query; passes at <code>min_pass_rate</code>, else 0.85.</p></div>
     <div class="card guard"><h3><code>shell_check</code></h3><span class="k2">cmd · expect_exit_code · expect_stdout_matches</span><p>Runs a command. Needs at least one expectation; exit 0 is required even when only a regex is set.</p></div>
-    <div class="card guard"><h3><code>script</code></h3><span class="k2">path → stdout {pass, score, notes}</span><p>Runs <code>sh &lt;path&gt;</code> with the row's <code>PROMPT</code>, <code>TRANSCRIPT</code> and <code>EXPECTED_OUTCOME</code> in its env.</p></div>
+    <div class="card guard"><h3><code>script</code></h3><span class="k2">path → stdout {pass, score, notes}</span><p>Runs <code>sh &lt;path&gt;</code> through the shell port (the <code>[egress]</code> wrapper, a 300 s timeout) in the workspace, with the row's <code>PROMPT</code>, <code>TRANSCRIPT</code> and <code>EXPECTED_OUTCOME</code> in its env. A failed run or a non-zero exit fails the row.</p></div>
     <div class="card hands"><h3><code>tool_assertion</code></h3><span class="k2">tool · action · key · assert</span><p>Calls a registered tool and checks its output. <code>tengu eval</code> runs it through the agent's tool executor, in the agent's workspace.</p></div>
     <div class="card data"><h3><code>dialog_replay</code></h3><span class="k2">from_message_index · delegate_metric</span><p>Scores the live conversation slice through a sibling <code>llm_judge</code> or <code>tool_assertion</code>. Eval rows have no conversation: fail.</p></div>
   </div>
@@ -400,6 +400,7 @@ tengu skill remove my-notes --tier project
     <li><span><b>A timeout is a fail.</b> A row past its <code>timeout_secs</code> fails without a judge call; malformed judge output fails with a preview.</span></li>
     <li><span><b>An orchestrated row's trace ends last.</b> With <code>[orchestrator]</code> the row awaits the metrics barrier, then reads every event sent to its observer, then shuts its trace gate and writes <code>run.closed</code> — no timed sleep; a timed-out row's turn is cancelled (<code>plan.completed</code>, dropped) first.</span></li>
     <li><span><b>Installs are checked first.</b> Symlink escapes are rejected; <code>--strict</code> refuses a caution or dangerous verdict; an existing target is never overwritten.</span></li>
+    <li><span><b>Agent writes are scanned first.</b> <code>manage_skill</code> runs the same scan on a <code>create</code>, <code>edit_body</code> or <code>patch</code> before it writes (<code>scanner::scan_file</code>) and refuses a caution or dangerous verdict, like <code>--strict</code>: no human approves it.</span></li>
     <li><span><b>Busy skills can't vanish.</b> <code>remove</code> and <code>manage_skill delete</code> refuse while an evolve worktree for that skill exists.</span></li>
   </ul>
 </section>
@@ -433,7 +434,8 @@ tengu skill remove my-notes --tier project
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/eval.rs</code></td><td><code>tengu eval</code>: rows, stubs, judge, report, exit codes; an orchestrated row's observer and trace close (<code>close_row</code>)</td></tr>
+        <tr><td><code>src/adapters/inbound/eval/</code></td><td><code>tengu eval</code>: discovery, eval config, the row driver (<code>row.rs</code>), report, exit codes; an orchestrated row's observer and trace close (<code>close_row</code>)</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/eval.rs</code></td><td>the eval logic, no IO: rows, stubs, the judge, report types, transcript text</td></tr>
         <tr><td><code>src/adapters/inbound/evolve.rs</code></td><td>the evolve driver: baseline, improver call, cycles, gate, apply</td></tr>
         <tr><td><code>src/application/skills/lifecycle/evolve.rs</code></td><td>target pick, <code>pick_best</code>, proposal apply, <code>editable_by_learner</code></td></tr>
         <tr><td><code>src/application/skills/lifecycle/metrics.rs</code></td><td><code>MetricSpec</code> and its validation</td></tr>
@@ -453,7 +455,7 @@ tengu skill remove my-notes --tier project
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

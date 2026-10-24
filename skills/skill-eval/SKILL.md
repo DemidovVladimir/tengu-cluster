@@ -19,6 +19,6 @@ The Phase-0 drift-audit workflow has been subsumed by the harness-owned skill li
 | `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine -> symlink-aware extract -> validate frontmatter -> scan -> atomic move. `--strict` refuses on caution/dangerous verdict. |
 | `tengu skill seed <name> [<resources_dir>] [--tier T] [--description S] [--learner-facing] [--yes]` | Teacher onboarding: drop a SKILL.md template + copy a folder of materials (optional; omitted = an empty folder) into `skills/<name>/resources/`. Atomic. Defaults to `learner_facing: true` so `adjust yourself` can mutate it. |
 
-Every skill declares its own metrics in SKILL.md frontmatter. See `skills/skill-creator/SKILL.md` for authoring guidance and `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` section 6 for the frontmatter contract.
+Every skill declares its own metrics in SKILL.md frontmatter. See `skills/skill-creator/SKILL.md` for authoring guidance and `docs/skills.md` § Metrics & Evolution for the frontmatter contract.
 
 **This skill is documentation-only.** It does not call any tool; it points to the CLI.

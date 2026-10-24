@@ -1,36 +1,19 @@
-//! Pin hashes, pure (`docs/lineage-2026-10-06.md` § 2): what a generation's
+//! Pin hashes, pure (`docs/lineage.md` § 2): what a generation's
 //! `[[pins]]`, a frozen manifest and a seal hash. The adapters read the files
 //! (`adapters/outbound/lineage/probe.rs`, `config/lineage.rs`) and hand the
 //! text here.
 //!
 //! | Target | sha256 (64 hex, never shortened) of |
 //! |---|---|
-//! | a record file ([`toml_digest`]) | the canonical JSON (`domain/canonical.rs`) of the file parsed TOML → JSON — comments and layout do not count |
+//! | a record file (`canonical::toml_digest`) | the canonical JSON (`domain/canonical.rs`) of the file parsed TOML → JSON — comments and layout do not count |
 //! | `config:<sandbox>/<dotted path>` ([`config_pin`]) | the canonical JSON of that value of `sandboxes/<sandbox>/config.toml` (raw text: `${VAR}` not substituted) |
 //! | `spec:<sandbox>/<strategy>` ([`spec_pin`]) | the normalized spec = a run's `spec_sha256` (`StrategySpec::from_value` → `spec::spec_sha256`) |
 //! | `tool_schema:<tool>` ([`schema_pin`]) | the canonical JSON of the catalog tool's input schema |
-//! | `skill:<name>` · `repo:<path>` ([`bytes_sha256`]) | the file's bytes |
-
-use serde_json::Value;
-use sha2::{Digest, Sha256};
+//! | `skill:<name>` · `repo:<path>` ([`sha256_hex`]) | the file's bytes |
 
 use crate::domain::backtest::spec::{spec_sha256, StrategySpec};
-use crate::domain::canonical::canonical_sha256;
-
-/// TOML text → JSON (tables → objects, arrays kept in order).
-pub fn toml_to_json(text: &str) -> Result<Value, String> {
-    toml::from_str::<Value>(text).map_err(|e| format!("TOML: {e}"))
-}
-
-/// A record file's digest (module table).
-pub fn toml_digest(text: &str) -> Result<String, String> {
-    toml_to_json(text).map(|v| canonical_sha256(&v))
-}
-
-/// sha256 of bytes, 64 lowercase hex.
-pub fn bytes_sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
+use crate::domain::canonical::{canonical_sha256, toml_to_json};
+use serde_json::Value;
 
 /// The value at `path` of a TOML text.
 pub fn config_value(text: &str, path: &[String]) -> Result<Value, String> {
@@ -84,6 +67,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::domain::canonical::toml_digest;
 
     const CONFIG: &str = r#"
 # a comment never counts
@@ -142,9 +126,5 @@ direction = "fade"
         );
         assert_eq!(spec_pin(&explicit, "weekend_fade").unwrap(), pin);
         assert!(spec_pin(CONFIG, "nope").is_err());
-        assert_eq!(
-            bytes_sha256(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
     }
 }

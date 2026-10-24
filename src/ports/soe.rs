@@ -22,9 +22,6 @@
 //! | `cycles` | the run ids under `cycles/`, sorted |
 //! | `append_line` · `lines` | `<state>/<log>.jsonl` ([`StateLog::file_name`]): one line (no `\n` inside) per call with one `write_all`, its 1-based number returned (a holdout read's `#n`); never rewritten; read back in order |
 
-// Some helpers wait for their consumers: the `soe_*` tools and `tengu soe`.
-#![allow(dead_code)]
-
 use std::fmt;
 
 use async_trait::async_trait;
@@ -137,6 +134,7 @@ pub(crate) enum StateLog {
 }
 
 impl StateLog {
+    #[cfg(test)]
     pub(crate) const ALL: [StateLog; 8] = [
         StateLog::Candidates,
         StateLog::Episodes,

@@ -1,0 +1,124 @@
+# Tengu Studio — operator doc (2026-10-08)
+
+`tengu studio --sandbox <s>`: a local browser page over one sandbox — the validated workflow graph, every recorded run (live or replayed), the `doctor --live` health and, where allowed, Play / Stop of the sandbox's runtime. The page draws; Rust decides everything (graph, colours, legality, health, control verdicts). On main since #44 (`f7ac9a5636e2493e3839e896cba9951a2d41aefb`, 2026-10-09); in the default build (feature `studio`, the Docker image too) since 2026-10-09. Plan + tracker: `docs/plans/TENGU_STUDIO_PLAN.md`. Event envelope + coverage: `docs/runtime.md` § Trace. Tutorial: `docs/tutorial/studio.html`. Editor (not built): `docs/archive/2026-10/studio-editor-design-2026-10-08.md`.
+
+## Quick start (the safe lab)
+
+```bash
+cd <repo or worktree root>                    # --sandbox is cwd-relative: sandboxes/<s>/config.toml
+export TENGU_HOME="$HOME/tengu-lab/home"      # FIRST — never ~/.tengu (a parent .env may set it)
+mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
+cargo build --release                         # the server is in the default build (feature `studio`)
+target/release/tengu studio --sandbox control-loop-lab [--port <n>] [--bind 127.0.0.1|::1] [--allow-control]
+# binary: $CARGO_TARGET_DIR/release/tengu when CARGO_TARGET_DIR is set · --port 0 or omitted = any free port
+# stdout: Studio: http://127.0.0.1:<port>/#t=<64 hex>   — open exactly this URL; logs go to stderr + $TENGU_HOME/logs/tengu.log (as tengu run)
+```
+
+`OPENROUTER_API_KEY` (name only) is needed only for Play / events (real Jev); viewing works without it. `tengu studio graph --sandbox <s> [--map <file>]` prints the graph as JSON in every build. CLI-only path + acceptance matrix: `docs/control-loop-lab.md`.
+
+| Page region | Shows |
+|---|---|
+| Header | sandbox, config hash, runtime state, run id, runtime id, model, Live / Replay, health |
+| Graph · inspector | nodes in Rust's columns; a node = its latest event's tone, grey = not legal this step, lit edge = an `action.*` / `tool.*` / `step.*` event; click = validated config section + evidence files |
+| Timeline · runs | every event in `seq` order with filters; every run (live · closed · open); Replay slider by `seq`; place kept in the URL fragment |
+| Controls | Play · Stop · scenario + Send — only when `GET /api/v1/control` says control is on |
+
+## Webhooks and orchestration (2026-10-09)
+
+| What | Where it shows |
+|---|---|
+| `[orchestrator]` in the config | graph: `planner` (column 2, knobs of `[orchestrator]`) —delegates→ each routable `agent:<a>` (a `description`) —calls→ its catalog `tool:<a>/<t>`; a planner webhook endpoint `trigger:webhook/<e>` —fires→ `planner`; `escalation:<l>` —escalates→ `planner` |
+| a webhook request (`tengu run` / Play, `tengu webhooks`) | `trigger:webhook/<e>` lights from `trigger.webhook` then `webhook.responded` (the code); its loop or plan events hang under it, one session |
+| a plan (`tengu chat`, `tengu telegram`, an eval row, a planner webhook, an escalation) | `planner` from `plan.*`, `agent:<a>` from `step.*`, the step's `run-agent` tool calls on `tool:<a>/<t>`; lit `planner → agent` and `agent → tool` |
+| run kinds | `tengu trace runs` / the runs list: `run` · `decide` · `studio` · `webhooks` · `chat` · `telegram` · `eval`; the header's runtime shows `none (tengu <kind>)` for all but `run` |
+
+A `tengu chat` / `telegram` / `eval` run is recorded only with `[orchestrator]`, under sandbox `default` for a `-c` config. Event list + live check: `docs/runtime.md` § Trace.
+
+## Routes (`src/adapters/inbound/studio/mod.rs`)
+
+| Route | Serves |
+|---|---|
+| GET `/` · `/assets/<file>` | the page, compiled in (`include_str!` of `web/studio/`) |
+| GET `/api/v1/meta` · `graph[?map=<sha256>]` · `health` | sandbox, hash, tone legend · the graph (a kept map re-applied) · heartbeat + `doctor --live` checks |
+| GET `/api/v1/runs` · `runs/<id>/events?after=&limit=` · `runs/<id>/board?upto=` | runs + state · events page (≤ 1000) with each `view` · the run folded at `seq` |
+| GET `/api/v1/nodes/<node_id>[?map=]` | the validated config behind a node (never TOML text), edges, evidence |
+| GET `/api/v1/runs/<id>/stream` · `live/stream` | SSE `trace` · `run` (attached / restarted / waiting) · `lagged` (resume by `Last-Event-ID`) |
+| GET `/api/v1/control` · POST `control/{play,stop,event}` | control state + each action ok or why not · § Play / Stop |
+
+## Security model
+
+| Threat | Defence (`guard.rs`) |
+|---|---|
+| remote access | binds loopback only (`127.0.0.1`, `::1`); any other `--bind` refused before listening |
+| token theft | 32 random bytes per process, printed once on stdout in the URL fragment (never sent by the browser), kept per tab, dropped from the address bar; constant-time compare; GET: `X-Studio-Token` or `?token=` (EventSource) — else 401 |
+| CSRF from another page | any request but GET / HEAD — on any path, however spelled (`//api/…`, `/%61pi/…`, `/assets/../api/…`) — needs all three: token **header** (never query), `Origin` = this server, `Sec-Fetch-Site: same-origin` — else 403; JSON only (415), ≤ 1 MiB (413), unknown fields 400, `scenario` / `loop` 1–128 bytes (400); no CORS headers, preflight 403 |
+| DNS rebinding | `Host` ≠ `<bound ip>:<port>` / `localhost:<port>` ⇒ 421, every method |
+| secrets in the UI | events, graph attrs and node details redacted before write / serve (secrets → `[REDACTED]`, URLs → `<url>`) |
+| logic in the browser | none: tones (the control verdict's too), legal sets, health, control verdicts arrive computed — `studio::tests::page_compares_no_status_or_tone`; CSP `default-src 'self'`, no CDN, no telemetry (`tests/language_policy.rs`) |
+| money | control never for a `[generation]`-bound (W1) or hardened (`[risk]` / `[soe]` / signer) sandbox — `[studio] control = true` there fails the load |
+| load | ≤ 16 SSE streams (503), 256 live events buffered per client then `lagged` |
+
+## Play / Stop (`docs/plans/TENGU_STUDIO_PLAN.md` § 6)
+
+| Sandbox | Control |
+|---|---|
+| `[studio] control = true` (only `control-loop-lab`) · or `--allow-control` | on |
+| no `[studio]` | off — read-only; every POST 403 with the reason |
+| `[generation]`-bound · hardened | never |
+
+| Request | Does | Answers |
+|---|---|---|
+| POST `play` `{"scenario"?}` | `inbound::run::start_session` in the Studio process — `tengu run`'s leases, loops, feeds, heartbeat, recording | 200 running · 409 lease held elsewhere (Studio then shows `attached`, read-only) · 409 already running here (Stop first) · 422 · 500 |
+| POST `stop` | `Stopper::stop("studio stop")` = the SIGINT drain (≤ `shutdown_grace_secs`) | 200 drained (`lease_released`) · 202 still draining after grace + 5 s · 409 not Studio's runtime |
+| POST `event` `{"scenario", "loop"?}` | `sandboxes/<s>/scenarios/<name>.json` (not `*.map.json`) into the owned loop; session `studio-<scenario>-<uuid>` | 202 · 409 nothing running · 422 · 429 queue full |
+| Studio SIGINT / SIGTERM | drains its runtime first, then exits 0; a second signal exits 130 | — |
+
+States: `idle` · `attached` · `starting` · `running` · `stopping` · `stopped` · `failed`. Play runs the config this Studio loaded and serves (its `config_hash`): after editing the sandbox, restart Studio. A CLI `tengu run` is refused while Studio runs one, and the reverse. Each request + verdict lands in Studio's own recording (`kind = "studio"`, `tengu trace runs`). Recorded run: `docs/archive/2026-10/studio-acceptance-2026-10-08.md`. curl helper (start Studio with stdout to `studio.out`):
+
+```bash
+URL=$(sed -n 's/^Studio: //p' studio.out); BASE=${URL%%/#t=*}; TOK=${URL##*#t=}
+G() { curl -s -H "X-Studio-Token: $TOK" "$BASE$1"; }                       # G /api/v1/control
+P() { local body=${2:-'{}'}; curl -s -X POST -H "X-Studio-Token: $TOK" -H "Origin: $BASE" \
+        -H "Sec-Fetch-Site: same-origin" -H "Content-Type: application/json" --data "$body" "$BASE$1"; }
+# P /api/v1/control/play · P /api/v1/control/event '{"scenario":"act"}' · P /api/v1/control/stop
+```
+
+## Live validation (2026-10-09, real Jev, on main since #44)
+
+Coordinator's run, on `control-loop-lab`, of a build with the `studio` feature (then opt-in), lab `TENGU_HOME` `~/tengu-lab/home-validation-2026-10-09`: Play → Send `act` → Send `tool-error` → Stop, driven through the API with curl (the guard proofs as in the helper above; Claude in Chrome was not connected, so no click-through), pages captured with headless Chrome (temp profile, loopback only). Guards checked on the same server: no token 401, POST without proofs 403, foreign `Host` 421; a second `tengu run` exit 1 while Studio held the runtime. Screenshots in `docs/studio-evidence/`:
+
+| Screenshot | Moment | Shows |
+|---|---|---|
+| [`01-idle.png`](studio-evidence/01-idle.png) | before Play | control `idle`, health `not live` (no heartbeat), the validated graph (16 nodes · 17 edges) before any runtime, Studio's own recording `d9bcce3d-7f95-4116-af42-26b0b812c1ee` open |
+| [`02-running.png`](studio-evidence/02-running.png) | after Play + both events | runtime `running`, run `cbd8cd05-30fb-4177-aa99-0b978f0e83e5`, runtime id `Vladimirs-MacBook-Pro-2.local:68658:92f5dda8-115b-4cef-8289-af4992f9b564`, model `typesafe/jev-1.13-20260917`, health `live`; nodes in their latest event's tone, lit `action.*` / `tool.*` edges; loop `demo` `completed 9` = health `done 9` |
+| [`03-replay.png`](studio-evidence/03-replay.png) | after Stop | the closed run in Replay at `seq` 60 of 117; the Stop verdict `stop requested (studio stop)` |
+
+| Trace fact (`logs/trace/control-loop-lab/cbd8cd05-30fb-4177-aa99-0b978f0e83e5.jsonl`) | Value |
+|---|---|
+| events · config hash | 117 · one `6b52fc14d7212ed029da0f2bc2eb0f2a8e12e14ddd04c7465f1bc91be65dea2f` |
+| Jev | 12 `jev.completed`, every one `typesafe/jev-1.13-20260917` |
+| `act` (session `studio-act-3ef82cd4-4280-4b06-b7ed-23ea2301258a`) | `tool:lab/write_file` ok (seq 34), `action:demo/write_marker` ok (seq 35) |
+| `tool-error` (session `studio-tool-error-b9e6391e-221f-48ad-81b8-014a8d64099f`) | `read_probe` failed (seq 47), then `hold` escalated: confidence 0.69 < `act_at` 0.8 (seq 53) |
+| Stop | `runtime.stopped` `studio stop`, loop `demo` 10 accepted · 10 completed, `lease_released: true` (seq 117) |
+| Studio's recording | 12 events: `run.opened` → `studio.started` → `studio.control` (Play, 2 events, Stop: request + verdict each) → `studio.runtime` → `studio.stopped` |
+| Replay | identical to the live sequence (coordinator's check) |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `the Studio server requires: cargo build --features studio` | a `--no-default-features` build without `studio` | rebuild with the default features, or add `--features studio` |
+| `Failed to load sandbox '<s>' from sandboxes/<s>/config.toml` | cwd is not the repo / worktree root | `cd` there |
+| `--bind <ip>: refused — … loopback only` | non-loopback bind | `127.0.0.1` or `::1`; remote access is not supported |
+| page: "No Studio token: open the exact URL…" · API 401 | URL without `#t=`, or a token of an earlier process | open the URL this process printed |
+| 403 on a curl POST | a CSRF proof missing (`X-Studio-Token` header, `Origin`, `Sec-Fetch-Site: same-origin`) | send all three; JSON body |
+| 403 `off: read-only …` · 403 `refused: …` · a load error naming `[studio]` | control off · a W1-bound / hardened sandbox (never controllable) · `control = true` set there | `[studio] control = true` or `--allow-control` · use `tengu run` and its signals · remove the key |
+| 421 | `Host` is a proxy / DNS name | `127.0.0.1:<port>` or `localhost:<port>` |
+| health not live, "waiting: no heartbeat" | no runtime under **this** `TENGU_HOME` | Play, or `tengu run` with the same env |
+| `attached`, every button refused | a CLI `tengu run` holds the lease | Ctrl-C it, or watch read-only |
+| Play 409, nothing running | a crashed holder's lease | retry after ≤ 30 s |
+| files appear in `~/.tengu/logs` | `TENGU_HOME` not exported (dotenvy reads the nearest parent `.env`; a worktree gets the main checkout's) | stop; export first; never clean `~/.tengu` |
+| old page after a `web/studio/` edit | assets are compiled in | rebuild |
+| run shows `config changed` | recorded under another config hash | expected: drawn on the current graph, unknown nodes listed |
+
+Cleanup: the guarded block in `docs/control-loop-lab.md` § Cleanup (lab paths only; never `tengu prune`, never `~/.tengu`). Smoke 2026-10-09 (release build with the `studio` feature, lab home, no Play): `--bind 0.0.0.0` exit 1 · URL token 64 hex · `meta` control on · `graph` 16 nodes / 17 edges · health not live · no token 401 · POST without `Origin` / `Sec-Fetch-Site` 403 · foreign `Host` 421 · unknown scenario 422 · SIGINT exit 0 · one `kind = "studio"` run of 5 events ending `studio.stopped`.

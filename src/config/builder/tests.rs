@@ -1,3 +1,9 @@
+//! Builder config tests: engines = `ENGINES`, every template compiles clean
+//! and loads, every field round-trips through the `deny_unknown_fields`
+//! structs, wire states, delegation, the Cloudflare store (offered; needs the
+//! proxy card), kept sections, view-only rules, traversal names, a current
+//! file that does not parse.
+
 use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
@@ -303,16 +309,16 @@ fn cloudflare_store_needs_the_proxy_card() {
 
 #[test]
 fn sections_not_on_the_canvas_are_kept() {
-    let current = "runtime_profile = \"minimal\"\n\n[hub]\nport = 9999\n\n[agents.gone]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+    let current = "[recorder]\nheartbeat_secs = 99\n\n[runtime]\nmax_decisions_in_flight = 7\n\n[agents.gone]\nengine = \"openrouter\"\nmodel = \"m\"\n";
     let b = template("blank", "t").unwrap();
     let c = compile(&b, &facts(), Some(current));
-    assert_eq!(c.kept, vec!["hub", "runtime_profile"]);
+    assert_eq!(c.kept, vec!["recorder", "runtime"]);
     assert!(!c.toml.contains("[agents.gone]"), "agents are owned");
     let r = loads(&c.toml);
     assert!(r.ok, "{:?}\n{}", r.errors, c.toml);
     let cfg: Config = toml::from_str(&c.toml).unwrap();
-    assert_eq!(cfg.runtime_profile, "minimal");
-    assert_eq!(cfg.hub.port, 9999);
+    assert_eq!(cfg.recorder.heartbeat_secs, 99);
+    assert_eq!(cfg.runtime.max_decisions_in_flight, 7);
 }
 
 #[test]

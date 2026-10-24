@@ -1,5 +1,5 @@
 //! Backtest run dirs, read-only (`docs/xlab-2026-10-01.md` § 10 run dir,
-//! `docs/lineage-2026-10-06.md` § 5): the attempts behind search accounting
+//! `docs/lineage.md` § 5): the attempts behind search accounting
 //! ([`RunDirs`]) and the figures a result's `extract` recomputes
 //! ([`ReportJson`]).
 //!
@@ -34,7 +34,9 @@ pub(crate) struct RunDirs {
 
 impl RunDirs {
     fn backtests(&self, state: &str) -> PathBuf {
-        self.tengu_home.join("state").join(state).join("backtests")
+        crate::config::paths::Layout::at(&self.tengu_home)
+            .state_dir(state)
+            .join("backtests")
     }
 }
 

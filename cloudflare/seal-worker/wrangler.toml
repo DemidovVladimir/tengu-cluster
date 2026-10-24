@@ -1,4 +1,4 @@
-# tengu-seal Worker — see docs/sealed-keys-2026-10-09.md and
+# tengu-seal Worker — see docs/sealed-keys.md and
 # docs/cloudflare-secrets-setup.html (step-by-step setup).
 #
 # No secrets in this file. Secrets live in Cloudflare only (dashboard, or):

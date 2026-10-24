@@ -1,4 +1,4 @@
-//! Tengu Studio use cases (`TENGU_STUDIO_PLAN.md` § 5): read models over
+//! Tengu Studio use cases (`docs/plans/TENGU_STUDIO_PLAN.md` § 5): read models over
 //! the validated config and the execution trace. The browser only draws
 //! what these return; it owns no workflow, risk, scope or colour rule.
 //!

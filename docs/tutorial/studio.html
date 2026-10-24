@@ -258,7 +258,7 @@
   <div class="sec-head">
     <span class="kicker">No guessed animation</span>
     <h2 id="s-ui">What each Studio visual reads</h2>
-    <p>Every colour and highlight the plan asks for points to a persisted event and one of its fields. The full table is in <code>docs/runtime-2026-09-30.md</code> § Trace.</p>
+    <p>Every colour and highlight the plan asks for points to a persisted event and one of its fields. The full table is in <code>docs/runtime.md</code> § Trace.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -408,7 +408,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Graph, a recorded run, then Play</h2>
-    <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab-2026-10-08.md</code>). Logs go to stderr (the server: also <code>$TENGU_HOME/logs/tengu.log</code>, as <code>tengu run</code>), so stdout pipes straight into <code>jq</code>. Ids below are examples.</p>
+    <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab.md</code>). Logs go to stderr (the server: also <code>$TENGU_HOME/logs/tengu.log</code>, as <code>tengu run</code>), so stdout pipes straight into <code>jq</code>. Ids below are examples.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln o"># export TENGU_HOME="$HOME/tengu-lab/home" first — never ~/.tengu</span>
@@ -427,7 +427,7 @@
 <span class="ln o">7  tool.completed    ok       tool:lab/write_file</span>
 <span class="ln o">8  action.completed  ok       action:demo/write_marker</span>
 <span class="ln o">11 action.selected   ok       action:demo/hold</span>
-<span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/studio-trace-evidence-2026-10-08.md</span>
+<span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/archive/2026-10/studio-trace-evidence-2026-10-08.md</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
 <span class="ln o"># the browser UI: the default build carries it (feature studio; a --no-default-features build without it: an error naming the flag)</span>
 <span class="ln cmd"><span class="p">$ </span>cargo build --release</span>
@@ -445,7 +445,7 @@
 <span class="ln o">studio-act-759ba3d9-dc8a-4bc3-8d44-1cb9b00c7898</span>
 <span class="ln cmd"><span class="p">$ </span>P /api/v1/control/stop '' | jq -c '.end | {reason, lease_released}'</span>
 <span class="ln o">{"reason":"studio stop","lease_released":true}</span>
-<span class="ln o"># example run of 2026-10-09; the full record: docs/studio-acceptance-2026-10-08.md</span></pre>
+<span class="ln o"># example run of 2026-10-09; the full record: docs/archive/2026-10/studio-acceptance-2026-10-08.md</span></pre>
   </div>
 </section>
 
@@ -453,7 +453,7 @@
   <div class="sec-head">
     <span class="kicker">Built 2026-10-10</span>
     <h2 id="s-editor">The editor: the sandbox builder</h2>
-    <p><code>tengu studio --sandbox &lt;s&gt; --allow-edit</code> also serves a drag-and-drop builder at <code>/builder</code> (<code>tengu sandbox new</code> opens it on a new sandbox). Without the flag every builder route is 404. The design rules (<code>docs/studio-editor-design-2026-10-08.md</code>) hold, with one change: the builder rewrites the sandboxes it made, never a hand-written one. Full page: <a href="builder.html">Sandbox builder</a>.</p>
+    <p><code>tengu studio --sandbox &lt;s&gt; --allow-edit</code> also serves a drag-and-drop builder at <code>/builder</code> (<code>tengu sandbox new</code> opens it on a new sandbox). Without the flag every builder route is 404. The design rules (<code>docs/archive/2026-10/studio-editor-design-2026-10-08.md</code>) hold, with one change: the builder rewrites the sandboxes it made, never a hand-written one. Full page: <a href="builder.html">Sandbox builder</a>.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -487,10 +487,10 @@
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> and <code>TraceReader</code></td></tr>
         <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow</td></tr>
         <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + run ids) for each loop</td></tr>
-        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>DraftBuffer</code> / <code>replay_child</code>: a <code>run-agent</code> child's tool events, written by the parent</td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>child_draft</code> / <code>replay_child</code>: a <code>run-agent</code> step's tool events, from its journal, written by the parent</td></tr>
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request; <code>tengu webhooks</code>' own recording (<code>run.closed</code>, after every turn it owns has ended)</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request, in the runtime's recording (<code>tengu webhooks</code> = the runtime with no feeds)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code> · <code>events.rs</code></td><td>the bridge: each <code>OrchestratorEvent</code> written as <code>plan.*</code> / <code>step.*</code> / <code>metrics.recorded</code> when the bus sends it; a step's cause for its <code>run-agent</code> child</td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
         <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (feature <code>studio</code>, default): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
@@ -507,11 +507,11 @@
       </tbody>
     </table>
   </div>
-  <p class="note">Related: <a href="trace.html">Execution trace</a> (one run, event by event; safety; <code>tengu trace</code>), <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>. Operator doc (quick start, routes, security, troubleshooting): <code>docs/studio-2026-10-08.md</code>.</p>
+  <p class="note">Related: <a href="trace.html">Execution trace</a> (one run, event by event; safety; <code>tengu trace</code>), <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>. Operator doc (quick start, routes, security, troubleshooting): <code>docs/studio.md</code>.</p>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

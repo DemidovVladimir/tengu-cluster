@@ -162,7 +162,6 @@ pub(crate) struct CycleOutcome {
     pub decision_sha256: String,
     pub manifest_sha256: String,
     pub episodes: usize,
-    pub stages: Vec<StageRun>,
     /// The decided week (`portfolio` is its portfolio): what replay scoring reads.
     pub week: Week,
 }
@@ -617,7 +616,7 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
         cycle_id: cycle_id.clone(),
         decided_at_ms: p.decided_at_ms,
         mode,
-        packet_sha256: sha256_hex(&canonical_json(&serde_json::to_value(&packet)?)),
+        packet_sha256: sha256_hex(canonical_json(&serde_json::to_value(&packet)?)),
         generation: p.generation.clone(),
         architect: p.architect.clone(),
         critic: p.critic.clone(),
@@ -939,7 +938,7 @@ impl Claimed<'_> {
             .push(local_run(Stage::Report, elapsed(env.clock, t)));
         let ops = cycle_ops(
             &self.head.cycle_id,
-            stages.runs.clone(),
+            stages.runs,
             source_failures(&self.packet, self.head.decided_at_ms),
             p.token_prices.as_ref(),
         )
@@ -991,7 +990,6 @@ impl Claimed<'_> {
             decision_sha256: decision,
             manifest_sha256,
             episodes: learned.episodes.len(),
-            stages: stages.runs,
             week,
         })
     }

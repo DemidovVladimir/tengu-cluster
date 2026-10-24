@@ -46,7 +46,7 @@ pub(crate) enum MetricSpec {
     /// Reflective eval — score the *current dialog slice* by delegating to a
     /// sibling metric (`llm_judge` or `tool_assertion`) on the same skill.
     /// See `metric_kinds/dialog_replay.rs` and Batch 8 of
-    /// `docs/skill-research-2026-04-28.md`.
+    /// `docs/skill-research.md`.
     DialogReplay {
         name: String,
         /// 0-based message index where the slice starts. End is current
@@ -64,7 +64,7 @@ pub(crate) enum MetricSpec {
     /// declarative metric kind. Asks a judge LLM whether the planner would
     /// route to this skill given a curated should/shouldn't-trigger query
     /// list. See `metric_kinds/description_trigger.rs` and Batch 4 of
-    /// `docs/skill-research-2026-04-28.md`.
+    /// `docs/skill-research.md`.
     DescriptionTrigger {
         name: String,
         /// Path (relative to skill_dir) to a YAML queries file with
@@ -150,9 +150,7 @@ pub(crate) struct MetricRunCtx<'a> {
     pub judge: Option<Arc<dyn JudgeClient>>,
     // Fields needed for live tool dispatch via `tool_assertion`.
     pub http: Option<&'a reqwest::Client>,
-    pub memory_manager: Option<&'a dyn crate::ports::memory::MemoryService>,
     pub secret_registry: Option<&'a crate::domain::secrets::SecretRegistry>,
-    pub activity: Option<&'a dyn crate::ports::tool_activity::ToolActivityPort>,
     pub tool_scopes: Option<&'a std::collections::HashMap<String, crate::domain::scope::ToolScope>>,
     /// Conversation slice the metric may inspect (used by `dialog_replay`).
     /// `None` outside of in-chat reflective evals; pre-authored fixtures

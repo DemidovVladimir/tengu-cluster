@@ -21,21 +21,16 @@
 //! fade trades only breaks that hold a Saturday and a Sunday
 //! (`domain/xm/weekend_fade.rs::fade_window`).
 
-// Config builds the calendars, `domain/schedule.rs` parses clock times here
-// and the weekend fade reads the weekend clock; session reads land with the
-// market-hours gates (M1+).
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Weekday};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::time::{parse_hm, DAY_MIN};
 use crate::domain::tz::Zone;
 
-/// Minutes in a day.
-pub const DAY_MIN: u32 = 1440;
 /// Minutes in a week (weekly windows count from Monday 00:00 local).
+#[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
 pub const WEEK_MIN: u32 = 7 * DAY_MIN;
 /// Bound on every day walk (`prev_trading_day`, `next_trading_day`,
 /// `weekend_window`): a calendar without a trading day in this span yields
@@ -45,6 +40,7 @@ const MAX_WALK_DAYS: u32 = 31;
 /// Session state at an instant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
 pub enum Session {
     Open,
     Pre,
@@ -54,6 +50,7 @@ pub enum Session {
 }
 
 impl Session {
+    #[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
     pub fn as_str(self) -> &'static str {
         match self {
             Session::Open => "open",
@@ -62,10 +59,6 @@ impl Session {
             Session::Overnight => "overnight",
             Session::Closed => "closed",
         }
-    }
-
-    pub fn is_closed(self) -> bool {
-        self == Session::Closed
     }
 }
 
@@ -78,6 +71,7 @@ pub enum Calendar {
 }
 
 impl Calendar {
+    #[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
     pub fn session(&self, utc_ms: i64) -> Session {
         match self {
             Calendar::Exchange(c) => c.session(utc_ms),
@@ -155,6 +149,7 @@ impl ExchangeCalendar {
     }
 
     /// A trading day listed in `early_closes` (with `early_close` set).
+    #[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
     pub fn is_early_close(&self, date: NaiveDate) -> bool {
         self.early_close.is_some() && self.early_closes.contains(&date) && self.is_trading_day(date)
     }
@@ -260,6 +255,7 @@ pub struct WeeklyWindow {
 }
 
 impl WeeklyWindow {
+    #[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
     pub fn session(&self, utc_ms: i64) -> Session {
         let local = self.zone.to_local(utc_ms);
         let (_, m) = local_minute(local);
@@ -277,6 +273,7 @@ impl WeeklyWindow {
 }
 
 /// `x` in the cyclic half-open range `[from, to)`; `to <= from` wraps.
+#[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
 fn in_cyclic(from: u32, to: u32, x: u32) -> bool {
     if from < to {
         (from..to).contains(&x)
@@ -285,18 +282,9 @@ fn in_cyclic(from: u32, to: u32, x: u32) -> bool {
     }
 }
 
+#[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
 fn local_minute(local: NaiveDateTime) -> (NaiveDate, u32) {
     (local.date(), local.hour() * 60 + local.minute())
-}
-
-/// `"HH:MM"` (00:00–23:59) → minutes after midnight.
-pub fn parse_hm(s: &str) -> Option<u32> {
-    let (h, m) = s.trim().split_once(':')?;
-    if h.len() != 2 || m.len() != 2 {
-        return None;
-    }
-    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
-    (h < 24 && m < 60).then_some(h * 60 + m)
 }
 
 /// `"Sun 20:00"` (three-letter day, any case) → minutes after Monday 00:00.
@@ -406,7 +394,6 @@ mod tests {
             ],
         );
         assert_eq!(Session::Overnight.as_str(), "overnight");
-        assert!(Session::Closed.is_closed() && !Session::Pre.is_closed());
     }
 
     #[test]
@@ -618,11 +605,6 @@ mod tests {
 
     #[test]
     fn parsers() {
-        assert_eq!(parse_hm("09:30"), Some(570));
-        assert_eq!(parse_hm("23:59"), Some(1439));
-        for bad in ["24:00", "9:30", "09:60", "0930", "", "ab:cd"] {
-            assert_eq!(parse_hm(bad), None, "{bad:?}");
-        }
         assert_eq!(parse_week_hm("Mon 00:00"), Some(0));
         assert_eq!(parse_week_hm("sun 20:00"), Some(6 * DAY_MIN + 1200));
         assert_eq!(parse_week_hm("FRI 17:00"), Some(4 * DAY_MIN + 1020));

@@ -25,13 +25,14 @@ use super::{SignerSource, SolanaShared};
 use crate::adapters::outbound::solana::privy::PrivySigner;
 use crate::adapters::outbound::solana::rpc::SolanaRpc;
 use crate::adapters::outbound::solana::send::{Pipeline, TxPlan};
+use crate::domain::base58::bs58_encode;
 use crate::domain::lp::perps::{
     decode_position_request, JupPositionRequest, POSITION_REQUEST_DISC,
 };
 use crate::domain::lp::snapshot::{LpControllerState, LP_STATE_TTL_MS};
 use crate::domain::observation::{now_ms, ObsSource, Observation, Observed};
 use crate::domain::scope::ToolScope;
-use crate::domain::solana::{bs58_encode, ids, Pubkey};
+use crate::domain::solana::{ids, Pubkey};
 use crate::domain::solana_write::{Check, WriteMode, WriteResult, WriteStatus};
 use crate::ports::observation::ObservationStore;
 use crate::ports::solana_signer::SolanaSigner;

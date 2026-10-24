@@ -64,7 +64,7 @@
   <ul class="facts">
     <li>≤ <b>70</b> tool rounds per step</li>
     <li><b>600 s</b> per step, then killed</li>
-    <li><b>3</b> attempts, waits <b>1 s</b>, <b>3 s</b></li>
+    <li><b>3</b> attempts, waits <b>1 s</b>, <b>2 s</b>; none after a fatal error</li>
     <li>≤ <b>2</b> replans</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
@@ -131,7 +131,7 @@
         <g class="n guard" data-at="2,10">
           <rect x="24" y="382" width="250" height="60" rx="8"/>
           <text x="149" y="406" text-anchor="middle" class="t-title">Retry policy</text>
-          <text x="149" y="425" text-anchor="middle" class="t-small">3 tries · waits 1 s, 3 s</text>
+          <text x="149" y="425" text-anchor="middle" class="t-small">3 tries · waits 1 s, 2 s</text>
         </g>
 
         <!-- child nodes, row 1 -->
@@ -197,7 +197,7 @@
         </g>
 
         <!-- per-step badges (one slot) -->
-        <g class="pop badge" data-at="1"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">goal + &lt;step-input&gt; blocks</text></g>
+        <g class="pop badge" data-at="1"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">goal + fenced step inputs</text></g>
         <g class="pop badge" data-at="2"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">no description → fails, no spawn</text></g>
         <g class="pop badge" data-at="3"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">JSON on stdin · stderr to the log</text></g>
         <g class="pop badge" data-at="4"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">same file as the parent</text></g>
@@ -232,14 +232,14 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;step-input from="s1"&gt;</code> block per finished dependency.</li>
+        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;untrusted origin="step:s1"&gt;</code> fence per finished dependency (<code>domain/untrusted.rs</code>: an upstream output cannot close it), each cut at the receiving agent's tool-result cap (<code>AgentConfig::tool_result_cap</code>: 50 000 chars on <code>claude_code</code> / <code>codex</code>, 1/8 of the window at 4 chars/token on <code>local</code>, else 300 000) with a last line <code>[step s1 output cut — showing N of M chars]</code>.</li>
         <li>The runner looks up <code>[agents.&lt;step.agent&gt;]</code> (or <code>compose.base_agent</code>). Missing, or no <code>description</code>: the step fails before any process starts.</li>
         <li>It starts the same binary as <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and the resolved egress policy, writes the JSON request, starts the step timer.</li>
         <li>The child checks the guard, reloads <code>sandboxes/&lt;name&gt;/config.toml</code> from <code>sandbox_config</code> (with <code>[keys]</code> it reuses the parent's seal-proxy session), and checks the <code>description</code> again. A <code>compose</code> applies here.</li>
         <li>Workspace: the agent's <code>workspace</code>, else a fresh <code>tengu-step-*</code> temp dir. Every inherited scope gains that root, except a deny-all scope.</li>
-        <li>Prompt: a fixed base, the agent's identity (name, role, instructions), its skill bodies, the plan, a "call <code>compress_and_store</code>" suffix. Tools: the agent's list plus <code>compress_and_store</code>.</li>
-        <li>Loop: model turn, tool calls through the redacting executor, capped results; older rounds shrink to 200 chars. At most the agent's <code>max_tool_rounds</code> (default 70).</li>
-        <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary (on <code>claude_code</code> and <code>codex</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and stops.</li>
+        <li>Prompt: a fixed base, the agent's identity (name, role, instructions), its skill bodies, the plan, a "call <code>compress_and_store</code>" suffix. Tools: the agent's list plus <code>compress_and_store</code>; a <code>claude_code</code> / <code>codex</code> step builds only that list (its bridge builds the executor it calls) unless <code>[[mcp_servers]]</code> tools must be discovered.</li>
+        <li>Loop: in-process chat's own loop. Model turn, tool calls through the redacting executor with call ids <code>step:&lt;session&gt;:&lt;step&gt;:&lt;nonce&gt;:&lt;round&gt;:&lt;i&gt;</code>, capped results; older rounds shrink to 200 chars. At the agent's <code>max_tool_rounds</code> (default 70) one last call offers no tools, so the model answers.</li>
+        <li><code>compress_and_store</code> never reaches a tool: the step's hook keeps the summary (on <code>claude_code</code> and <code>codex</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and the loop stops after that round.</li>
         <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code>: the longer of the last model text and the <code>compress_and_store</code> summary; without that call, the text. A temp workspace is deleted after printing.</li>
         <li>The parent parses it. Ok: metrics re-emitted, the step's <code>tool.*</code> trace events written into its own run (when it records), output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
       </ol>
@@ -284,12 +284,13 @@
     </div>
     <div class="seg" role="radiogroup" aria-label="How the step fails">
       <label><input type="radio" name="how" value="timeout" checked><span>every attempt times out</span></label>
+      <label><input type="radio" name="how" value="fatal"><span>the child exits before its loop</span></label>
       <label><input type="radio" name="how" value="ghost"><span>agent name does not exist</span></label>
     </div>
     <div class="runs" id="runs"></div>
     <div class="stats">
       <div class="stat"><b id="r-spawn">9</b><span>child processes</span></div>
-      <div class="stat"><b id="r-wait">12 s</b><span>spent waiting between tries</span></div>
+      <div class="stat"><b id="r-wait">9 s</b><span>spent waiting between tries</span></div>
       <div class="stat"><b id="r-wall">1 h 30 m</b><span>worst wall clock (planner calls not counted)</span></div>
       <div class="stat"><b id="r-plan">3</b><span>planner calls</span></div>
     </div>
@@ -300,8 +301,8 @@
 <section class="sec" aria-labelledby="s-compose">
   <div class="sec-head">
     <span class="kicker">Try it: a composed step</span>
-    <h2 id="s-compose">compose replaces, hardening only narrows</h2>
-    <p>Example base agent <code>researcher</code> with <code>tools = ["read_file", "http_request"]</code> and <code>skills = ["web-research"]</code>; four catalog tools shown. Hardened = a <code>[risk]</code> or <code>[soe]</code> section, or a Solana signer (<code>[solana] privy_wallet_id</code>).</p>
+    <h2 id="s-compose">compose replaces, adds only scoped tools, hardening only narrows</h2>
+    <p>Example base agent <code>researcher</code> with <code>tools = ["read_file", "http_request"]</code> and <code>skills = ["web-research"]</code>; four catalog tools shown, configured scopes for all but <code>write_file</code>. Hardened = a <code>[risk]</code> or <code>[soe]</code> section, or a Solana signer (<code>[solana] privy_wallet_id</code>).</p>
   </div>
   <div class="widget">
     <div class="checks-inline">
@@ -338,15 +339,13 @@
       <button type="button" aria-controls="tab-prompt">system prompt</button>
     </div>
     <div class="tabpanel" id="tab-in"><pre>{
-  <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;step-input from=\"s1\"&gt;\n…\n&lt;/step-input&gt;\n\n"</span>,
-  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set</span>
-  <span class="k">"model"</span>: <span class="s">""</span>,  <span class="k">"tools"</span>: [],  <span class="k">"skills"</span>: [],   <span class="c"># sent empty; the child reads its agent block</span>
-  <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (20 if the field is missing)</span>
-  <span class="k">"sandbox"</span>: <span class="n">null</span>,
+  <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;untrusted origin=\"step:s1\"&gt;\n…\n&lt;/untrusted&gt;\n\n"</span>,
+  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set; model, tools, skills: from its agent block</span>
+  <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (required)</span>
   <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,         <span class="c"># shared with the planner</span>
   <span class="k">"step_id"</span>: <span class="s">"s2"</span>,
   <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,          <span class="c"># the child loads sandboxes/lping/config.toml</span>
-  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n…"</span>,  <span class="c"># this session's plan</span>
+  <span class="k">"plan_state"</span>: <span class="s">"## Steps\n…"</span>,  <span class="c"># the plan this step belongs to</span>
   <span class="k">"trace"</span>: { <span class="k">"run_id"</span>: <span class="s">"&lt;run id&gt;"</span>, <span class="k">"parent_event_id"</span>: <span class="s">"&lt;run id&gt;:&lt;seq&gt;"</span> }   <span class="c"># only when the parent records: its step.started</span>
 }</pre></div>
     <div class="tabpanel" id="tab-ok" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"ok"</span>,
@@ -379,7 +378,7 @@ Your role: <span class="c">&lt;role&gt;</span>.
 
 ---
 
-## Current execution plan (loaded from IPC `plan_state`)
+## Current execution plan
 
 <span class="c">&lt;the rendered plan&gt;</span>
 
@@ -401,7 +400,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span class="chip bad">failed</span><span><b>no text, no call</b>Status <code>failed</code>; the parent retries.</span></li>
     <li><span class="chip bad">exit</span><span><b>run-agent exited with non-zero status</b>Before or during the loop: guard, bad JSON, unknown agent, widening compose, engine error.</span></li>
     <li><span class="chip bad">time</span><span><b>run-agent timed out after 600s</b>The child is killed; the parent retries.</span></li>
-    <li><span class="chip data">cap</span><span><b>max turns reached</b>The loop just ends: ok if the model wrote any text, else failed.</span></li>
+    <li><span class="chip data">cap</span><span><b>max turns reached</b>One last call with no tools asks for the answer: ok if the model wrote any text, else failed.</span></li>
   </ul>
 </section>
 
@@ -416,12 +415,13 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span><b>Bounded in time.</b> After <code>step_timeout_secs</code> the parent stops waiting and the child process is killed.</span></li>
     <li><span><b>A deny stays a deny.</b> The workspace root is added to every inherited scope except one with every field empty.</span></li>
     <li><span><b>Hardened compose only narrows.</b> In a <code>[risk]</code>, <code>[soe]</code> or signer sandbox an extra tool or skill fails the step before the engine is built.</span></li>
+    <li><span><b>Elsewhere only scoped tools are added.</b> A tool the base lacks needs a configured scope for it (<code>[default_scopes.&lt;tool&gt;]</code> or the agent&#39;s own), so injected planner text cannot hand a step a tool on the fallback scope.</span></li>
     <li><span><b>Redacted results.</b> Every tool result and tool error passes the secret redactor before the model sees it.</span></li>
     <li><span><b>Same network rules.</b> The child installs the parent's resolved egress policy; an invalid one aborts it.</span></li>
-    <li><span><b>One trace writer.</b> A child never opens the run file: it hands its tool events back over IPC and the parent writes them under the step (an old parent or child sends no <code>trace</code> field and nothing changes).</span></li>
+    <li><span><b>One trace writer.</b> A child never opens the run file: it and its <code>claude_code</code> / <code>codex</code> bridge append tool events to the step's journal (a 0600 temp file); the parent reads it after any exit, a timeout kill too, and writes them under the step.</span></li>
     <li><span><b>One log.</b> The parent reads the child's stderr into its own log (target <code>tengu::run_agent</code>); a failed exit carries its last 40 lines.</span></li>
     <li><span><b>A replan never re-runs finished work.</b> A step identical to one that finished earlier in the same request, its dependencies reused too, keeps its output: <code>StepSucceeded</code> with no <code>StepStarted</code>, no child (log: <code>step reused from the previous attempt</code>).</span></li>
-    <li><span><b>No orphans.</b> A replan, a cancel, a panic — or the turn itself dropped (aborted at the shutdown deadline, an eval row's timeout) — aborts every step still in flight; its child is killed.</span></li>
+    <li><span><b>No orphans.</b> A replan, a panic — or the turn itself dropped (Telegram <code>/stop</code>, aborted at the shutdown deadline, an eval row's timeout) — aborts every step still in flight; its child is killed.</span></li>
   </ul>
 </section>
 
@@ -429,14 +429,14 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Run one step by hand</h2>
-    <p>From the repo root. <code>run-agent</code> is internal, but the guard is the only thing stopping you. <code>crypto_researcher</code> runs on <code>claude_code</code>: needs a <code>--features claude_code</code> build and <code>claude</code> logged in.</p>
+    <p>From the repo root. <code>run-agent</code> is internal, but the guard is the only thing stopping you. <code>crypto_researcher</code> runs on <code>claude_code</code>: needs <code>claude</code> logged in.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"goal":"What is the SOL price?","agent_name":"crypto_researcher","model":"","session_id":"try-1","step_id":"s1","sandbox_config":"lping"}' &gt; step.json</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"goal":"What is the SOL price?","agent_name":"crypto_researcher","session_id":"try-1","step_id":"s1","sandbox_config":"lping"}' &gt; step.json</span>
 <span class="ln cmd"><span class="p">$ </span>tengu run-agent &lt; step.json</span>
 <span class="ln er">Error: `tengu run-agent` is a subprocess mode not meant for direct invocation. Set TENGU_AGENT_IPC=1 …</span>
 <span class="ln cmd"><span class="p">$ </span>TENGU_AGENT_IPC=1 tengu run-agent &lt; step.json</span>
-<span class="ln o"># logs on stderr; max_turns is 20 here (field missing)</span>
+<span class="ln o"># logs on stderr; a step.json without max_turns is refused (exit 1)</span>
 <span class="ln">{"status":"ok","output":"…","summary":"…",<span class="hl">"tools":[{"name":"sol_price","ok":true},{"name":"compress_and_store","ok":true}]</span>,…}</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --test run_agent_ipc</span></pre>
   </div>
@@ -451,15 +451,15 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log, the step's journal</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
-        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), <code>&lt;step-input&gt;</code>, leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
-        <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
+        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), fenced step inputs (<code>step:&lt;id&gt;</code>, cut at <code>WorkerHandle::input_cap</code>), leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
+        <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits, by the failure's class (<code>StepFailure</code>)</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans (finished steps carried over), plan per session</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>WorkerHandle</code></td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>workspace, scope grant, <code>compose_agent</code>, the step's tools</td></tr>
         <tr><td><code>src/application/chat/tool_loop.rs</code></td><td>one engine turn, result caps, compaction</td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>[orchestrator]</code> and <code>limits</code> defaults</td></tr>
+        <tr><td><code>src/config/agent.rs</code></td><td><code>[orchestrator]</code> and <code>limits</code> defaults</td></tr>
         <tr><td><code>tests/run_agent_ipc.rs</code></td><td>the child's IPC contract</td></tr>
       </tbody>
     </table>
@@ -467,7 +467,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -503,6 +503,9 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   function renderShape() {
     var steps = SHAPES[radio("shape")], r = schedule(steps), box = $("waves");
     box.innerHTML = "";
+    // Plan::validate runs before any step: a plan with a step that can never
+    // be ready (unknown dependency, cycle) runs nothing.
+    if (r.never.length) r.waves = [];
     r.waves.forEach(function (w, i) {
       if (i) { var a = document.createElement("span"); a.className = "wave-arrow"; a.textContent = "→"; box.appendChild(a); }
       var d = document.createElement("div"); d.className = "wave";
@@ -513,16 +516,16 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       box.appendChild(d);
     });
     if (r.never.length) {
-      var a2 = document.createElement("span"); a2.className = "wave-arrow"; a2.textContent = "·"; box.appendChild(a2);
       var n = document.createElement("div"); n.className = "wave";
-      n.innerHTML = "<small>never ready</small>" + r.never.map(function (id) { return '<span class="st never">' + id + "</span>"; }).join("");
+      n.innerHTML = "<small>rejected before any step runs</small>" + steps.map(function (s) { return '<span class="st never">' + s[0] + "</span>"; }).join("");
       box.appendChild(n);
     }
     var v = $("shape-verdict"), kids = r.waves.reduce(function (a, w) { return a + w.length; }, 0);
     var ran = kids + " child process" + (kids === 1 ? "" : "es");
     if (r.never.length) {
       v.className = "verdict bad";
-      v.textContent = ran + ", then NeedsReplan: step " + r.never[0] + " never became ready";
+      var bad = steps.filter(function (s) { return s[2].some(function (d) { return !steps.some(function (t) { return t[0] === d; }); }); })[0];
+      v.textContent = ran + ": invalid plan (step " + bad[0] + " depends on unknown step " + bad[2][0] + "), straight back to the planner";
     } else if (r.leaves.length === 1) {
       v.className = "verdict ok";
       v.textContent = ran + " · reply = " + r.leaves[0] + "'s output";
@@ -535,7 +538,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     var last = steps[steps.length - 1], goal = last[1];
     var got = last[2].filter(function (d) { return steps.some(function (s) { return s[0] === d; }); });
     if (last[2].length) {
-      goal += "\n\nUpstream context:\n" + got.map(function (d) { return '<step-input from="' + d + '">\n(' + d + "'s output)\n</step-input>\n\n"; }).join("");
+      goal += "\n\nUpstream context:\n" + got.map(function (d) { return '<untrusted origin="step:' + d + '">\n(' + d + "'s output)\n</untrusted>\n\n"; }).join("");
       if (!got.length) goal = "(never runs: " + last[2].join(", ") + " is not a step)";
     }
     $("shape-goal").textContent = goal;
@@ -543,8 +546,10 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   Array.prototype.forEach.call(document.querySelectorAll('input[name="shape"]'), function (x) { x.addEventListener("change", renderShape); });
   renderShape();
 
-  /* ---- retry worst case: RetryPolicy waits 1 s, 3 s, then 9 s ---- */
-  var BACKOFF = [1, 3, 9];
+  /* ---- retry worst case: a transient / timeout failure waits 1 s, 2 s,
+     4 s … ≤ 9 s (retry.rs, domain::backoff::next_delay); a fatal one
+     (StepFailure: the child exited before its loop) is not retried ---- */
+  function backoff(k) { return Math.min(9, Math.pow(2, k - 1)); }
   function fmt(s) {
     if (s < 60) return s + " s";
     var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
@@ -553,10 +558,13 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   function renderRetry() {
     var att = +$("att").value, rep = +$("rep").value, tmo = +$("tmo").value, how = radio("how");
     $("att-out").textContent = att; $("rep-out").textContent = rep; $("tmo-out").textContent = tmo;
-    var runs = rep + 1, waits = 0;
-    for (var k = 1; k < att; k++) waits += BACKOFF[k - 1] !== undefined ? BACKOFF[k - 1] : 9;
+    var runs = rep + 1, waits = 0, tries = how === "fatal" ? 1 : att;
+    for (var k = 1; k < tries; k++) waits += backoff(k);
+    // An unknown agent fails Plan::validate before any step runs: no child,
+    // no retry, no wait — the next planner call comes at once.
+    if (how === "ghost") waits = 0;
     var per = (how === "timeout" ? att * tmo : 0) + waits;
-    $("r-spawn").textContent = how === "timeout" ? att * runs : 0;
+    $("r-spawn").textContent = how === "ghost" ? 0 : tries * runs;
     $("r-wait").textContent = fmt(waits * runs);
     $("r-wall").textContent = fmt(per * runs).trim();
     $("r-plan").textContent = runs;
@@ -565,17 +573,19 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       var row = document.createElement("div"); row.className = "run";
       var cells = [];
       if (r) cells.push('<span class="plan" title="planner replan call">↻<em> replan</em></span>');
-      for (var a = 1; a <= att; a++) {
+      if (how === "ghost") cells.push('<span class="try" style="flex:0 1 30px">✗<em> invalid plan</em></span>');
+      else for (var a = 1; a <= tries; a++) {
         cells.push('<span class="try" style="flex:' + (how === "timeout" ? 4 : 0) + ' 1 30px">' + (how === "timeout" ? "✗" + a + "<em> · " + tmo + " s</em>" : "✗" + a) + "</span>");
-        if (a < att) cells.push('<span class="wait">' + (BACKOFF[a - 1] !== undefined ? BACKOFF[a - 1] : 9) + " s</span>");
+        if (a < tries) cells.push('<span class="wait">' + backoff(a) + " s</span>");
       }
       if (r === runs - 1) cells.push('<span class="end">give up</span>');
       row.innerHTML = "<small>" + (r ? "replan " + r : "first plan") + '</small><div class="bar-row">' + cells.join("") + "</div>";
       box.appendChild(row);
     }
     $("r-final").innerHTML = "Reply: <code>Unable to complete the request after " + rep + " replans. Last error: " +
-      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : "no agent 'ghost' in the active config …") + "</code>" +
-      (how === "ghost" ? " The runner fails before spawning, so only the waits cost time." : "");
+      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : how === "fatal" ? "run-agent exited with non-zero status (exit status: 1): …" : "invalid plan: step \"s1\" names agent \"ghost\", which is not a routable agent …") + "</code>" +
+      (how === "ghost" ? " The plan is checked before any step runs: no child, no retry, no wait." :
+       how === "fatal" ? " An exit code before the loop is fatal: one try, no wait, straight to the replan." : "");
   }
   ["att", "rep", "tmo"].forEach(function (id) { $(id).addEventListener("input", renderRetry); });
   Array.prototype.forEach.call(document.querySelectorAll('input[name="how"]'), function (x) { x.addEventListener("change", renderRetry); });
@@ -583,7 +593,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 
   /* ---- compose check: same rule as bootstrap::tools::compose_agent ---- */
   var CATALOG = ["read_file", "list_directory", "http_request", "write_file"];
-  var BASE = { tools: ["read_file", "http_request"], skills: ["web-research"] };
+  var BASE = { tools: ["read_file", "http_request"], skills: ["web-research"], scoped: ["read_file", "list_directory", "http_request"] };
   function picked(cls) { return Array.prototype.slice.call(document.querySelectorAll("." + cls)).filter(function (x) { return x.checked; }).map(function (x) { return x.value; }); }
   function renderCompose() {
     var hard = $("hard").checked, tools = picked("ct"), skills = picked("cs");
@@ -594,7 +604,10 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     var dbg = function (a) { return "[" + a.map(function (x) { return '"' + x + '"'; }).join(", ") + "]"; };
     if (hard && (addT.length || addS.length)) {
       v.className = "verdict bad"; v.textContent = "Step refused before the engine is built";
-      out.textContent = "compose would widen agent `researcher` in a hardened sandbox (Solana signer or [risk]): a composed plan step may only narrow its base agent's tools and skills — adds tools " + dbg(addT) + ", skills " + dbg(addS);
+      out.textContent = "compose would widen agent `researcher` in a hardened sandbox (Solana signer, [risk] or [soe]): a composed plan step may only narrow its base agent's tools and skills — adds tools " + dbg(addT) + ", skills " + dbg(addS);
+    } else if (!hard && addT.some(function (t) { return BASE.scoped.indexOf(t) < 0; })) {
+      v.className = "verdict bad"; v.textContent = "Step refused: a new tool with no configured scope";
+      out.textContent = "compose would give agent `researcher` tools " + dbg(addT.filter(function (t) { return BASE.scoped.indexOf(t) < 0; })) + " it does not hold and that have no configured scope: a composed plan step may add a tool only when `[default_scopes.<tool>]` or `[agents.researcher.scopes.<tool>]` configures one";
     } else {
       v.className = "verdict ok"; v.textContent = hard ? "Allowed: it only narrows" : "Allowed: lists replaced wholesale";
       out.textContent = "tools  = " + dbg(tools) + (tools.length ? "" : "   # empty = every catalog tool: " + dbg(CATALOG)) + "\nskills = " + dbg(skills) + "\n+ compress_and_store (always)";

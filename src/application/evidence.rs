@@ -1,4 +1,4 @@
-//! Evidence use cases (`tengu evidence`, `docs/lineage-2026-10-06.md` § 3,
+//! Evidence use cases (`tengu evidence`, `docs/lineage.md` § 3,
 //! roadmap Phase 0) over the ports of `ports/evidence.rs`; the math is in
 //! `domain/{evidence,evidence_coverage}.rs`, `domain/xm/{grade,regrade}.rs`.
 //!

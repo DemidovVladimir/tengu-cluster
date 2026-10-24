@@ -13,7 +13,7 @@ use crate::application::skills::lifecycle::approval_gate::{
 };
 use crate::application::skills::lifecycle::evolve::{
     apply_proposal_resources, apply_proposal_to_skill_md, is_editable_by_learner, pick_best,
-    pick_target_metric, split_frontmatter, Baseline, CycleOutcome, ImproverProposal,
+    pick_target_metric, Baseline, CycleOutcome, ImproverProposal,
 };
 use crate::application::skills::lifecycle::scratch_worktree::{
     create_scratch, remove_scratch, sweep_stale_worktrees,
@@ -21,13 +21,12 @@ use crate::application::skills::lifecycle::scratch_worktree::{
 
 use crate::application::skills::lifecycle::storage::{MetricRollup, MetricsJson};
 use crate::config::Config;
+use crate::domain::skill::{skill_body, split_frontmatter};
 use crate::ports::orchestration::ChatServiceFactory;
 
 fn count_body_lines(skill_md: &Path) -> Result<usize> {
     let body = std::fs::read_to_string(skill_md)?;
-    let rest = body.strip_prefix("---\n").unwrap_or(&body);
-    let body_only = rest.splitn(2, "\n---\n").nth(1).unwrap_or(rest);
-    Ok(body_only.lines().count())
+    Ok(skill_body(&body).lines().count())
 }
 
 fn append_evolve_log(
@@ -377,7 +376,8 @@ async fn call_skill_improver(
 ) -> Result<ImproverProposal> {
     let skill_dir = workspace.join("skills").join(skill);
     let body = std::fs::read_to_string(skill_dir.join("SKILL.md"))?;
-    let (fm_block, body_only) = split_frontmatter(&body)?;
+    let split = split_frontmatter(&body)?;
+    let (fm_block, body_only) = (split.yaml, split.body);
 
     // Render current metrics yaml from parsed frontmatter.
     let parsed: serde_yaml::Value = serde_yaml::from_str(fm_block)?;

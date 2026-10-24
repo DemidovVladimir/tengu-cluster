@@ -1,4 +1,4 @@
-//! Evidence IO (`tengu evidence`, `docs/lineage-2026-10-06.md` § 3) — what
+//! Evidence IO (`tengu evidence`, `docs/lineage.md` § 3) — what
 //! the use cases in `application/evidence.rs` read and write. Every reader
 //! is read-only by construction (SQLite `immutable=1` + read-only flags; no
 //! store adapter that migrates or purges on open). Synchronous: CLI batch

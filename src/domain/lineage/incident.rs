@@ -1,4 +1,4 @@
-//! Incident — `lineage/incidents/<id>.toml` (`docs/lineage-2026-10-06.md`
+//! Incident — `lineage/incidents/<id>.toml` (`docs/lineage.md`
 //! § 2, roadmap P0 / P4): an operational or data incident, kept apart from
 //! strategy failure.
 //!

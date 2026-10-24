@@ -1,7 +1,8 @@
 //! `SqlitePaperLedger` — `ports::paper::PaperLedger` over ONE database per
 //! xmarket state dir, `<xm_state_dir>/ledger.db` (tracker convention 3:
 //! `<TENGU_HOME>/state/<xmarket.state>/`, outside every workspace and fs
-//! root; `tengu prune` spares `state/`). WAL + busy_timeout; `place`,
+//! root; `tengu prune` spares `state/`). 0600, WAL + busy_timeout
+//! (`sqlite.rs::open_wal`); `place`,
 //! `update_risk_state`, `settle_funding`, `trigger_exit` and `open_account` each run in one
 //! `BEGIN IMMEDIATE` transaction, so two loops or processes never
 //! check-then-act on the same account (convention 9). Rows are never
@@ -41,7 +42,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -49,6 +50,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use tracing::warn;
 
+use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::application::decision_loop::append_line;
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::{ledger_db, LEDGER_DB};
@@ -67,9 +69,6 @@ use crate::ports::paper::{
     Decide, Decision, LedgerSnapshot, Outcome, PaperLedger, PlaceRequest, Placement, RiskUpdate,
     StoredDecision, StoredOrder, ACCOUNT_OWNER_MISMATCH,
 };
-
-/// The verdict mirror, under `<TENGU_HOME>/logs/`.
-pub(crate) const RISK_LOG_FILE: &str = "risk.jsonl";
 
 /// The gate's order-rate window.
 const ORDER_RATE_WINDOW_MS: i64 = 60_000;
@@ -157,9 +156,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
 
 /// `<TENGU_HOME>/logs/risk.jsonl`.
 pub(crate) fn risk_log_path() -> PathBuf {
-    crate::config::paths::resolve_tengu_home()
-        .join("logs")
-        .join(RISK_LOG_FILE)
+    crate::config::paths::Layout::current().risk_log()
 }
 
 /// The sandbox's ledger (`[xmarket]` state dir), mirroring its verdicts to
@@ -196,7 +193,7 @@ pub(crate) fn kill_switch_state(path: &Path) -> Field<bool> {
 
 #[derive(Clone)]
 pub(crate) struct SqlitePaperLedger {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
     /// `risk.jsonl` (module doc); `None` = verdicts are not mirrored.
     audit: Option<PathBuf>,
     /// The sandbox this handle writes as (module doc: Owners); `None` = the
@@ -210,16 +207,12 @@ impl SqlitePaperLedger {
     /// Open (creating) `<state_dir>/ledger.db`; an older ledger gains the
     /// [`ADDED_COLUMNS`] it lacks.
     pub(crate) fn open(state_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(state_dir)
-            .with_context(|| format!("create {}", state_dir.display()))?;
         let path = ledger_db(state_dir);
-        let mut conn =
-            Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+        let mut conn = open_wal(&path, Durability::Full)?;
         conn.execute_batch(SCHEMA_SQL)?;
         add_missing_columns(&mut conn).with_context(|| format!("upgrade {}", path.display()))?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: SharedConn::new(conn, "paper ledger"),
             audit: None,
             owner: None,
             path,
@@ -244,20 +237,6 @@ impl SqlitePaperLedger {
             owner: self.owner.clone(),
             ledger: self.path.clone(),
         }
-    }
-
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || {
-            let mut guard = conn.lock().map_err(|e| anyhow!("paper ledger lock: {e}"))?;
-            f(&mut guard)
-        })
-        .await
-        .context("paper ledger task")?
     }
 }
 
@@ -1164,68 +1143,72 @@ impl PaperLedger for SqlitePaperLedger {
         PaperAccount::new(account, initial_cash_usd)?;
         let account = account.to_string();
         let check = self.owner_check();
-        self.with_conn(move |conn| {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let created = tx.execute(
-                "INSERT INTO accounts(account, initial_cash_usd, created_ms, sandbox)
+        self.conn
+            .run(move |conn| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let created = tx.execute(
+                    "INSERT INTO accounts(account, initial_cash_usd, created_ms, sandbox)
                  VALUES (?1, ?2, ?3, ?4) ON CONFLICT(account) DO NOTHING",
-                params![account, initial_cash_usd, now_ms, check.owner],
-            )?;
-            if created == 1 {
-                append_cash(
-                    &tx,
-                    &account,
-                    now_ms,
-                    "deposit",
-                    "initial",
-                    initial_cash_usd,
-                    initial_cash_usd,
+                    params![account, initial_cash_usd, now_ms, check.owner],
                 )?;
-            }
-            // An existing account: claimed if unowned, else its owner's.
-            check_owner(&tx, &account, &check)?;
-            let a = load_account(&tx, &account)?.account;
-            tx.commit()?;
-            Ok(a)
-        })
-        .await
+                if created == 1 {
+                    append_cash(
+                        &tx,
+                        &account,
+                        now_ms,
+                        "deposit",
+                        "initial",
+                        initial_cash_usd,
+                        initial_cash_usd,
+                    )?;
+                }
+                // An existing account: claimed if unowned, else its owner's.
+                check_owner(&tx, &account, &check)?;
+                let a = load_account(&tx, &account)?.account;
+                tx.commit()?;
+                Ok(a)
+            })
+            .await
     }
 
     async fn accounts(&self) -> Result<Vec<String>> {
-        self.with_conn(|c| {
-            let mut stmt = c.prepare("SELECT account FROM accounts ORDER BY account")?;
-            let names = stmt
-                .query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<Vec<String>>>()?;
-            Ok(names)
-        })
-        .await
+        self.conn
+            .run(|c| {
+                let mut stmt = c.prepare("SELECT account FROM accounts ORDER BY account")?;
+                let names = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<String>>>()?;
+                Ok(names)
+            })
+            .await
     }
 
     async fn snapshot(&self, account: &str, now_ms: i64) -> Result<LedgerSnapshot> {
         let account = account.to_string();
-        self.with_conn(move |conn| {
-            // One read transaction: every SELECT sees the same commit.
-            let tx = conn.transaction()?;
-            let s = load_snapshot(&tx, &account, now_ms)?;
-            tx.commit()?;
-            Ok(s)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                // One read transaction: every SELECT sees the same commit.
+                let tx = conn.transaction()?;
+                let s = load_snapshot(&tx, &account, now_ms)?;
+                tx.commit()?;
+                Ok(s)
+            })
+            .await
     }
 
     async fn place(&self, req: PlaceRequest, decide: Decide) -> Result<Placement> {
         let audit = self.audit.clone();
         let check = self.owner_check();
-        self.with_conn(move |conn| {
-            let p = place_tx(conn, req, decide, &check)?;
-            // A replay wrote no verdict row.
-            if let Some(path) = audit.as_deref().filter(|_| !p.replayed) {
-                mirror(path, &p);
-            }
-            Ok(p)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let p = place_tx(conn, req, decide, &check)?;
+                // A replay wrote no verdict row.
+                if let Some(path) = audit.as_deref().filter(|_| !p.replayed) {
+                    mirror(path, &p);
+                }
+                Ok(p)
+            })
+            .await
     }
 
     async fn update_risk_state(
@@ -1236,61 +1219,64 @@ impl PaperLedger for SqlitePaperLedger {
     ) -> Result<LedgerSnapshot> {
         let account = account.to_string();
         let check = self.owner_check();
-        self.with_conn(move |conn| {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            check_owner(&tx, &account, &check)?;
-            let mut snapshot = load_snapshot(&tx, &account, now_ms)?;
-            let next = update(&snapshot).map_err(|e| anyhow!("{e}"))?;
-            if next != snapshot.risk {
-                write_risk_state(&tx, &account, &next)?;
-                snapshot.risk = next;
-            }
-            tx.commit()?;
-            Ok(snapshot)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                check_owner(&tx, &account, &check)?;
+                let mut snapshot = load_snapshot(&tx, &account, now_ms)?;
+                let next = update(&snapshot).map_err(|e| anyhow!("{e}"))?;
+                if next != snapshot.risk {
+                    write_risk_state(&tx, &account, &next)?;
+                    snapshot.risk = next;
+                }
+                tx.commit()?;
+                Ok(snapshot)
+            })
+            .await
     }
 
     async fn order(&self, account: &str, client_order_id: &str) -> Result<Option<StoredOrder>> {
         let (account, id) = (account.to_string(), client_order_id.to_string());
-        self.with_conn(move |c| read_order(c, &account, &id)).await
+        self.conn.run(move |c| read_order(c, &account, &id)).await
     }
 
     async fn stored(&self, account: &str, client_order_id: &str) -> Result<Option<Placement>> {
         let (account, id) = (account.to_string(), client_order_id.to_string());
-        self.with_conn(move |conn| {
-            // One read transaction: the order, its verdict and the account agree.
-            let tx = conn.transaction()?;
-            let Some(order) = read_order(&tx, &account, &id)? else {
-                return Ok(None);
-            };
-            let decision = read_decision(&tx, order.decision_id)?;
-            let a = load_account(&tx, &account)?.account;
-            tx.commit()?;
-            Ok(Some(Placement {
-                replayed: true,
-                decision,
-                order: Some(order),
-                account: a,
-            }))
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                // One read transaction: the order, its verdict and the account agree.
+                let tx = conn.transaction()?;
+                let Some(order) = read_order(&tx, &account, &id)? else {
+                    return Ok(None);
+                };
+                let decision = read_decision(&tx, order.decision_id)?;
+                let a = load_account(&tx, &account)?.account;
+                tx.commit()?;
+                Ok(Some(Placement {
+                    replayed: true,
+                    decision,
+                    order: Some(order),
+                    account: a,
+                }))
+            })
+            .await
     }
 
     async fn decisions(&self, account: &str, limit: usize) -> Result<Vec<StoredDecision>> {
         let account = account.to_string();
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        self.with_conn(move |c| {
-            let mut stmt = c.prepare(&format!(
-                "SELECT {DECISION_COLUMNS} FROM risk_decisions WHERE account = ?1
+        self.conn
+            .run(move |c| {
+                let mut stmt = c.prepare(&format!(
+                    "SELECT {DECISION_COLUMNS} FROM risk_decisions WHERE account = ?1
                  ORDER BY id DESC LIMIT ?2"
-            ))?;
-            let rows = stmt
-                .query_map(params![account, limit], decision_row)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows.into_iter().map(parse_decision).collect()
-        })
-        .await
+                ))?;
+                let rows = stmt
+                    .query_map(params![account, limit], decision_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows.into_iter().map(parse_decision).collect()
+            })
+            .await
     }
 
     async fn settle_funding(
@@ -1302,28 +1288,29 @@ impl PaperLedger for SqlitePaperLedger {
     ) -> Result<FundingSettlement> {
         let (account, instrument) = (account.to_string(), instrument.to_string());
         let check = self.owner_check();
-        self.with_conn(move |conn| {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            check_owner(&tx, &account, &check)?;
-            let mut loaded = load_account(&tx, &account)?;
-            let cash_before = loaded.account.cash_usd;
-            let s = loaded.account.settle_funding(&instrument, rate, now_ms)?;
-            if s.is_empty() {
-                return Ok(s);
-            }
-            write_settlement(
-                &tx,
-                &loaded.account,
-                &instrument,
-                loaded.exit_at_ms.get(&instrument).copied(),
-                cash_before,
-                &s,
-                now_ms,
-            )?;
-            tx.commit()?;
-            Ok(s)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                check_owner(&tx, &account, &check)?;
+                let mut loaded = load_account(&tx, &account)?;
+                let cash_before = loaded.account.cash_usd;
+                let s = loaded.account.settle_funding(&instrument, rate, now_ms)?;
+                if s.is_empty() {
+                    return Ok(s);
+                }
+                write_settlement(
+                    &tx,
+                    &loaded.account,
+                    &instrument,
+                    loaded.exit_at_ms.get(&instrument).copied(),
+                    cash_before,
+                    &s,
+                    now_ms,
+                )?;
+                tx.commit()?;
+                Ok(s)
+            })
+            .await
     }
 
     async fn trigger_exit(
@@ -1342,40 +1329,42 @@ impl PaperLedger for SqlitePaperLedger {
         }
         let (account, instrument) = (account.to_string(), instrument.to_string());
         let check = self.owner_check();
-        self.with_conn(move |conn| {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            check_owner(&tx, &account, &check)?;
-            let loaded = load_account(&tx, &account)?;
-            let Some(p) = loaded
-                .account
-                .positions
-                .get(&instrument)
-                .filter(|p| !p.is_flat() && p.opened_ms == Some(opened_ms))
-            else {
-                return Ok(None);
-            };
-            if let Some(stored) = loaded.exit_triggers.get(&p.instrument) {
-                return Ok(Some(*stored));
-            }
-            tx.execute(
-                "UPDATE positions SET exit_trigger = ?3, exit_trigger_opened_ms = ?4,
+        self.conn
+            .run(move |conn| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                check_owner(&tx, &account, &check)?;
+                let loaded = load_account(&tx, &account)?;
+                let Some(p) = loaded
+                    .account
+                    .positions
+                    .get(&instrument)
+                    .filter(|p| !p.is_flat() && p.opened_ms == Some(opened_ms))
+                else {
+                    return Ok(None);
+                };
+                if let Some(stored) = loaded.exit_triggers.get(&p.instrument) {
+                    return Ok(Some(*stored));
+                }
+                tx.execute(
+                    "UPDATE positions SET exit_trigger = ?3, exit_trigger_opened_ms = ?4,
                    exit_trigger_ms = ?5
                  WHERE account = ?1 AND instrument = ?2",
-                params![account, instrument, reason.as_str(), opened_ms, now_ms],
-            )?;
-            tx.commit()?;
-            Ok(Some(ExitTrigger {
-                reason,
-                at_ms: now_ms,
-            }))
-        })
-        .await
+                    params![account, instrument, reason.as_str(), opened_ms, now_ms],
+                )?;
+                tx.commit()?;
+                Ok(Some(ExitTrigger {
+                    reason,
+                    at_ms: now_ms,
+                }))
+            })
+            .await
     }
 }
 
 /// Also the `risk_status` tool's fixtures (`tools/xm/risk_status.rs`).
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use super::*;
@@ -2750,7 +2739,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn every_verdict_row_is_mirrored_once() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("logs").join(RISK_LOG_FILE);
+        let log = crate::config::paths::Layout::at(dir.path()).risk_log();
         let l = ledger(dir.path()).await.with_audit(log.clone());
         let nvda = buy("o-nvda", ACCOUNT, NVDA);
         l.place(req(&nvda, NOW), gate(&nvda, limits(), None))
@@ -2812,7 +2801,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_writers_never_tear_audit_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("logs").join(RISK_LOG_FILE);
+        let log = crate::config::paths::Layout::at(dir.path()).risk_log();
         ledger(dir.path()).await;
         let writers: Vec<_> = (0..4)
             .map(|w| {

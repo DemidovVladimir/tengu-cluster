@@ -25,9 +25,6 @@
 //! | Resolve ([`resolve`]) | evidence observed surely after `frozen_at` (`evidence_before_freeze`); a hit observed not after `resolve_by` (`hit_after_deadline`); a miss only once `resolve_by` has passed (`miss_before_deadline`); an item index the forecast has (`unknown_item`) |
 //! | Calibration ([`calibration`]) | integer bps: equal-width bins over 0..=10 000, hits per bin, Brier = Σ (p − y)² / n in 10⁻⁸ (`brier_e8`, floored) |
 
-// Consumers land with the cycle, `tengu soe grade|resolve|review` (O4).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

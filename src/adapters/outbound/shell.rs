@@ -27,10 +27,20 @@ impl LocalShellExecutor {
 
 impl ShellExecutionPort for LocalShellExecutor {
     fn execute_shell(&self, command: &str, workspace: &Path) -> Result<String> {
+        self.execute_shell_env(command, workspace, &[])
+    }
+
+    fn execute_shell_env(
+        &self,
+        command: &str,
+        workspace: &Path,
+        env: &[(&str, &str)],
+    ) -> Result<String> {
         // `[egress]` decides the wrapper (plain `sh`, or `sandbox-exec` under
         // `shell_network = "isolated"`) and exports the proxy env vars.
         let mut child = crate::adapters::outbound::egress::policy()
             .shell_command(command)
+            .envs(env.iter().copied())
             .current_dir(workspace)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

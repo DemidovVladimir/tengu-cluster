@@ -196,23 +196,7 @@ impl Turns {
         let Some(mut set) = taken else {
             return (0, 0);
         };
-        let (mut finished, mut aborted) = (0, 0);
-        loop {
-            match tokio::time::timeout_at(deadline, set.join_next()).await {
-                Ok(Some(_)) => finished += 1,
-                Ok(None) => break,
-                Err(_) => {
-                    set.abort_all();
-                    while let Some(r) = set.join_next().await {
-                        match r {
-                            Err(e) if e.is_cancelled() => aborted += 1,
-                            _ => finished += 1,
-                        }
-                    }
-                    break;
-                }
-            }
-        }
+        let (finished, aborted) = drain_until(&mut set, deadline).await;
         if aborted > 0 {
             warn!(
                 aborted,
@@ -221,6 +205,29 @@ impl Turns {
         }
         (finished, aborted)
     }
+}
+
+/// Wait for every task of `set` until `deadline`, then abort the rest:
+/// `(finished, aborted)`. An abort is done when this returns (the task's
+/// future, and what its drop writes, are gone).
+async fn drain_until<T: 'static>(set: &mut JoinSet<T>, deadline: Instant) -> (u64, u64) {
+    let mut finished = 0;
+    loop {
+        match tokio::time::timeout_at(deadline, set.join_next()).await {
+            Ok(Some(_)) => finished += 1,
+            Ok(None) => return (finished, 0),
+            Err(_) => break,
+        }
+    }
+    set.abort_all();
+    let mut aborted = 0;
+    while let Some(r) = set.join_next().await {
+        match r {
+            Err(e) if e.is_cancelled() => aborted += 1,
+            _ => finished += 1,
+        }
+    }
+    (finished, aborted)
 }
 
 struct Slot {
@@ -468,27 +475,9 @@ impl LoopDispatch {
             self.closing.send_replace(true);
             (std::mem::take(&mut *tasks), before)
         };
-        let events = async {
-            let mut aborted = 0;
-            loop {
-                match tokio::time::timeout_at(deadline, set.join_next()).await {
-                    Ok(Some(_)) => {}
-                    Ok(None) => break,
-                    Err(_) => {
-                        set.abort_all();
-                        while let Some(r) = set.join_next().await {
-                            if matches!(&r, Err(e) if e.is_cancelled()) {
-                                aborted += 1;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-            aborted
-        };
-        let (aborted, (turns_finished, turns_aborted)) =
-            tokio::join!(events, self.turns.drain(deadline));
+        // Finished events are counted by the stats (`totals`), not here.
+        let ((_, aborted), (turns_finished, turns_aborted)) =
+            tokio::join!(drain_until(&mut set, deadline), self.turns.drain(deadline));
         let after = self.totals();
         DrainReport {
             finished: after.finished - before.finished,

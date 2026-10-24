@@ -144,7 +144,7 @@
         <li>At sandbox load tengu asks the SSH agent to sign <code>tengu-seal/session/v1</code>: fingerprint, time, a random nonce, the Worker origin and the routes <code>[keys.env]</code> uses. Secretive can ask for Touch ID.</li>
         <li><code>POST /session</code>: fingerprint in <code>CLIENTS</code>, signature valid, clock within ±60 s. The Worker grants the asked routes <code>CLIENTS</code> allows (none: 403) in a <code>tss1</code> token, HMAC under <code>SESSION_KEY</code>.</li>
         <li><code>[keys] strip</code> removes local key copies. <code>[keys.env]</code> is exported: a route value becomes <code>&lt;proxy&gt;/&lt;route&gt;[/path][?query]</code>, <code>@session</code> the token. Children reuse the session and strip again.</li>
-        <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/openrouter/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. RPC, Privy and Telegram clients add that header themselves, to the proxy only.</li>
+        <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/openrouter/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. Every client on the shared request pipeline (<code>http_class::GatedHttp</code>: Hyperliquid, SEC, GeckoTerminal, TED, Solana RPC and JSON fetches, Privy), the EVM receipt poll and Telegram add that header themselves, to the proxy only.</li>
         <li>The Worker checks the route is in the session and still in <code>CLIENTS</code>, puts the key only at its header, path or query spot, checks <code>allow</code>, forwards with <code>redirect: manual</code>.</li>
         <li>Reply: the key becomes <code>[REDACTED]</code> in every header and every body byte as it streams: text, JSON, event streams, binary, any size. One JSON log line, never a key.</li>
         <li>Revoke a machine: delete its <code>CLIENTS</code> line and <code>npx wrangler deploy</code>; its next request gets 401. Rotating <code>SESSION_KEY</code> ends every session at once.</li>
@@ -252,17 +252,17 @@
         <tr><td><code>src/adapters/outbound/keys/mod.rs</code></td><td>session for the routes asked, <code>install</code> (strip, env export at sandbox load and in children, fail closed), canonical proxy origin, <code>auth_header_for</code>, <code>header_mode</code></td></tr>
         <tr><td><code>src/adapters/outbound/keys/agent.rs</code></td><td>SSH-agent client: list keys, sign</td></tr>
         <tr><td><code>src/adapters/inbound/cli/keys.rs</code></td><td><code>tengu keys setup · status · check</code></td></tr>
-        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>Telegram through the proxy (placeholder token, <code>Tengu-Route</code>); refuses to start without a session</td></tr>
+        <tr><td><code>src/adapters/inbound/telegram/</code></td><td>Telegram through the proxy (placeholder token, <code>Tengu-Route</code>); refuses to start without a session</td></tr>
         <tr><td><code>src/adapters/outbound/tools/crypto/helpers.rs</code></td><td>Privy wallet tools: <code>PRIVY_API_URL</code> on the proxy → the session, no app secret here (<code>privy_request</code>)</td></tr>
         <tr><td><code>src/adapters/outbound/solana/privy.rs</code> · <code>src/config/solana.rs</code></td><td>Solana write tools sign with <code>[solana] privy_wallet_id</code> on the same route (<code>signTransaction</code>; message unchanged, wallet slot verified); with a signer no agent may read the session</td></tr>
-        <tr><td><code>sandboxes/sealed-check/config.toml</code></td><td>end-to-end proof: Jev, loop, <code>tengu run</code>, Studio only through the Worker (<code>docs/sealed-check-2026-10-09.md</code>)</td></tr>
+        <tr><td><code>sandboxes/sealed-check/config.toml</code></td><td>end-to-end proof: Jev, loop, <code>tengu run</code>, Studio only through the Worker (<code>docs/sealed-check.md</code>)</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

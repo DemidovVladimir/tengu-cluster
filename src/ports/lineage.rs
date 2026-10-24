@@ -1,4 +1,4 @@
-//! Lineage ports (`docs/lineage-2026-10-06.md` § 2, § 5): what `tengu lineage
+//! Lineage ports (`docs/lineage.md` § 2, § 5): what `tengu lineage
 //! verify --pins / --evidence`, `family` and `attempts` need from outside
 //! the registry. Impls: `adapters/outbound/lineage/`.
 //!

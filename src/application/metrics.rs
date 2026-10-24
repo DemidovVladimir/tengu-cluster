@@ -38,8 +38,8 @@ pub fn install_global_sink() -> broadcast::Sender<MetricsRecord> {
 ///
 /// Today's wiring goes through the broadcast `Sender` returned from
 /// `install_global_sink` (the build_orchestrator bridge subscribes on the
-/// sender directly), so this helper has no internal callers — the binary
-/// has no `[lib]` target, which makes rustc treat all `pub fn` items as
+/// sender directly), so this helper has no internal callers — the `tengu`
+/// lib exports only `run`, so rustc treats every unreached `pub fn` as
 /// dead. Kept for future subscribers (a `tengu metrics` CLI subcommand,
 /// an HTTP exporter, an external eval harness).
 #[allow(dead_code)]
@@ -58,6 +58,7 @@ pub fn record(rec: MetricsRecord) {
         agent = %rec.agent,
         model = %rec.model,
         prompt_tokens = rec.prompt_tokens,
+        cached_input_tokens = rec.cached_input_tokens,
         completion_tokens = rec.completion_tokens,
         total_tokens = rec.total_tokens,
         prompt_chars = rec.prompt_chars,
@@ -66,6 +67,7 @@ pub fn record(rec: MetricsRecord) {
         layer_count = rec.layers.len(),
         step_id = ?rec.step_id,
         session_id = %rec.session_id,
+        ok = rec.ok,
         "metrics"
     );
     // Per-layer detail at debug level so the info-line stays narrow but the
@@ -175,20 +177,10 @@ mod tests {
 
     fn rec(session: &str, total_tokens: u32) -> MetricsRecord {
         MetricsRecord {
-            ts_unix: 0,
-            session_id: session.into(),
-            kind: MetricsKind::Subagent,
-            agent: "researcher".into(),
-            model: "m".into(),
             prompt_tokens: 1,
             completion_tokens: 2,
             total_tokens,
-            prompt_chars: 0,
-            prompt_bytes: 0,
-            response_chars: 0,
-            latency_ms: 0,
-            layers: Vec::new(),
-            step_id: None,
+            ..MetricsRecord::call(MetricsKind::Subagent, session, "researcher", "m")
         }
     }
 

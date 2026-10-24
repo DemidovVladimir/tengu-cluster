@@ -850,10 +850,10 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::adapters::outbound::paper_store::tests::audit_lines;
-    use crate::adapters::outbound::paper_store::{SqlitePaperLedger, RISK_LOG_FILE};
+    use crate::adapters::outbound::paper_store::SqlitePaperLedger;
     use crate::adapters::outbound::shell::LocalShellExecutor;
-    use crate::adapters::outbound::tools::workspace::test_support::NoopActivity;
     use crate::application::observe::tests::MemStore;
+    use crate::config::paths::Layout;
     use crate::config::risk::RiskConfig;
     use crate::config::AgentConfig;
     use crate::domain::book::fixture::tsla_book;
@@ -974,7 +974,6 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         shell: Arc<dyn ShellExecutionPort>,
         http: reqwest::Client,
         secrets: SecretRegistry,
-        activity: NoopActivity,
     }
 
     impl Rig {
@@ -990,7 +989,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             let ledger = Arc::new(
                 SqlitePaperLedger::open(&dir.path().join("state"))
                     .unwrap()
-                    .with_audit(dir.path().join("logs").join(RISK_LOG_FILE)),
+                    .with_audit(Layout::at(dir.path()).risk_log()),
             );
             let shared = XmShared {
                 store: Some(store.clone() as Arc<dyn ObservationStore>),
@@ -1023,7 +1022,6 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 shell: Arc::new(LocalShellExecutor::new()),
                 http: reqwest::Client::new(),
                 secrets: SecretRegistry::new(),
-                activity: NoopActivity,
             }
         }
 
@@ -1033,9 +1031,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 scope: &self.scope,
                 shell: self.shell.as_ref(),
                 http: &self.http,
-                memory_manager: None,
                 secret_registry: &self.secrets,
-                activity: &self.activity,
                 conversation: crate::ports::tool::ConversationView::empty(),
                 agent_config: Some(&self.agent),
                 call_id,
@@ -1086,7 +1082,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
 
         /// The `risk.jsonl` lines the ledger mirrored.
         pub(crate) fn risk_lines(&self) -> Vec<serde_json::Value> {
-            audit_lines(&self.dir.path().join("logs").join(RISK_LOG_FILE))
+            audit_lines(&Layout::at(self.dir.path()).risk_log())
         }
 
         /// Rows per ledger table.

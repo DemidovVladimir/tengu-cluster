@@ -1,4 +1,4 @@
-//! `tengu studio` — Tengu Studio (`TENGU_STUDIO_PLAN.md`). Logs go to stderr.
+//! `tengu studio` — Tengu Studio (`docs/plans/TENGU_STUDIO_PLAN.md`). Logs go to stderr.
 //!
 //! | Command | Does |
 //! |---|---|

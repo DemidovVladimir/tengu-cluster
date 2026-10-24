@@ -5,7 +5,7 @@
 # Paper only: no key, no order leaves the process; the $100 budget is [risk].
 # Rule W (the weekend fade) lives in sandboxes/xmarket-weekend, never here —
 # both may run at once (own state dir, workspace, lease, ledger).
-# Runtime: docs/runtime-2026-09-30.md § xmarket sandbox.
+# Runtime: docs/runtime.md § xmarket sandbox.
 #
 # RUNBOOK — from the repo root (`--sandbox` resolves sandboxes/<name>/ from the
 # cwd; the repo-root .env sets TENGU_HOME=~/.tengu and OPENROUTER_API_KEY). At a
@@ -63,8 +63,6 @@
 #                          TELEGRAM_BOT_TOKEN, XM_ALERT_CHAT_ID (M5) · vendor keys: ALPACA_*, LIFI_API_KEY,
 #                          OPENFIGI_API_KEY, COINGECKO_DEMO_API_KEY, ROBINHOOD_RPC_URL (M1–M2)
 #   No signer key: paper only (M3b adds the HL API-wallet key file).
-
-runtime_profile = "auto"
 
 # --- Network -----------------------------------------------------------------
 # Open (convention 17), a one-line switch to "tor" once hl-tor-probe (M1) has

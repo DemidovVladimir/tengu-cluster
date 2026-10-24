@@ -146,9 +146,8 @@ async fn send_json(
     }
 }
 
-/// Canonical wallet label used for scope checks during the migration window.
-/// Until per-agent wallet allow-lists land in Phase B, all crypto tools share
-/// this single label and the `permissive_scope` grants it.
+/// Canonical wallet label used for scope checks: every crypto tool shares
+/// it and `permissive_scope` grants it (no per-agent wallet allow-lists yet).
 // TODO(Phase B): replace with per-agent wallet allow-lists.
 pub(crate) const DEFAULT_WALLET_LABEL: &str = "default";
 

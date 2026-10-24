@@ -1,4 +1,4 @@
-//! Shared values of lineage records (`docs/lineage-2026-10-06.md` § 1): ids,
+//! Shared values of lineage records (`docs/lineage.md` § 1): ids,
 //! times, counts, locators, evidence refs, pin targets, capability bindings.
 //! Every value parses from the record's TOML string and prints back as
 //! written; a missing fact is the string `"UNKNOWN"`, never a guess.
@@ -778,7 +778,7 @@ mod tests {
     #[test]
     fn locators_round_trip_and_refuse_climbing() {
         for s in [
-            "repo:docs/lineage-2026-10-06.md",
+            "repo:docs/lineage.md",
             "run:xlab/20261001T182809Z-weekend_fade",
             "run:xlab/20261001T182809Z-weekend_fade/trades-research.jsonl",
             "vault:w1-2026-10-06/xmarket-weekend/ledger.db",

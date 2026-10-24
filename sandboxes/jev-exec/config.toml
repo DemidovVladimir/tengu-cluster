@@ -17,8 +17,6 @@
 # runs in the architect's workspace, where `--sandbox` (cwd-relative) and the
 # older `tengu` on PATH would not resolve.
 
-runtime_profile = "auto"
-
 # Open: OpenRouter and the price APIs commonly block Tor exits.
 [egress]
 network = "open"
@@ -104,7 +102,7 @@ builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Cl
 http_request = { net_hosts = ["api.coinbase.com", "api.frankfurter.dev"] }
 list_directory = { fs_roots = ["~/jev-exec-workspace"] }
 
-# Jev picks, tools execute. Design: docs/decision-loop-plan-2026-09-24.md.
+# Jev picks, tools execute. Design: docs/decision-loops.md.
 [decision_loops.executor]
 model = "~typesafe/jev-latest"
 goal = """Carry out event.task — one instruction from the architect — with the \

@@ -13,18 +13,19 @@
 //! | Miss, offline (`inner = None`) | an error naming the key in full and the file |
 //! | Live call fails | the error; nothing stored (the next run asks again) |
 //! | Counters | `CacheStats` (`DecisionEngine::cache_stats`): hits · misses (= live calls when online) · errors (offline misses, failed live calls, store errors) |
-//! | Store | `decisions(key PK, model, request, decision, created_at_ms)` — `request` = the hashed canonical text; WAL (`synchronous = NORMAL`) + busy_timeout 5 s, one connection, every call on `spawn_blocking` (pattern of `history_sqlite.rs`) |
+//! | Store | `decisions(key PK, model, request, decision, created_at_ms)` — `request` = the hashed canonical text; 0600, WAL (`synchronous = NORMAL`) + busy_timeout 5 s (`sqlite.rs::open_wal`), one connection, every call on `spawn_blocking` |
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
+use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 /// Keys sort at every depth (`domain/canonical.rs`, shared with the
 /// backtest run's `spec_sha256`).
 pub(crate) use crate::domain::canonical::canonical_json;
@@ -53,7 +54,7 @@ pub(crate) struct CachedDecisionEngine {
     model: String,
     /// Answers misses; `None` = offline (a miss is an error).
     inner: Option<Arc<dyn DecisionEngine>>,
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
     path: PathBuf,
     hits: AtomicU64,
     misses: AtomicU64,
@@ -77,18 +78,12 @@ impl CachedDecisionEngine {
                 );
             }
         }
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        }
-        let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
-        )?;
+        let conn = open_wal(path, Durability::Normal)?;
         conn.execute_batch(SCHEMA_SQL)?;
         Ok(Self {
             model: model.to_string(),
             inner,
-            conn: Arc::new(Mutex::new(conn)),
+            conn: SharedConn::new(conn, "decision cache"),
             path: path.to_path_buf(),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -104,31 +99,16 @@ impl CachedDecisionEngine {
         }
     }
 
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || {
-            let guard = conn
-                .lock()
-                .map_err(|e| anyhow!("decision cache lock: {e}"))?;
-            f(&guard)
-        })
-        .await
-        .context("decision cache task")?
-    }
-
     async fn lookup(&self, key: &str) -> Result<Option<Decision>> {
         let key = key.to_string();
-        self.with_conn(move |c| {
-            let text: Option<String> = c
-                .query_row(GET_SQL, params![key], |r| r.get(0))
-                .optional()?;
-            text.map(|t| parse_row(&key, &t)).transpose()
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                let text: Option<String> = c
+                    .query_row(GET_SQL, params![key], |r| r.get(0))
+                    .optional()?;
+                text.map(|t| parse_row(&key, &t)).transpose()
+            })
+            .await
     }
 
     /// Store `d` under `key` unless a row is there already; returns the
@@ -139,13 +119,14 @@ impl CachedDecisionEngine {
             self.model.clone(),
             serde_json::to_string(d)?,
         );
-        self.with_conn(move |c| {
-            c.execute(PUT_SQL, params![key, model, request, text, now_ms()])
-                .with_context(|| format!("decision cache write {key}"))?;
-            let stored: String = c.query_row(GET_SQL, params![key], |r| r.get(0))?;
-            parse_row(&key, &stored)
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                c.execute(PUT_SQL, params![key, model, request, text, now_ms()])
+                    .with_context(|| format!("decision cache write {key}"))?;
+                let stored: String = c.query_row(GET_SQL, params![key], |r| r.get(0))?;
+                parse_row(&key, &stored)
+            })
+            .await
     }
 
     async fn answer(

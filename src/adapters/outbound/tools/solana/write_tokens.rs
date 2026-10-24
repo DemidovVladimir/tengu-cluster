@@ -493,7 +493,7 @@ mod tests {
     }
 
     /// Live, keyless: simulate closing the funded operator wallet's empty
-    /// token accounts on mainnet. `cargo test --bin tengu -- --ignored
+    /// token accounts on mainnet. `cargo test --lib -- --ignored
     /// live_close_token_accounts --nocapture`.
     #[tokio::test]
     #[ignore]

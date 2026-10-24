@@ -1,13 +1,11 @@
 //! Engine adapters — implementations of `ports::engine::Engine` and the
 //! factory that builds one from an `[agents.<name>]` block.
 
-#[cfg(feature = "claude_code")]
 pub(crate) mod claude_code;
-#[cfg(any(feature = "claude_code", feature = "codex"))]
 pub(crate) mod cli_run;
-#[cfg(feature = "codex")]
 pub(crate) mod codex;
 pub(crate) mod local;
+mod openai_compat;
 pub(crate) mod openrouter;
 
 use anyhow::Result;
@@ -29,68 +27,21 @@ pub(crate) fn bridges_tools(engine: &str) -> bool {
     matches!(engine.trim(), "claude_code" | "codex")
 }
 
-/// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
-#[allow(dead_code)]
-pub(crate) fn build_planner_engine(
-    engine_type: &str,
-    model: &str,
-    claude_code_config: Option<&crate::config::ClaudeCodeConfig>,
-) -> Result<Box<dyn Engine>> {
-    match engine_type {
-        "claude_code" => {
-            #[cfg(feature = "claude_code")]
-            {
-                let cc = claude_code_config.cloned().unwrap_or_default();
-                let model_opt = if model.is_empty() {
-                    None
-                } else {
-                    Some(model.to_string())
-                };
-                Ok(Box::new(
-                    crate::adapters::outbound::engines::claude_code::ClaudeCodeEngine::new(
-                        std::path::PathBuf::from(&cc.cli_path),
-                        crate::adapters::outbound::engines::claude_code::BuiltinToolsProfile::ReadOnly,
-                        model_opt,
-                        cc.timeout_secs,
-                    ),
-                ))
-            }
-            #[cfg(not(feature = "claude_code"))]
-            {
-                let _ = (model, claude_code_config);
-                anyhow::bail!("claude_code engine requires --features claude_code")
-            }
-        }
-        "local" => {
-            let defaults = crate::config::LimitsConfig::default();
-            Ok(Box::new(LocalEngine::new(
-                &crate::config::AgentLocalConfig::default(),
-                model,
-                defaults.context_window as usize,
-                defaults.request_timeout_secs,
-                None,
-            )?))
-        }
-        _ => {
-            let defaults = crate::config::LimitsConfig::default();
-            build_openrouter_engine(model, defaults.context_window as usize)
-        }
-    }
-}
-
 /// What a caller asks of a CLI engine's bridge (Claude Code, Codex) beyond
-/// the defaults: a `run-agent` step's workspace grant and
-/// `compress_and_store` summary file (`bridge_env::StepBridge`), and the
+/// the defaults: a `run-agent` step's workspace grant, `compress_and_store`
+/// summary file and trace journal (`bridge_env::StepBridge`), and the
 /// config file the bridge loads. Ignored by the other engines.
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(not(any(feature = "claude_code", feature = "codex")), allow(dead_code))]
 pub(crate) struct StepOpts {
     pub grant_workspace: bool,
     pub summary_file: Option<std::path::PathBuf>,
+    /// The step's journal when the parent records it
+    /// (`bridge_env::TENGU_BRIDGE_JOURNAL_ENV`).
+    pub journal: Option<std::path::PathBuf>,
     /// The config the bridge loads (`TENGU_CONFIG`) and takes
     /// `[agents.<agent_id>]` from; `None` = the config in effect
     /// (`config::paths::default_config_path`). `tengu eval` passes its
-    /// expanded eval config (`eval.rs::bridge_config_file`).
+    /// expanded eval config (`inbound/eval/mod.rs::bridge_config_file`).
     pub config_file: Option<std::path::PathBuf>,
 }
 
@@ -121,14 +72,13 @@ pub(crate) fn build_step_engine(
 ) -> Result<Box<dyn Engine>> {
     match agent_config.engine.as_str() {
         "claude_code" => {
-            #[cfg(feature = "claude_code")]
             {
                 let cc = claude_code_config.cloned().unwrap_or_default();
                 let profile = agent_config
                     .claude_code
                     .as_ref()
                     .map(|c| c.builtin_tools_profile.trim())
-                    .unwrap_or("editor_shell");
+                    .unwrap_or("none");
                 // `[egress]`: builtin Bash has no egress control — dropped
                 // while a proxy is set. The CLI's own API traffic follows
                 // `claude_cli_env` (HTTPS_PROXY) inside the engine.
@@ -167,18 +117,13 @@ pub(crate) fn build_step_engine(
                         crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,
                             summary_file: step.summary_file,
+                            journal: step.journal,
                         },
                     ),
                 ))
             }
-            #[cfg(not(feature = "claude_code"))]
-            {
-                let _ = (agent_id, claude_code_config, step);
-                anyhow::bail!("claude_code engine requires --features claude_code")
-            }
         }
         "codex" => {
-            #[cfg(feature = "codex")]
             {
                 use crate::adapters::outbound::engines::codex::{
                     CodexEngine, CodexSandbox, CodexWebSearch,
@@ -216,14 +161,10 @@ pub(crate) fn build_step_engine(
                         crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,
                             summary_file: step.summary_file,
+                            journal: step.journal,
                         },
                     ),
                 ))
-            }
-            #[cfg(not(feature = "codex"))]
-            {
-                let _ = (agent_id, step);
-                anyhow::bail!("codex engine requires --features codex")
             }
         }
         "local" => Ok(Box::new(LocalEngine::new(

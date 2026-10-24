@@ -60,9 +60,9 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · plan JSON</div>
   <h1>Planner</h1>
-  <p class="lede">One LLM call per turn, with tools, bridge, memory and grounding stripped. It reads a generated roster of agents, skills and tools, and must answer JSON: a direct reply, or a plan of steps for subagents.</p>
+  <p class="lede">One LLM call per turn, straight to the engine: no tools, bridge or memory exist on it. It reads a generated roster of agents, skills and tools, and must answer JSON: a direct reply, or a plan of steps for subagents.</p>
   <ul class="facts">
-    <li>engine <b>rag</b>, the only value</li>
+    <li><b>1</b> required key: <code>agent</code></li>
     <li>last <b>10</b> user messages in the prompt</li>
     <li>replan recall top <b>5</b> step outputs</li>
     <li><b>0</b> retries of the planner call</li>
@@ -84,7 +84,7 @@
   <figure class="stage" data-stage data-interval="3600">
     <div class="stage-canvas">
       <svg viewBox="0 0 860 490" role="img" aria-labelledby="flow-t">
-        <title id="flow-t">Planner: agents, skills and tools render the registry; recall lanes and recent messages join it in the prompt with the orchestrator skill as system prompt; one stripped LLM call; parse_verdict; direct reply or plan; plan stored per session.</title>
+        <title id="flow-t">Planner: agents, skills and tools render the registry; recall lanes and recent messages join it in the prompt with the orchestrator skill as system prompt; one tool-less LLM call; parse_verdict; direct reply or plan; plan stored per session.</title>
         <!-- prompt zone -->
         <rect class="zone" x="395" y="16" width="180" height="294" rx="10"/>
         <text x="405" y="36" class="zone-label">prompt · one call</text>
@@ -200,7 +200,7 @@
         <g class="pop badge" data-at="6"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">agent planner/&lt;agent&gt;</text></g>
         <g class="pop badge" data-at="7"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">raw → fenced → {…} → prose</text></g>
         <g class="pop badge" data-at="8"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">direct ends the turn</text></g>
-        <g class="pop badge" data-at="9"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">set_active_plan(session_id)</text></g>
+        <g class="pop badge" data-at="9"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">plan → each step (IPC)</text></g>
 
         <!-- moving tokens -->
         <circle class="tok" r="5" data-path="p-ag-reg" data-at="1"/>
@@ -223,15 +223,15 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>Roster sources: every <code>[agents.*]</code> block with a <code>description</code>, sorted by name; skills with a <code>name</code> and <code>description</code>; every catalog and MCP tool.</li>
+        <li>Roster sources: every <code>[agents.*]</code> block with a <code>description</code>, sorted by name, with its own tools and skills. Below it, names only (for a <code>compose</code>): skills with a <code>name</code> and <code>description</code>, every catalog and MCP tool. No description, no file path.</li>
         <li><code>TENGU_PLANNER_REGISTRY.md</code> is rendered and written to the working directory every planner turn. A failed write is only logged.</li>
         <li>With <code>postgres_memory</code>: earlier messages and this session's step outputs, by vector search, both off by default. Recent messages come from an in-memory ring.</li>
         <li>The system prompt is the body of <code>skills/orchestrator/SKILL.md</code>; a short built-in prompt if it is missing. Your message goes last.</li>
-        <li>One call on the <code>[orchestrator] agent</code>'s engine and model: no tools, executor, bridge tools, <code>[[mcp_servers]]</code>, memory recall or grounding nudge. That agent may differ from the default chat agent.</li>
-        <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer) and a <code>RagQueried</code> event naming the registry entries.</li>
+        <li>One call on the <code>[orchestrator] agent</code>'s engine and model (<code>PlannerLlm</code>): a single message, no tools, executor, bridge tools, <code>[[mcp_servers]]</code>, memory recall or grounding nudge. That agent may differ from the default chat agent. Its token usage comes back with the reply on every surface.</li>
+        <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer).</li>
         <li><code>parse_verdict</code> tries raw JSON, fenced JSON, the first balanced object, then wraps prose as <code>direct</code>. Only empty output is an error.</li>
         <li><code>direct</code> ends the turn with its text. <code>plan</code> goes to the DAG executor.</li>
-        <li>The accepted plan is stored for this session, sent to every step over IPC, and mirrored to <code>TENGU_PLAN.md</code>. Cleared when the turn ends.</li>
+        <li>The accepted plan goes to the DAG executor; every step's child gets it, rendered, over IPC (<code>plan_state</code>) — the plan that step is part of, whatever other session runs beside it.</li>
       </ol>
     </div>
   </figure>
@@ -291,7 +291,7 @@
       </ol>
     </div>
     <pre id="verdict-out" aria-live="polite"></pre>
-    <p class="note">One parse, no retry: <code>SKILL.md</code> says so, and <code>plan_schema.json</code> only documents the shape. A plan step with an unknown agent fails later, at the runner; one whose <code>depends_on</code> names a missing step replans.</p>
+    <p class="note">One parse, no retry (<code>parse_verdict</code>). <code>SKILL.md</code> (~2.8 KB) asks for one JSON object in two shapes; <code>plan_schema.json</code> only documents the shape. Every plan is checked before any step runs (<code>Plan::validate</code>): no steps, a duplicate id, an agent that is not routable, a <code>depends_on</code> naming a missing step or a cycle sends it straight back to the planner as a replan — no child, no retry wait.</p>
   </div>
 </section>
 
@@ -299,17 +299,17 @@
   <div class="sec-head">
     <span class="kicker">Files the planner leaves</span>
     <h2 id="s-files">Registry and plan, as written</h2>
-    <p>Rendered for <code>sandboxes/lping</code>: <code>crypto_researcher</code> is its only agent with a description. The plan is an example.</p>
+    <p>Rendered for <code>sandboxes/lping</code>: <code>crypto_researcher</code> is its only agent with a description. The plan is an example; it is never a file, only each step's <code>plan_state</code>.</p>
   </div>
   <div class="tabs">
     <div class="tablist">
       <button type="button" aria-controls="tab-reg" aria-selected="true">TENGU_PLANNER_REGISTRY.md</button>
-      <button type="button" aria-controls="tab-plan">TENGU_PLAN.md</button>
+      <button type="button" aria-controls="tab-plan">plan_state</button>
       <button type="button" aria-controls="tab-json">Plan JSON shape</button>
     </div>
     <div class="tabpanel" id="tab-reg"><pre><span class="k"># Tengu Planner Registry</span>
 
-This file is generated from the `[agents.*]` blocks of the active config that carry a `description`, skills, core tool definitions, and the tools of every configured MCP server (`&lt;server&gt;__&lt;tool&gt;`). The planner loads it into every planner turn.
+This file is generated from the `[agents.*]` blocks of the active config that carry a `description`; `## Skills` and `## Tools` list names only (skills on disk, catalog tools and every configured MCP server's `&lt;server&gt;__&lt;tool&gt;`) for a `compose`. The planner loads it into every planner turn.
 
 <span class="k">## Agents</span>
 
@@ -317,7 +317,7 @@ This file is generated from the `[agents.*]` blocks of the active config that ca
 
 - engine: `claude_code`
 - model: `claude-sonnet-5-5`
-- tools: `http_request, read_file, list_directory, sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide, solana_close_token_accounts, jupiter_swap, dlmm_open_position, dlmm_close_position, jup_perps_order`
+- tools: `http_request`, `read_file`, `list_directory`, `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide`, `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order`
 - skills: `-`
 
 Researches crypto assets and Solana DeFi: token prices, market caps, volume, <span class="c">(description continues)</span>
@@ -332,38 +332,19 @@ Example queries:
 
 <span class="k">## Skills</span>
 
-- `orchestrator`: Plans and dispatches multi-agent work from the planner registry roster. <span class="c">(…)</span> _(source: `&lt;cwd&gt;/skills/orchestrator/SKILL.md`)_
-<span class="c">(one line per skill in ~/.tengu/skills/, .tengu/skills/, skills/: the first tier with a name wins, as for agents)</span>
+`execution-map`, `german-teacher`, `orchestration-e2e`, `orchestrator`, <span class="c">(…)</span>
+<span class="c">(one line: every skill in &lt;TENGU_HOME&gt;/skills/, .tengu/skills/, skills/, sorted, each name once)</span>
 
 <span class="k">## Tools</span>
 
-- `http_request`: Make an HTTP request.
-- `read_file`: Read a file.
-- `list_directory`: List directory contents.
-<span class="c">(every catalog tool, opt-ins included, then every MCP server tool)</span></pre></div>
-    <div class="tabpanel" id="tab-plan" hidden><pre><span class="k"># Tengu Current Plan</span>
-
-- phase: `active`
-
-<span class="k">## Steps</span>
+`http_request`, `read_file`, `list_directory`, <span class="c">(…)</span>
+<span class="c">(one line: every catalog tool, opt-ins included, then every MCP server tool)</span></pre></div>
+    <div class="tabpanel" id="tab-plan" hidden><pre><span class="k">## Steps</span>
 
 - `s1` agent=`crypto_researcher` depends_on=`-` goal: Get the SOL price and 24h volume from two sources.
 
-<span class="k">## JSON</span>
-
-```json
-{
-  <span class="k">"steps"</span>: [
-    {
-      <span class="k">"id"</span>: <span class="s">"s1"</span>,
-      <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>,
-      <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
-      <span class="k">"depends_on"</span>: []
-    }
-  ]
-}
-```
-<span class="c"># a step sees this text under "## Current execution plan (loaded from IPC `plan_state`)"</span></pre></div>
+<span class="c"># bullets only: each carries every Step field (a compose adds a sub-bullet)</span>
+<span class="c"># a step sees this text under "## Current execution plan"</span></pre></div>
     <div class="tabpanel" id="tab-json" hidden><pre><span class="c"># the two shapes serde accepts (PlannerVerdict, tag "kind")</span>
 { <span class="k">"kind"</span>: <span class="s">"direct"</span>, <span class="k">"response"</span>: <span class="s">"&lt;text for the user&gt;"</span> }
 
@@ -389,11 +370,11 @@ Example queries:
     <li><span class="chip hands">plan</span><span><b>PlanCreated</b>orch: plan created (1 step). Also after every replan.</span></li>
     <li><span class="chip hands">start</span><span><b>StepStarted</b>orch: ▶ s1 [crypto_researcher]</span></li>
     <li><span class="chip ok">ok</span><span><b>StepSucceeded</b>orch: ✓ s1. Alone, with no <code>StepStarted</code>, for a step a replan reuses (finished earlier, unchanged).</span></li>
-    <li><span class="chip warn">fail</span><span><b>StepFailed</b>orch: ✗ s1 (attempt 1): the error. One per failed attempt; <code>retry_in_ms</code> = the wait before the next one, none on the last.</span></li>
+    <li><span class="chip warn">fail</span><span><b>StepFailed</b>orch: ✗ s1 (attempt 1): the error. One per failed attempt; <code>retry_in_ms</code> = the wait before the next one, none on the last or after a failure that is not retried (<code>fatal</code> / <code>decode</code> <code>StepFailure</code>).</span></li>
     <li><span class="chip bad">out</span><span><b>StepExhausted</b>orch: ⊘ s1 exhausted: the last error.</span></li>
     <li><span class="chip heart">again</span><span><b>ReplanTriggered</b>orch: ↻ replan — the error.</span></li>
     <li><span class="chip data">end</span><span><b>PlanCompleted</b>orch: plan completed. Every path ends with one; <code>failed</code> when the answer is a system error (planner or replan call failed, replans ran out).</span></li>
-    <li><span class="chip data">opt-in</span><span><b>RagQueried · MetricsRecorded</b>Shown with <code>TENGU_TUI_RAG_DEBUG=1</code> / <code>TENGU_TUI_METRICS=1</code>.</span></li>
+    <li><span class="chip data">opt-in</span><span><b>MetricsRecorded</b>Shown with <code>TENGU_TUI_METRICS=1</code>.</span></li>
   </ul>
 </section>
 
@@ -409,15 +390,15 @@ Example queries:
       <tbody>
         <tr><td><code>PlanCreated</code></td><td><code>plan.created</code> ok: steps, agents, ids, <code>depends_on</code>, <code>replan</code></td><td><code>planner</code></td></tr>
         <tr><td><code>StepStarted</code></td><td><code>step.started</code> running</td><td><code>agent:&lt;a&gt;</code></td></tr>
-        <tr><td><code>StepFailed</code></td><td><code>step.retrying</code> pending (another attempt) · <code>step.failed</code> failed (the last); line 1 of the error</td><td><code>agent:&lt;a&gt;</code></td></tr>
+        <tr><td><code>StepFailed</code></td><td><code>step.retrying</code> pending (another attempt) · <code>step.failed</code> failed (the last, or one not retried); line 1 of the error</td><td><code>agent:&lt;a&gt;</code></td></tr>
         <tr><td><code>StepSucceeded</code></td><td><code>step.completed</code> ok, <code>output_chars</code>, duration</td><td><code>agent:&lt;a&gt;</code></td></tr>
         <tr><td><code>ReplanTriggered</code></td><td><code>plan.replanned</code> pending, line 1 of the reason</td><td><code>planner</code></td></tr>
-        <tr><td><code>PlanCompleted</code></td><td><code>plan.completed</code>: ok · failed · dropped (cancelled — also a turn dropped unfinished: aborted at the shutdown deadline, an eval row's timeout); <code>direct</code> when the planner answered itself</td><td><code>planner</code></td></tr>
+        <tr><td><code>PlanCompleted</code></td><td><code>plan.completed</code>: ok · failed · dropped (cancelled — a turn dropped unfinished: Telegram <code>/stop</code>, aborted at the shutdown deadline, an eval row's timeout); <code>direct</code> when the planner answered itself</td><td><code>planner</code></td></tr>
         <tr><td><code>MetricsRecorded</code> (this session)</td><td><code>metrics.recorded</code>: tokens, chars, latency; a subagent record under its step, even one that reaches the bus after <code>plan.completed</code></td><td>none</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="note">A webhook turn hangs under its <code>trigger.webhook</code>; a step's <code>run-agent</code> tool calls hang under its <code>step.started</code> (<a href="subagents.html">Subagents</a>). <code>StepExhausted</code>, <code>RagQueried</code> and <code>StepProgress</code> are not written.</p>
+  <p class="note">A webhook turn hangs under its <code>trigger.webhook</code>; a step's <code>run-agent</code> tool calls hang under its <code>step.started</code> (<a href="subagents.html">Subagents</a>). <code>StepExhausted</code> is not written: the last <code>step.failed</code> says it.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -426,8 +407,8 @@ Example queries:
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>The planner cannot call tools.</b> With a system-prompt override the turn gets an empty tool list, no executor, no bridge tools, no <code>[[mcp_servers]]</code> and no memory recall. A CLI's own built-ins are not bridge tools: a Claude Code planner sets <code>builtin_tools_profile = "none"</code> and is then a pure text turn.</span></li>
-    <li><span><b>Only one engine.</b> <code>[orchestrator] engine</code> other than <code>"rag"</code> fails the config load.</span></li>
+    <li><span><b>The planner cannot call tools.</b> <code>PlannerLlm</code> holds only an engine and the agent block: its call has no tool list, executor, bridge tools, <code>[[mcp_servers]]</code> or memory recall to pass. A CLI's own built-ins are not bridge tools: a Claude Code planner sets <code>builtin_tools_profile = "none"</code> and is then a pure text turn.</span></li>
+    <li><span><b>No unknown keys.</b> <code>[orchestrator]</code> takes <code>agent</code>, <code>max_attempts_per_step</code>, <code>max_replans</code>, <code>route_explicit_agents</code>; anything else (the old <code>engine = "rag"</code> too) fails the config load.</span></li>
     <li><span><b>Private agents stay private.</b> A block without a <code>description</code> never appears in the registry.</span></li>
     <li><span><b>Memory trouble never blocks a turn.</b> A Postgres or embedding error leaves its block empty and the call goes on.</span></li>
     <li><span><b>No self-recall.</b> Earlier messages are read before this message is stored.</span></li>
@@ -439,13 +420,13 @@ Example queries:
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">See what the planner saw</h2>
-    <p>Both files land in the directory you start <code>tengu</code> from. Per-layer sizes are debug log lines.</p>
+    <p>The registry lands in the directory you start <code>tengu</code> from. Per-layer sizes are debug log lines.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_RAG_DEBUG=1 tengu chat --sandbox lping</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>rg '^### ' TENGU_PLANNER_REGISTRY.md</span>
 <span class="ln"><span class="hl">### crypto_researcher</span></span>
-<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md</span>
+
 <span class="ln cmd"><span class="p">$ </span>RUST_LOG=tengu=debug tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>rg 'metrics.layer' ~/.tengu/logs/tengu.log</span></pre>
   </div>
@@ -460,13 +441,12 @@ Example queries:
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>RagPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
-        <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, plan state, <code>TENGU_PLAN.md</code></td></tr>
-        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt); per-session plan guard</td></tr>
+        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>PlannerLlm</code> (the engine call); <code>RegistryPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code>; the system prompt comes in from <code>bootstrap/orchestrator.rs</code> (<code>planner_prompt</code>)</td></tr>
+        <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, the plan render (<code>plan_state</code>)</td></tr>
+        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt)</td></tr>
         <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus (records before it broadcasts)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code></td><td>the bridge: each event as a trace event; a step's cause</td></tr>
-        <tr><td><code>src/application/orchestrator/wiring.rs</code></td><td>the planner's chat port</td></tr>
-        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>wiring; the stripped planner turn; the recording a surface hands it; the metrics bridge the orchestrator owns (<code>flush_metrics</code>)</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>planner_llm</code> (the planner's engine from <code>[orchestrator] agent</code>), <code>build_orchestrator</code>; the recording a surface hands it; the metrics bridge the orchestrator owns (<code>flush_metrics</code>)</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>Planner</code>, <code>PlannerVerdict</code></td></tr>
         <tr><td><code>src/domain/plan.rs</code></td><td><code>Plan</code>, <code>Step</code>, <code>AgentCompose</code></td></tr>
         <tr><td><code>skills/orchestrator/SKILL.md</code></td><td>the planner's system prompt</td></tr>
@@ -477,7 +457,7 @@ Example queries:
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -501,18 +481,18 @@ Example queries:
     var prior = Math.min(turn - 1, n);
     var h = [];
     h.push(row("heart", "system: skills/orchestrator/SKILL.md", "body after the frontmatter", true, "always"));
-    h.push(row("", "## Planner registry (loaded from `TENGU_PLANNER_REGISTRY.md`)", "agents with a description, skills, tools", true, "always"));
+    h.push(row("", "## Planner registry (loaded from `TENGU_PLANNER_REGISTRY.md`)", "agents with a description; skill and tool names", true, "always"));
     var xsOn = mem && xs > 0;
-    h.push(row("brain", "## Cross-session message recall", xsOn ? "top " + xs + " earlier user messages, any session, ≤ 400 chars each" : (mem ? "off: cross_session_msg_top_k = 0" : "off: no postgres_memory"), xsOn, xsOn ? "if hits" : "off"));
+    h.push(row("brain", "## Cross-session message recall", xsOn ? "top " + xs + " earlier user messages, any session, ≤ 400 chars each, each fenced" : (mem ? "off: cross_session_msg_top_k = 0" : "off: no postgres_memory"), xsOn, xsOn ? "if hits" : "off"));
     h.push(row("", "## Recent user messages this session", prior > 0 ? prior + " earlier message" + (prior === 1 ? "" : "s") + " (cap " + n + "), ≤ 400 chars each" : "empty on the first turn", prior > 0, prior > 0 ? prior + " lines" : "off"));
     if (!replan) {
       var wsOn = mem && ws > 0;
-      h.push(row("brain", "## Recent step outputs (this session)", wsOn ? "top " + ws + " step summaries with this session_id" : (mem ? "off: within_session_output_top_k = 0" : "off: no postgres_memory"), wsOn, wsOn ? "if hits" : "off"));
+      h.push(row("brain", "## Recent step outputs (this session)", wsOn ? "top " + ws + " step summaries with this session_id, each fenced" : (mem ? "off: within_session_output_top_k = 0" : "off: no postgres_memory"), wsOn, wsOn ? "if hits" : "off"));
       h.push(row("you", "## User message (current turn)", "your message, verbatim", true, "always"));
     } else {
       var xpOn = mem && xp > 0;
-      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs, any session; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
-      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries, prior plan JSON", true, "always"));
+      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs of this sandbox, any session, each fenced; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
+      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries (fenced as step-error:<id>), prior plan as compact JSON", true, "always"));
       h.push(row("you", "## Original user message", "the same message as plan()", true, "always"));
     }
     layers.innerHTML = h.join("");

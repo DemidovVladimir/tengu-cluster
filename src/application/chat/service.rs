@@ -13,11 +13,16 @@ use anyhow::Result;
 use crate::application::chat::flow::{
     enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
 };
-use crate::application::chat::prompt_budget::{assemble_recent_history, compute_base_input_budget};
-use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
+use crate::application::chat::prompt_budget::{
+    assemble_recent_history, compute_base_input_budget, truncate_to_token_budget,
+};
+use crate::application::chat::tool_loop::{
+    collect_engine_response, AgentTurnMetrics, LoopOpts, ToolResultObserver,
+};
+use crate::application::memory::fencing::build_memory_context_block;
 use crate::application::memory::manager::MemoryManager;
 use crate::config::AgentConfig;
-use crate::domain::message::{Lens, Message, Recipient, Role, ToolDef};
+use crate::domain::message::{Message, Recipient, Role, ToolDef};
 use crate::domain::session::{ChatLoopState, FlowCompactionPolicy};
 use crate::domain::token::estimate_tokens_approx_min1;
 use crate::ports::engine::EngineDiagnostics;
@@ -61,24 +66,6 @@ pub(crate) fn handle_chat_command(
     skill_commands: &[(String, String)],
 ) -> CommandResult {
     match command {
-        "/eco" => {
-            state.active_lens = Lens::Eco;
-            CommandResult::Handled(CommandOutput {
-                lines: vec!["Switched to eco lens (summaries only)".into()],
-            })
-        }
-        "/standard" => {
-            state.active_lens = Lens::Standard;
-            CommandResult::Handled(CommandOutput {
-                lines: vec!["Switched to standard lens (auto-expand)".into()],
-            })
-        }
-        "/precise" => {
-            state.active_lens = Lens::Precise;
-            CommandResult::Handled(CommandOutput {
-                lines: vec!["Switched to precise lens (full content)".into()],
-            })
-        }
         "/cost" => {
             let lines = vec![
                 "Session Stats".into(),
@@ -99,7 +86,6 @@ pub(crate) fn handle_chat_command(
                 .map(|m| estimate_tokens_approx_min1(&m.content))
                 .sum();
             let window = engine_info.context_window;
-            let lens_name = state.active_lens.as_str();
             let mut lines = vec![
                 format!(
                     "Context: ~{} / {} tokens ({}%)",
@@ -107,7 +93,6 @@ pub(crate) fn handle_chat_command(
                     window,
                     (used * 100) / window.max(1)
                 ),
-                format!("Lens: {}", lens_name),
                 format!("History turn limit: {}", history_turn_limit),
                 format!(
                     "Compaction: threshold={} keep_turns={} summary_max_tokens={}",
@@ -175,9 +160,6 @@ pub(crate) fn handle_chat_command(
         "/help" => {
             let mut lines = vec![
                 "Commands:".into(),
-                "  /eco       — Eco lens (summaries)".into(),
-                "  /standard  — Standard lens (auto-expand)".into(),
-                "  /precise   — Precise lens (full content)".into(),
                 "  /engine    — Show current engine".into(),
                 "  /cost      — Token usage stats".into(),
                 "  /context   — Context window usage".into(),
@@ -233,7 +215,8 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub tool_executor: Option<&'a dyn ToolExecutor>,
     pub memory_manager: Option<&'a MemoryManager>,
     pub max_recall_entries: usize,
-    #[allow(dead_code)] // reserved for future token-budget-based trimming of recall results
+    /// Cap on the recalled-memory block (`[memory] max_recall_tokens`,
+    /// ~4 chars / token); 0 = no recall block.
     pub max_recall_tokens: usize,
     pub tool_observer: Option<ToolResultObserver<'a>>,
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
@@ -242,11 +225,6 @@ pub(crate) struct ChatRuntimeService<'a> {
     /// `[[mcp_servers]]` behind any `{server}__{tool}` entry in
     /// `bridge_tools` — handed to the engine so its bridge can proxy them.
     pub mcp_servers: &'a [crate::config::McpServerConfig],
-    /// Phase 4c: when `true`, the "last/latest/most recent" fresh-grounding
-    /// system message at the top of `process_user_text` is skipped. Set by
-    /// the planner path (`run_turn_with_system`) so the grounding nudge does
-    /// not compete with the SKILL.md "emit JSON only" instruction.
-    pub suppress_grounding_nudge: bool,
 }
 
 /// The message asks about the latest history ("last", "most recent", …).
@@ -274,14 +252,13 @@ pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
     })
 }
 
-/// Create a new `ChatLoopState` with defaults from agent config.
-pub(crate) fn create_chat_loop_state(agent_config: &AgentConfig) -> ChatLoopState {
+/// A fresh `ChatLoopState` (no messages, no flow, zero usage).
+pub(crate) fn create_chat_loop_state() -> ChatLoopState {
     ChatLoopState {
         messages: Vec::new(),
         active_flow_key: None,
         manual_session_id: None,
         flow_token_usage: 0,
-        active_lens: agent_config.default_lens.parse().unwrap_or(Lens::Eco),
         total_input_tokens: 0,
         total_output_tokens: 0,
         last_prompt_report: None,
@@ -346,8 +323,7 @@ impl<'a> ChatRuntimeService<'a> {
             });
         }
 
-        let needs_fresh_grounding =
-            !self.suppress_grounding_nudge && needs_fresh_history_grounding(text);
+        let needs_fresh_grounding = needs_fresh_history_grounding(text);
 
         // Recall relevant memories if a memory manager with a vector
         // backend is available.
@@ -360,12 +336,15 @@ impl<'a> ChatRuntimeService<'a> {
                 .map(|m| m.content.as_str())
                 .unwrap_or("");
             match mgr.search(query, self.max_recall_entries, None).await {
-                Ok(hits) if !hits.is_empty() => {
-                    let mut block = String::from("[Relevant memories]\n");
+                Ok(hits) if !hits.is_empty() && self.max_recall_tokens > 0 => {
+                    let mut raw = String::from("[Relevant memories]\n");
                     for h in &hits {
-                        block.push_str(&format!("- {}\n", h.text));
+                        raw.push_str(&format!("- {}\n", h.text));
                     }
-                    Some(block)
+                    // Capped, then fenced: recalled text is data the user's
+                    // turn carries, never a system instruction.
+                    let raw = truncate_to_token_budget(&raw, self.max_recall_tokens);
+                    Some(build_memory_context_block(&raw)).filter(|b| !b.is_empty())
                 }
                 Ok(_) => None,
                 Err(e) => {
@@ -406,15 +385,25 @@ impl<'a> ChatRuntimeService<'a> {
                 tool_calls: None,
             });
         }
-        if let Some(ref block) = memory_block {
-            prompt_messages.push(Message {
-                role: Role::System,
-                content: block.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            });
-        }
         prompt_messages.extend(history_assembly.messages.clone());
+        if let Some(ref block) = memory_block {
+            // Prepended to the current user message (never persisted): a
+            // separate message would break strict user / assistant
+            // alternation on some local chat templates.
+            match prompt_messages
+                .iter_mut()
+                .rev()
+                .find(|m| matches!(m.role, Role::User))
+            {
+                Some(user) => user.content = format!("{block}\n\n{}", user.content),
+                None => prompt_messages.push(Message {
+                    role: Role::User,
+                    content: block.clone(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                }),
+            }
+        }
         if prompt_messages.is_empty() {
             return Ok(ChatTurnResult {
                 assistant_text: None,
@@ -433,19 +422,25 @@ impl<'a> ChatRuntimeService<'a> {
             max_mcp_result_chars: Some(self.agent_config.limits.max_mcp_result_chars),
             mcp_servers: self.mcp_servers.to_vec(),
         };
+        // Each engine turn of this agent is one `agent` metrics record,
+        // a failed one too; the session is the chat flow.
+        let metrics = AgentTurnMetrics {
+            session: flow_key.clone(),
+            agent: self.agent_id.to_string(),
+            model: self.agent_config.model.clone(),
+        };
         let resp = collect_engine_response(
             self.engine,
             &prompt_messages,
             self.tools,
             &context,
             self.tool_executor,
-            self.tool_observer,
-            self.cancel,
-            None, // chat runtime has its own flow-level budget enforcement
-            self.agent_config.limits.max_tool_rounds,
-            self.agent_config.limits.max_tool_result_chars,
-            self.agent_config.limits.stream_event_timeout_secs,
-            self.agent_config.limits.compact_result_limit,
+            &LoopOpts {
+                observer: self.tool_observer,
+                cancel: self.cancel,
+                hooks: Some(&metrics),
+                ..LoopOpts::from_limits(&self.agent_config.limits)
+            },
         )
         .await?;
 

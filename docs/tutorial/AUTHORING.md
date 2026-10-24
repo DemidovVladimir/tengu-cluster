@@ -25,9 +25,12 @@ here and in `web/studio/` (the Studio page — the one exception in the
 | Behaviour unchanged (refactor, rename inside a file) | Page stays; still check names / paths the page shows |
 
 Claude Code also gets a reminder from the `PostToolUse` hook in
-`.claude/settings.json` (matcher `Edit|Write|MultiEdit`): after every edit of a
-`src/**/*.rs` file it names that file and asks for the pages, the footer date and
-`cargo test --test tutorial_map`. It is a reminder only; the test is the gate.
+`.claude/settings.json` (matcher `Edit|Write|MultiEdit`): the first edit of a
+`src/**/*.rs` file in a session names the pages whose `sources` cover it (read
+from this `sources.toml`; a file in no page and not in `[glue]` is named as
+unmapped) and asks for the footer date and `cargo test --test tutorial_map`.
+Later edits of the same file stay quiet (one marker file per session under
+`$TMPDIR`). It is a reminder only; the test is the gate.
 
 ## Page anatomy (in order)
 

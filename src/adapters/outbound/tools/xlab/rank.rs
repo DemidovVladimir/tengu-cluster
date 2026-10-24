@@ -1,5 +1,5 @@
 //! `strategy_ranking` — strategy rankings of a `[strategy_ranking]` sandbox
-//! (`docs/strategy-ranking-automation-2026-10-08.md` SR-4): `run` one ranking
+//! (`docs/ranking.md` SR-4): `run` one ranking
 //! date of a sealed contract through the coordinator (`application/ranking/`,
 //! as `tengu ranking run` runs it), or read a published one (`latest`). No
 //! network, no LLM; xlab-w2's `[feeds.strategy_ranking_*]` call it under
@@ -24,9 +24,10 @@ use chrono::NaiveDate;
 use serde_json::Value;
 use tracing::info;
 
-use super::{defs, object_args, opt_str, XlabShared};
+use super::{defs, XlabShared};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+use crate::adapters::outbound::tools::args::{object_args, opt_str};
 use crate::adapters::outbound::tools::xm::STATE_DIR_MISSING;
 use crate::application::ranking::store::published_ranking;
 use crate::application::ranking::{

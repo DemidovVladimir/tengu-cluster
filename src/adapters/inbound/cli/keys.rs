@@ -1,5 +1,5 @@
 //! `tengu keys` — the operator side of the seal proxy
-//! (`docs/sealed-keys-2026-10-09.md`).
+//! (`docs/sealed-keys.md`).
 //!
 //! | Action | Does | Network | Touch ID |
 //! |---|---|---|---|

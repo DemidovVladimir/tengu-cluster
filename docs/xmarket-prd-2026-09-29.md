@@ -1,12 +1,12 @@
 > Operator PRD, stored verbatim on 2026-09-29. Working sandbox name: `xmarket` (`sandboxes/xmarket/config.toml`).
-> Gap tracker (what Tengu must add): [`xmarket-tracker-2026-09-29.md`](xmarket-tracker-2026-09-29.md) — rules in its **§ 0 Start here**. How to execute: [`xmarket-build-plan-2026-09-30.md`](xmarket-build-plan-2026-09-30.md) (kickoff prompt at its end).
+> Gap tracker (what Tengu must add): [`xmarket-tracker.md`](xmarket-tracker.md) — rules in its **§ 0 Start here**. How to execute: [`xmarket-build-plan-2026-09-30.md`](archive/2026-09/xmarket-build-plan-2026-09-30.md) (kickoff prompt at its end).
 > The operator addendum below (2026-09-30) is not part of the v0.4 text; it extends it and wins where the two differ.
 
 ## Operator addendum — decisions and rules (2026-09-30)
 
 | Topic | Rule |
 |---|---|
-| Build mandate | Build the full scope in this PRD, including the parts the feasibility study found no edge for; tested, self-validated and fixed until it runs smoothly; docs adjusted; a separate sandbox (`xmarket-weekend`) for the weekend investigation run. Execution plan: [`xmarket-build-plan-2026-09-30.md`](xmarket-build-plan-2026-09-30.md) |
+| Build mandate | Build the full scope in this PRD, including the parts the feasibility study found no edge for; tested, self-validated and fixed until it runs smoothly; docs adjusted; a separate sandbox (`xmarket-weekend`) for the weekend investigation run. Execution plan: [`xmarket-build-plan-2026-09-30.md`](archive/2026-09/xmarket-build-plan-2026-09-30.md) |
 | Engine compatibility | Every tool — existing and new — works 100 % under `engine = "openrouter"`, `"local"` and `"claude_code"` (subscription, through `tengu mcp-bridge`, exactly as in-process) — **no exceptions**. A tool is done only when its schema lint, bridge conformance case and live engine-matrix smoke pass |
 | Trading mode | Paper first. Live trading starts only in the live pilot (M3b), after the M3 edge check says "go"; paper keeps running alongside |
 | Budget | $100: paper starting cash, the `[risk]` total-exposure cap, and later the deposit of a dedicated Hyperliquid sub-account whose API wallet can trade but not withdraw |
@@ -19,7 +19,7 @@
 | Data identity | `SEC_USER_AGENT` is set in the repo `.env` (verified 2026-09-30) |
 | Feasibility (2026-09-30) | Verdict **re-scope** ([`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md)): the cross-venue convergence idea fails after costs; two Hyperliquid-only rules (weekend overshoot fade, overnight follow-through after post-market earnings) show a weak in-sample edge to paper-test; at $100 no system profile breaks even. **Operator decision 2026-09-30: keep the full plan**, with the report attached as a warning; a holdout test of the two rules and a weekend order-book recording (2026-10-02 → 10-05) run first. Holdout result: the weekend fade passes on 53 new names (+49.8 bps net per trade, same weekends); the post-earnings rule is not confirmed |
 | History first (operator 2026-10-01) | Answer trading / strategy questions by backfilling public history and backtesting it (`sandboxes/xlab`, [`xlab-2026-10-01.md`](xlab-2026-10-01.md)); live recording only for data with no historical source, never a blocking step |
-| Evidence (2026-10-08) | Rule W (weekend fade) is the only rule that survives costs on history; first forward weekend: capped +141.82 bps (n 4, [`w1-p0-weekend-2026-10-06.md`](w1-p0-weekend-2026-10-06.md)); W1 frozen and kept after `TENGU_ROADMAP.md` P6–P11 — no change beats rule W ([`p10-w2-candidate-2026-10-08.md`](p10-w2-candidate-2026-10-08.md)); the M3 go needs ≥ 12 forward weekends, mean ≥ +15 bps at executable prices, t ≥ 1.5, not carried by ≤ 2 weekends (1 weekend so far) |
+| Evidence (2026-10-08) | Rule W (weekend fade) is the only rule that survives costs on history; first forward weekend: capped +141.82 bps (n 4, [`w1-p0-weekend-2026-10-06.md`](archive/2026-10/w1-p0-weekend-2026-10-06.md)); W1 frozen and kept after `docs/plans/TENGU_ROADMAP.md` P6–P11 — no change beats rule W ([`p10-w2-candidate-2026-10-08.md`](p10-w2-candidate-2026-10-08.md)); the M3 go needs ≥ 12 forward weekends, mean ≥ +15 bps at executable prices, t ≥ 1.5, not carried by ≤ 2 weekends (1 weekend so far) |
 | Build order | E0 engine parity → M0 thin paper slice (+ the weekend sandbox) → M1 universe + history → M2 continuous market observation → M3 edge check (go / no-go) → M3b live pilot → M4 information layer → M5 event ↔ asset + Jev + slow path → M6 opportunities + full paper execution → M7 evaluation → M8 extensions |
 
 # Product Requirements Document

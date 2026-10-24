@@ -1,0 +1,452 @@
+# Webhooks — operator guide (2026-05-11)
+
+> The `tengu webhooks --sandbox <name>` listener accepts inbound HTTP POSTs
+> on one route, `POST /webhooks/:name` (no other route), verifies an HMAC
+> signature (or a static `Authorization` header) and dispatches a one-shot
+> orchestrator turn — or, for an endpoint with `loop`, queues the body on a
+> `[decision_loops.*]` loop. A planner turn runs through the
+> `[orchestrator] agent` planner, which routes to `[agents.*]` blocks exactly
+> as a chat message would. Output is asynchronous — an accepted request gets
+> **202 Accepted** with `{"session_id": "..."}`; the agent runs in the
+> background and its final text lands in Open Brain (`agentic_memory`,
+> Postgres table `memory_events`, feature `postgres_memory`) keyed by
+> `session_id`. `tengu run` and Studio's Play serve the same route
+> (`docs/runtime.md` § Webhooks under `tengu run`).
+
+---
+
+## TL;DR — minimum-viable setup
+
+```
+# 1. Build (webhooks is a default feature; postgres_memory persists outputs)
+cargo build --release --features postgres_memory
+
+# 2. Add to sandboxes/<name>/config.toml:
+#    [webhooks]
+#    enabled = true
+#    bind    = "127.0.0.1"
+#    port    = 7080
+#
+#    [webhooks.endpoints.<endpoint-name>]
+#    agent          = "lping"          # any [agents.<name>] block in this sandbox config
+#    secret_env     = "MY_SECRET_VAR"  # env var holding the shared secret
+#    goal_template  = "A webhook arrived. Inspect the payload."
+
+# 3. Run
+MY_SECRET_VAR="abc123" \
+  RUST_LOG=tengu=info \
+  ./target/release/tengu webhooks --sandbox <name>
+
+# 4. Fire a signed request
+BODY='{"event":"smoke","data":{"hello":"world"}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "abc123" | awk '{print $2}')
+curl -X POST http://127.0.0.1:7080/webhooks/<endpoint-name> \
+  -H "X-Tengu-Signature: sha256=$SIG" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"
+
+# 5. Confirm the run landed (TENGU_MEMORY_DATABASE_URL = the Open Brain Postgres)
+psql "$TENGU_MEMORY_DATABASE_URL" -c \
+  "SELECT metadata->>'step_id' AS step_id, left(content, 200) FROM memory_events
+   WHERE session_id = 'webhook-<endpoint-name>-<uuid>' ORDER BY created_at"
+```
+
+---
+
+## What webhooks are for
+
+A webhook endpoint lets an external system trigger an orchestrator turn the
+same way a user message in TUI / Telegram does. Common use cases:
+
+| Sender | Endpoint shape | Typical agent |
+|---|---|---|
+| GitHub | PR / issue events | `reviewer` agent that calls `http_request` to fetch diff + posts a comment |
+| Stripe | payment / subscription events | `fulfilment` agent running the fulfilment pipeline |
+| Internal alerting | uptime / error spikes | `oncall` agent that summarises + posts to Slack |
+| Cron / scheduler | timed triggers | Whichever agent owns the periodic task |
+| Other tengu instances | webhook-to-webhook | Build pipelines across deployments |
+
+Webhooks reuse the same orchestrator (`build_orchestrator`), planner
+(`RegistryPlanner`), and subagent runtime (`SubprocessRunner` /
+`tengu run-agent`) as chat surfaces. Once the listener is up, an inbound
+POST is functionally identical to a chat message — the only difference is
+the message arrived over HTTP with an HMAC signature instead of via a
+TUI keystroke.
+
+---
+
+## Config schema
+
+The `[webhooks]` block and each `[webhooks.endpoints.<name>]` block live
+in `sandboxes/<sandbox-name>/config.toml`. The runtime resolves the
+sandbox name from `--sandbox` on the CLI.
+
+### `[webhooks]`
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | When `false`, `tengu webhooks` refuses to start. Hard gate against accidental exposure. |
+| `bind` | `string` | `"127.0.0.1"` | Listen address. Loopback by default — only change to `"0.0.0.0"` after configuring HMAC. |
+| `port` | `u16` | `7080` | TCP port. |
+| `endpoints` | `map<string, WebhookEndpointConfig>` | empty | Per-endpoint bindings (see below). |
+
+### `[webhooks.endpoints.<name>]`
+
+Each endpoint surfaces at `POST /webhooks/<name>`. The map key is the
+endpoint name; the block body configures it.
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `agent` | `string`, required unless `loop` is set | — | Informational: echoed in the `webhook accepted` log line and the 202 body. The turn is **not** pinned to it — `run_one_shot` builds the orchestrator (`[orchestrator] agent`) and the planner picks from the sandbox's `[agents.<name>]` blocks (`sandboxes/<name>/config.toml` is the single config — there is no `agents/` directory). Use `goal_template` to steer routing. |
+| `secret_env` | `string`, optional | — | Name of the environment variable holding the HMAC shared secret. **Mutually exclusive with `secret`.** Preferred — keeps secrets out of TOML on disk. |
+| `secret` | `string`, optional | — | Inline shared secret. **Mutually exclusive with `secret_env`.** Dev-only — `secret_env` is the right choice for any committed config. |
+| `goal_template` | `string`, optional | *"A webhook arrived. Process the payload below."* | Prefix prepended to the synthesized user message. The full message is `"{goal_template}\n\nPayload (raw body, may be JSON):\n{body}"`. |
+| `loop` | `string`, optional | — | (2026-09-24) Send the body (parsed JSON, else string) to `[decision_loops.<loop>]` instead of the planner — Jev picks actions, tools execute; low confidence escalates to the orchestrator. 202 body carries `"loop"`. Events queue per loop (one at a time, arrival order; ≤ `[runtime] max_decisions_in_flight` across loops, 2026-09-30); past `[runtime] max_queued_per_loop` waiting events (default 64) one more gets **429** with the reason (2026-10-01). See `docs/decision-loops.md`. |
+| `auth_header_env` | `string`, optional | — | (2026-09-24) Env var holding the exact `Authorization` header value the sender attaches (Helius webhook `authHeader`). Constant-time compare, no body signature. **Mutually exclusive with `secret_env` / `secret`.** Mismatch → 401 `Authorization header mismatch`. |
+
+The listener validates every endpoint at startup. Misconfiguration —
+`enabled = false`, no endpoints, no `[orchestrator]` block (when an
+endpoint has no `loop`), neither secret set, both set, empty inline secret,
+`auth_header_env` + a secret, empty agent without `loop`, `loop` naming a
+missing `[decision_loops.*]` block — prevents the
+server from binding. `agent` is not checked against `[agents.*]` (see
+above). **Better to fail at boot than to leak unauthenticated traffic into
+the orchestrator.**
+
+### Example: two-endpoint sandbox
+
+```toml
+[webhooks]
+enabled = true
+bind    = "0.0.0.0"
+port    = 7080
+
+[webhooks.endpoints.github_pr]
+agent          = "reviewer"
+secret_env     = "GITHUB_WEBHOOK_SECRET"
+goal_template  = "GitHub PR webhook arrived. Inspect, review, post a summary."
+
+[webhooks.endpoints.alerts]
+agent          = "oncall"
+secret_env     = "ALERT_WEBHOOK_SECRET"
+goal_template  = "Production alert. Triage, decide severity, route to humans if critical."
+```
+
+---
+
+## Per-request flow
+
+```
+external sender
+      |
+      | POST /webhooks/<name>
+      | Content-Type: application/json
+      | X-Tengu-Signature: sha256=<hex>
+      | <body bytes>
+      v
+  axum router
+      |
+      v
+  dispatch_webhook
+      |
+      +--- 1. Lookup endpoint by name              -> 404 if unknown
+      +--- 2. Resolve secret / auth header env     -> 500 if env unset
+      +--- 3. HMAC-SHA256 verify (constant-time),
+      |        or the exact Authorization header   -> 401 if missing / mismatch
+      +--- 4. Mint session_id = "webhook-<name>-<uuid>"
+      +--- 5a. Endpoint with `loop`: body (JSON, else a string) queued on
+      |        the loop (LoopDispatch::submit)     -> 429 queue full · 503 shutting down
+      |        -> 202 {"status","session_id","endpoint","loop"}; Jev picks, tools run
+      +--- 5. Synthesize user message
+      |        "{goal_template}\n\nPayload (raw body, may be JSON):\n{body}"
+      +--- 6. Start the turn (run_one_shot) owned by the process's LoopDispatch
+      |        (LoopDispatch::spawn_turn)          -> 503 once the drain began
+      |
+      +--> respond 202 Accepted
+            {
+              "status":     "accepted",
+              "session_id": "webhook-<name>-<uuid>",
+              "endpoint":   "<name>",
+              "agent":      "<agent>"
+            }
+
+  run_one_shot (an owned turn: the shutdown waits for it, see § Process)
+      |
+      +--- 1. planner_llm(config) builds the planner's engine per turn from
+      |       [agents.<[orchestrator] agent>] (PlannerLlm). No [orchestrator] or
+      |       an engine that does not build → warn, the turn is skipped; the
+      |       listener never fails.
+      +--- 2. build_orchestrator(config, llm, session_id, trace) with the
+      |       per-request session_id (Fix B unified parent/child session_id wiring).
+      +--- 3. orchestrator.handle(user_message).await
+      |       - Planner LLM call: PlannerLlm::call — SKILL.md + one message,
+      |         no tools, no memory; its usage is the planner metrics.recorded
+      |       - Optional subagent dispatch via SubprocessRunner
+      |         (`tengu run-agent` child; [egress] policy inherited as TENGU_EGRESS)
+      |       - Subagent compress_and_store summaries go to agentic_memory
+      |         (memory_events, kind = step_output) with the SAME session_id (Fix B).
+      |       then orchestrator.flush_metrics(): its last metrics.recorded is in
+      |       the trace before the turn ends.
+      +--- 4. Fix H — persist the final orchestrator text to agentic_memory
+      |       with synthetic step_id "webhook-handler" (feature postgres_memory;
+      |       without it: warn `webhook output not persisted`, nothing durable).
+      |       Guarantees there's at least one row recallable per webhook turn,
+      |       even when the planner answered directly (no subagent run).
+      |       Embedding is best-effort — no OPENROUTER_API_KEY / embed error →
+      |       text-only row.
+      +--- 5. Log success at info; failure at warn. The turn's trace gate
+              shuts (nothing of it is written after); the turn ends.
+```
+
+---
+
+## Authentication — HMAC-SHA256
+
+### Wire format
+
+```
+X-Tengu-Signature: sha256=<lowercase hex of HMAC-SHA256(body, secret)>
+```
+
+Same shape as GitHub / Stripe webhooks. Anything that signs that way
+talks to tengu without translation.
+
+### Verification
+
+Constant-time via `hmac::Mac::verify_slice`. Mismatch returns
+`401 Unauthorized` with `{"error":"HMAC mismatch"}`. Missing header,
+wrong prefix, or malformed hex returns `401` with a more specific
+message.
+
+### Signing examples
+
+**Bash + openssl:**
+```
+BODY='{"event":"smoke"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+```
+
+**Python:**
+```python
+import hmac, hashlib, requests
+body = b'{"event":"smoke"}'
+sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+requests.post(
+    "http://127.0.0.1:7080/webhooks/test",
+    headers={"X-Tengu-Signature": f"sha256={sig}",
+             "Content-Type": "application/json"},
+    data=body,
+)
+```
+
+**Node:**
+```js
+const crypto = require("crypto");
+const body = JSON.stringify({ event: "smoke" });
+const sig = crypto.createHmac("sha256", secret).update(body).digest("hex");
+await fetch("http://127.0.0.1:7080/webhooks/test", {
+  method: "POST",
+  headers: { "X-Tengu-Signature": `sha256=${sig}`, "Content-Type": "application/json" },
+  body,
+});
+```
+
+### `printf` vs `echo`
+
+When signing, use `printf '%s'` instead of `echo` — `echo` appends a
+newline by default which changes the byte sequence the HMAC is computed
+over. `echo -n` works on bash but not on every shell; `printf '%s'` is
+portable.
+
+---
+
+## Response shapes
+
+| Status | When | Body |
+|---|---|---|
+| `202 Accepted` | HMAC verified, the turn started (owned by the process) | `{"status":"accepted","session_id":"webhook-<name>-<uuid>","endpoint":"<name>","agent":"<agent>"}` |
+| `202 Accepted` | Loop endpoint: event queued | `{"status":"accepted","session_id":"webhook-<name>-<uuid>","endpoint":"<name>","loop":"<loop>"}` |
+| `404 Not Found` | Unknown endpoint name | `{"error":"unknown webhook endpoint '<name>'"}` |
+| `401 Unauthorized` | Missing / malformed / mismatched signature or header | `{"error":"<reason>"}` — one of (the header names are backticked in the text): *"missing \`X-Tengu-Signature\` header"*, *"\`X-Tengu-Signature\` header is not valid UTF-8"*, *"\`X-Tengu-Signature\` must start with \`sha256=\`"*, *"\`X-Tengu-Signature\` hex decode failed: …"*, *"HMAC mismatch"*; `auth_header_env` endpoints: *"missing \`Authorization\` header"*, *"Authorization header mismatch"*. |
+| `500 Internal Server Error` | `secret_env` / `auth_header_env` points at an unset env var | `{"error":"server misconfiguration: ..."}` |
+| `500 Internal Server Error` | Loop endpoint whose loop is not built in this process | `{"error":"decision loop '<loop>' not available"}` |
+| `429 Too Many Requests` | Loop endpoint whose loop already holds `[runtime] max_queued_per_loop` waiting events (default 64) | `{"error":"decision loop queue full: <n> events already waiting ([runtime] max_queued_per_loop) — event refused, retry later"}` |
+| `503 Service Unavailable` | Loop endpoint while `tengu run` / `tengu webhooks` drains | `{"error":"shutting down — not accepting loop events"}` |
+| `503 Service Unavailable` | Planner endpoint while it drains | `{"error":"shutting down — not accepting webhook turns"}` |
+
+The listener never returns a 5xx for an agent-side failure — those are
+logged but don't affect the HTTP status (because the agent runs after
+the response is already sent).
+
+---
+
+## Session_id and recall
+
+Each request mints a fresh session_id of the form
+`webhook-<endpoint-name>-<uuid>`. This id is returned in the 202 body
+and is the recall key for everything that happened during that turn.
+
+There is no inspect CLI (`tengu memory inspect` was removed with the Qdrant
+path) — query Postgres directly against `TENGU_MEMORY_DATABASE_URL`:
+
+| To find | Query (`psql "$TENGU_MEMORY_DATABASE_URL" -c "..."`) |
+|---|---|
+| All rows for the run | `SELECT metadata->>'step_id' AS step_id, kind, left(content, 200) FROM memory_events WHERE session_id = 'webhook-<name>-<uuid>' ORDER BY created_at` |
+| Just the orchestrator final text | Same, plus `AND metadata->>'step_id' = 'webhook-handler'` (Fix H). |
+| Subagent step outputs | Same, rows with `step_id = 'step-1'`, `'step-2'`, … (`kind = 'step_output'`). |
+
+Rows are written even when embedding fails (text-only). First place to
+look when debugging "did my webhook actually run".
+
+## Execution trace (Studio, `tengu trace`)
+
+Every request to a configured endpoint is recorded in the runtime's run — `tengu webhooks`, `tengu run` and Studio Play alike (`kind = "run"`; before 2026-10-23 `tengu webhooks` wrote `kind = "webhooks"`). No Postgres needed: `tengu trace runs --sandbox <s>` then `tengu trace show --sandbox <s> --run <run_id>`.
+
+| Event | When | Payload |
+|---|---|---|
+| `trigger.webhook` (root, node `trigger:webhook/<name>`, session = the request's) | auth not yet checked | `endpoint`, `kind` loop \| agent, the loop or agent, `body_bytes` |
+| loop endpoint: `loop.queued` … `jev.*` / `action.*` / `tool.*` | the event runs | as for any loop event |
+| planner endpoint: `plan.created` → `step.*` (+ each step's `run-agent` `tool.*`) → `plan.completed` (+ `metrics.recorded`) | the turn (owned by the process; always before the run's `run.closed` / `runtime.stopped`) | steps, agents, sizes; never the goal or the answer; a turn aborted at the shutdown deadline: `plan.completed` dropped, `cancelled: true` |
+| `webhook.responded` | the answer | `status_code` (2xx ok · 401 / 429 / 503 refused · 500 failed), `error` line 1 |
+
+Never recorded: the body (size only), a header, a secret; an unknown endpoint (404) is logged only. Full list: `docs/runtime.md` § Trace; test fixture for a local check: `tests/fixtures/webhooks/trace.toml`.
+
+---
+
+## Security
+
+| Layer | Default | What to do for production |
+|---|---|---|
+| Listen address | `127.0.0.1` (loopback) | Bind `0.0.0.0` ONLY after the HMAC secret is set. Front with a reverse proxy (nginx / caddy) terminating TLS. |
+| TLS | None — tengu speaks HTTP | Always run behind a TLS-terminating proxy. The HMAC protects payload integrity but the body itself is plaintext on the wire if you expose 7080 directly. |
+| HMAC secret | None — listener refuses to start without one | Use `secret_env`. Source the env var from a secrets manager (1Password CLI, AWS Secrets Manager, vault, …). |
+| Replay protection | None in v1 | Senders that retry will trigger duplicate runs. Idempotency keys are a v2 follow-up. |
+| Rate limiting | None | Layer with a reverse-proxy rate-limit (nginx `limit_req`, caddy `rate_limit`). |
+| Audit | Every accepted POST logs `webhook accepted; dispatching one-shot orchestrator turn` (loop endpoints: `webhook accepted; dispatching to decision loop`) at info level; every failed auth `webhook auth failed` at warn | Pipe `RUST_LOG=tengu=info` to a log aggregator. |
+| Docker | `make up` (Tor, the default) puts tengu on the internal `tor-front` network — no ports published, 7080 unreachable from the host | `make up NETWORK=open` publishes `${TENGU_WEBHOOK_PORT:-7080}:7080` (`docker-compose.yml`). |
+
+### Threat model in one paragraph
+
+The HMAC guards against forged requests from senders that don't have the
+shared secret. It does NOT protect against a compromised sender (they
+have your secret), a replay of a captured request (no nonce in v1), or
+denial-of-service from any source (no rate-limit in v1). For
+production-shaped deployments, front the listener with a proxy that
+terminates TLS, rate-limits per source IP, and rejects requests with
+no `X-Tengu-Signature`.
+
+---
+
+## Operating + troubleshooting
+
+### Smoke test (cookbook)
+
+```
+# Stop any previous listener on 7081
+lsof -ti tcp:7081 | xargs kill 2>/dev/null
+
+# Rebuild
+cargo build --release --features postgres_memory
+
+# Run
+TENGU_LPING_WEBHOOK_SECRET="abc123" \
+  RUST_LOG=tengu=info \
+  ./target/release/tengu webhooks --sandbox lping
+
+# In another shell, signed POST:
+BODY='{"event":"smoke","data":{"hello":"world"}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "abc123" | awk '{print $2}')
+curl -i -X POST http://127.0.0.1:7081/webhooks/solana_events \
+  -H "X-Tengu-Signature: sha256=$SIG" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"
+
+# Recall what the agent did:
+psql "$TENGU_MEMORY_DATABASE_URL" -c \
+  "SELECT metadata->>'step_id', left(content, 200) FROM memory_events WHERE session_id = 'webhook-solana_events-<uuid>'"
+```
+
+### Process (2026-10-01, review #13; one runtime since 2026-10-23)
+
+`tengu webhooks` is `tengu run` with no `[feeds.*]` and only the loops an endpoint names (`inbound/run.rs::run_webhooks`, after the listener's config checks): one runtime, never a copy.
+
+| Piece | Value |
+|---|---|
+| Leases | the ones `tengu run` takes (`bootstrap::runtime::LeasePlan`, `docs/runtime.md` § Single-runner lease): `runtime:<sandbox>`, plus `state:<dir>` for an `[xmarket]` state dir, plus `state:<dir>` for an `[soe]` sandbox's `[sources] state` — never beside `tengu run` (or Studio's Play) of the sandbox, nor beside any process of a sandbox naming the same state dir; held ⇒ exit 1 naming the holder `<host>:<pid>:<uuid>` |
+| Loops | one `DecisionLoop` per loop an endpoint names, built once; events queue on a `LoopDispatch` (`[runtime] max_decisions_in_flight`, `max_queued_per_loop`) |
+| SIGINT / SIGTERM | stop accepting; loop events and every accepted orchestrator turn (planner endpoints, loop escalations — owned by the `LoopDispatch`, `application::runtime::loops::Turns`) drain ≤ `[runtime] shutdown_grace_secs`; a turn still running then is aborted (`plan.completed` dropped, `cancelled: true`); then the leases are freed and `runtime.stopped` is written, exit 0; a second signal exits 130 (the leases free themselves ≤ 30 s) |
+| Lost lease | the runtime stops, exit 1 |
+| Heartbeat | `<state dir>/run-<sandbox>.json` + `loop/1` rows, as `tengu run` (`tengu doctor --sandbox <s> --live` reads it) |
+| Execution trace | the runtime's run (`kind = "run"`, `runtime.*` lifecycle; `decisions.jsonl` lines carry its `runtime_id` / `run_id`; `docs/runtime.md` § Trace). Recordings from before 2026-10-23 are `kind = "webhooks"`, ending in `run.closed` |
+
+### Expected listener stderr (one webhook turn)
+
+```
+INFO egress policy installed proxy=socks5h://127.0.0.1:9050 route_llm_api=true ...   # or proxy=direct under [egress] network = "open"
+INFO tengu webhooks leases taken sandbox=lping leases=["runtime:lping"] holder=<host>:<pid>:<uuid> state_dir=~/.tengu/state
+INFO tengu webhooks listening addr=127.0.0.1:7081 endpoints=["helius", "solana_events"] sandbox=Some("lping")
+INFO webhook accepted; dispatching one-shot orchestrator turn endpoint=solana_events agent=lping session_id=webhook-solana_events-<uuid> body_bytes=N
+INFO orchestrator: engine=rag, planner=RegistryPlanner(file-registry), worker=SubprocessRunner session_id=webhook-solana_events-<uuid>
+INFO metrics kind="planner" agent=lping model=anthropic/claude-sonnet-4-6 ...
+INFO webhook orchestrator turn completed session_id=webhook-solana_events-<uuid> output_chars=N preview=<agent reply, ≤ 400 chars> truncated=false
+INFO webhook output persisted to agentic_memory entry_id=<uuid> session_id=webhook-solana_events-<uuid> step_id="webhook-handler"
+```
+
+### Symptom → cause table
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Error: bind webhook listener to 127.0.0.1:7080 ... Address already in use` | Previous listener still running on that port. | `lsof -ti tcp:7080 \| xargs kill` |
+| `Error: sandbox ... is already running: lease runtime:<s> ...`, `state dir ... already has an owner: lease state:<dir> ...` or `SOE state root ... already has an owner ...` | A `tengu run` / `tengu webhooks` / Studio Play of this sandbox (or of one naming the same state dir) holds the leases. | Stop it (SIGTERM); after a crash, retry once the lease expires (≤ 30 s). |
+| `Error: [webhooks] not enabled in this sandbox config — set ...` | `[webhooks]` block missing or `enabled = false`. | Edit `sandboxes/<name>/config.toml`. |
+| ``Error: [webhooks.endpoints.<name>] has both `secret_env` and `secret` — use exactly one`` | Both secret sources configured. | Pick one — `secret_env` is preferred. |
+| `401 {"error":"HMAC mismatch"}` | Body byte mismatch — most often a trailing newline from `echo`. | Use `printf '%s'` for signing. |
+| ``401 {"error":"missing `X-Tengu-Signature` header"}`` | Header not sent. | Add `-H "X-Tengu-Signature: sha256=..."`. |
+| `404 {"error":"unknown webhook endpoint '<name>'"}` | URL path doesn't match any `[webhooks.endpoints.<name>]` (the only route is `POST /webhooks/:name`). | Check the path against your config. |
+| ``500 {"error":"server misconfiguration: secret_env points at `X` but that env var is not set in the listener's process"}`` | The env var named by `secret_env` is unset in the listener's environment. | Export the env var before running. |
+| `webhook turn aborted: the planner's engine did not build` (or `… no [orchestrator] in the config`) | The `[orchestrator] agent` has no `[agents.<name>]` block, or its engine does not build (e.g. `openrouter` without `OPENROUTER_API_KEY`). Checked per turn; the listener stays up. | `tengu doctor --sandbox <name>`; fix the block or the engine's setup. |
+| No `memory_events` row for the session | `webhook output persist FAILED — agentic_memory unavailable` (`TENGU_MEMORY_DATABASE_URL` unset / Postgres down) or `webhook output not persisted — built without the postgres_memory feature`. | Set the URL / rebuild with `postgres_memory`; check listener stderr for those warn lines. |
+| `planner embed failed; semantic memory lanes will fall back where possible` | OpenRouter key over its limit / unreachable (over Tor: proxy down → fail-closed, no direct fallback). | Rotate or top up the key; `tengu doctor --sandbox <name> --tor` to check the exit. |
+| Every outbound request errors with a proxy/connect failure | `[egress]` defaults to Tor; `127.0.0.1:9050` (or `TENGU_TOR_PROXY`) is not up. | `make tor`, or `[egress] network = "open"` in the sandbox. |
+
+---
+
+## What v1 doesn't do (deliberate scope)
+
+| Feature | Reason | When to revisit |
+|---|---|---|
+| Sync mode (HTTP response carries the agent reply) | Webhook senders typically time out at 10s; agents take minutes. | Add a `mode = "sync"` per-endpoint with a configurable timeout once a real use case appears. |
+| Idempotency keys / replay protection | First-cut listener; senders that retry will trigger duplicate runs. | When a sender starts double-firing in practice. |
+| Mid-payload routing (`X-GitHub-Event` → different agents) | The planner routes from `goal_template` + payload; `agent` is informational. Agents inspect the payload themselves. | Only if multiple senders pile onto one endpoint in a way that's awkward to route inside the planner. |
+| Rate limiting | Should live in the reverse proxy (nginx / caddy / cloudflare). | Adding it inside tengu adds attack surface for no real win over an HTTP-layer rate limit. |
+| Listener inside chat / telegram | Less coupling — run each surface as its own process. `tengu run` (2026-09-30, `docs/runtime.md`) and Studio's Play (the same `start_session`, 2026-10-08) serve the same route next to their loops, with graceful shutdown. | If deployment ergonomics push back. |
+| `secret` rotation without restart | `secret_env` is re-read per request, so updating the env var works for the *next* request. `secret` literal requires a config reload — out of scope. | Probably never; secrets manager + env var covers this. |
+
+---
+
+## Implementation pointers
+
+| File | Role |
+|---|---|
+| `src/adapters/inbound/webhooks.rs` | Server, handler, HMAC / header verify; `app_state` + `router` shared with `tengu run` and Studio's Play (`src/adapters/inbound/run.rs::start_session`). |
+| `src/bootstrap/one_shot.rs` | `run_one_shot` (`planner_llm` + `build_orchestrator` per turn), Fix H persist, `orchestrator_escalator` — the planner endpoints' turn and every loop escalation (`tengu run`, Studio, `tengu webhooks`; any build). |
+| `src/application/runtime/loops.rs` | `LoopDispatch` — loop-endpoint events queue here (per-loop order, in-flight cap, drain); `Refused` = the 429 / 503 texts. |
+| `src/config/channels.rs` (`WebhookConfig`, `WebhookEndpointConfig`) | Config schema + defaults (tests: `src/config/tests.rs`). |
+| `src/bootstrap/` (`resolve_session_id`, `planner_llm`, `build_orchestrator`, `runtime::LeasePlan`) | Shared session_id resolution, the planner's engine, orchestrator construction, the leases. Webhook handler builds a fresh orchestrator per request. |
+| `src/adapters/outbound/noop.rs` | `NoopActivity` + `NoopRuntimeToolExecutor` shared with `eval_builder`. |
+| `src/adapters/inbound/cli/mod.rs` (`Commands::Webhooks`) | CLI dispatch → `webhooks::run_webhooks` (a `--no-default-features` build without `webhooks`: an error naming the feature). |
+
+For the per-turn flow inside the orchestrator itself, see
+[`architecture.md`](architecture.md) §1 — the
+webhook listener calls into the same machinery that powers TUI and
+Telegram from step 2 onwards.
+
+---
+
+*Last updated 2026-10-09 (checked against `webhooks.rs`: one route, loop
+endpoints, verbatim error texts, SOE lease, no trace; before that 2026-09-18:
+single sandbox config, Postgres-only recall, `[egress]` Tor default). Built 2026-05-11 after Fix H landed and the smoke
+test produced a `webhook output persisted to agentic_memory` log line.
+Companion: `README.md` "Webhooks" section, `docs/configuration.md`
+`[webhooks]` row. The 2026-05-09 build and the 2026-05-11 Fix H follow-up
+predate the restored `SESSION_HANDOFF.md` (2026-05-14); git history has them.*

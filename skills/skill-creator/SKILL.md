@@ -130,7 +130,7 @@ When the user says "let's save this as a skill", "distill this", "turn this into
 - **`metrics`** -- at least one metric. Every distilled skill MUST ship with metrics:
   - Prefer `shell_check` for deterministic outcomes (tx confirmed, file exists, exit code 0).
   - Use `llm_judge` with a narrative rubric for qualitative criteria.
-  - See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` s.6 for the full schema.
+  - See `docs/skills.md` § Metrics & Evolution for the full schema.
 - **`from_message_index`** -- the 0-based message index where the distilled behaviour started. When in doubt, pick the message where the user stated the goal.
 - **`fixture_hints.drop_tool_names`** -- exclude noise like `memory_search` or unrelated tool calls that shouldn't appear in replay fixtures.
 
@@ -159,3 +159,16 @@ Before putting logic in Rust, ask: "Does a non-engineer user need to change this
 - **Distilling without metrics.** A metric-less skill cannot be graded or evolved -- always supply at least one.
 - **Using `write_file` for new skills during distillation.** Use `skill_distill` so fixtures and metrics scaffold correctly.
 - **Vague `body_markdown`.** If the body omits the concrete steps/tools that succeeded, the distilled skill won't replay.
+
+## In-chat lifecycle verbs (a `learning-agent` block)
+
+No shipped sandbox defines it. Add `[agents.learning-agent]` with a `description` naming these phrases and `tools = ["view_skill", "manage_skill", "http_request"]`; the planner routes to it by that description. Changes activate on the next session: say so.
+
+| The user says | You do |
+|---|---|
+| "create a skill from our dialog [as `<name>`]" / "save this as a skill" | `manage_skill(action="create", ...)`, the body from the workflow the dialog showed; infer a kebab-case name if none was given |
+| "evaluate [the `<name>` skill]" | `view_skill` (read, read_resource), then report what worked, what didn't, what is missing — no writes |
+| "fix it" / "adjust yourself [for `<name>`]" | `view_skill`, `http_request` for missing material, then `manage_skill` `patch` / `add_resource` / `edit_body` |
+| "rollback" | tell them `git checkout skills/<name>/SKILL.md`; the harness does not roll back |
+
+`<name>`: the one the user gave, else the most recently used skill in the session; if unclear, ask. Refuse to distill a dialog under ~2 user turns.

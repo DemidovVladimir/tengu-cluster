@@ -1,6 +1,6 @@
 # Phase 9 — cost / liquidity (2026-10-08)
 
-`TENGU_ROADMAP.md` Phase 9, gate G9: does execution / liquidity information improve rule W's candidate selection? Sources: the recorded weekend's `mkt_ctx/1` (fees) and `hl_book/1` (75 names, books at rule W's entry Sun 18:00 ET and exit Mon 09:00 ET; vault `w1-2026-10-06`), xlab backtests in `sandboxes/xlab-w2`.
+`docs/plans/TENGU_ROADMAP.md` Phase 9, gate G9: does execution / liquidity information improve rule W's candidate selection? Sources: the recorded weekend's `mkt_ctx/1` (fees) and `hl_book/1` (75 names, books at rule W's entry Sun 18:00 ET and exit Mon 09:00 ET; vault `w1-2026-10-06`), xlab backtests in `sandboxes/xlab-w2`.
 
 ## Observed vs assumed
 

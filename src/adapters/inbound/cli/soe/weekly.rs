@@ -55,10 +55,10 @@ use crate::config::soe::{load_profile_with_text, load_replay_set, SoeConfig, SOE
 use crate::config::sources::{sources_db, SourcesConfig};
 use crate::config::Config;
 use crate::domain::lineage::value::Time;
-use crate::domain::marketdata::parse_time;
 use crate::domain::soe::portfolio::{IsoWeek, WeeklyPortfolio};
 use crate::domain::soe::record::from_toml;
 use crate::domain::soe::review::CycleGrade;
+use crate::domain::time::parse_time;
 use crate::ports::clock::Clock;
 use crate::ports::runtime::{LeaseLost, Ownership, Unleased};
 use crate::ports::soe::{CycleStore, RunDir, RunStatus, StageRunner};
@@ -142,7 +142,7 @@ impl Common {
 fn state_root(config: Option<&Config>) -> Result<PathBuf> {
     let home = resolve_tengu_home();
     match config {
-        None => Ok(home.join("state").join(SOE_STATE)),
+        None => Ok(crate::config::paths::Layout::at(&home).state_dir(SOE_STATE)),
         Some(c) => c
             .sources
             .as_ref()

@@ -18,11 +18,11 @@
 //!
 //! ## Files / responsibilities
 //!
-//! - `run_webhooks(...)` — entry point called by `Commands::Webhooks` in
-//!   `main.rs`. Owns the long-running tokio task that hosts the axum
-//!   server.
-//! - `app_state(...)` + `router(...)` — the same routes for `tengu run`
-//!   (`inbound/run.rs`), which mounts them in its own process on its
+//! - `tengu webhooks` = `inbound/run.rs::run_webhooks`: `tengu run` with no
+//!   feeds and only the loops an endpoint names, after [`check_config`] —
+//!   one runtime (leases, recording, heartbeat, drain), never a copy.
+//! - `app_state(...)` + `router(...)` — the routes `tengu run` / Studio Play
+//!   mount (`inbound/run.rs::mount_webhooks`) on the runtime's
 //!   `LoopDispatch` (every loop built once) with graceful shutdown.
 //! - `WebhookAppState` — per-process shared state (config, memory
 //!   manager, loop dispatch). Cloned into each request handler.
@@ -35,11 +35,11 @@
 //!
 //! ## Trace (`domain/trace.rs`, Studio)
 //!
-//! `tengu webhooks` records one run per process (`RunKind::Webhooks`,
-//! `runtime_id` = the lease holder; ends with `run.closed`); under `tengu
-//! run` / Studio Play the routes write into the runtime's run. Per request
-//! to a configured endpoint (an unknown one is logged, never recorded — its
-//! name is the sender's):
+//! The routes write into the runtime's run (`tengu run`, `tengu webhooks`,
+//! Studio Play: `kind = "run"`, `runtime_id` = the lease holder; older
+//! `tengu webhooks` recordings are `kind = "webhooks"`, ending in
+//! `run.closed`). Per request to a configured endpoint (an unknown one is
+//! logged, never recorded — its name is the sender's):
 //!
 //! | Event | Node | Status | Payload |
 //! |---|---|---|---|
@@ -54,8 +54,8 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | owner | an agent endpoint's turn and a loop escalation's run on the process's `Turns` (`LoopDispatch::spawn_turn`; `tengu run`: `Runtime::turns`); refused once the drain began (a request: 503) |
-//! | drain | `LoopDispatch::drain` (standalone `listen`, `Runtime::shutdown`) waits for them with the loop events ≤ `[runtime] shutdown_grace_secs` — before the lease release and `run.closed` / `runtime.stopped` |
+//! | owner | an agent endpoint's turn and a loop escalation's run on the process's `Turns` (`LoopDispatch::spawn_turn`: `Runtime::turns`); refused once the drain began (a request: 503) |
+//! | drain | `LoopDispatch::drain` (`Runtime::shutdown`) waits for them with the loop events ≤ `[runtime] shutdown_grace_secs` — before the lease release and `runtime.stopped` |
 //! | end of a turn | `Orchestrator::flush_metrics` (the metrics barrier: its last `metrics.recorded` is written), then its trace gate closes (`trace_exec::close_after`) |
 //! | a turn past the deadline | aborted: its steps are aborted, `plan.completed` (dropped, `cancelled`) is written as it drops, the gate closes — all before the drain returns; `drain.turns.aborted` counts it |
 //!
@@ -65,41 +65,28 @@
 //!   `sandboxes/<name>/config.toml`. Adding a new webhook is one TOML
 //!   block, no recompile.
 //! - Session_id is the recall key: per-request, namespaced as
-//!   `webhook-<endpoint>-<uuid>`. Pairs with Fix B (parent / child
-//!   share one id) and Fix A (within-session output recall).
+//!   `webhook-<endpoint>-<uuid>`, shared by the planner and its step
+//!   children, so within-session output recall finds this request's steps.
 
 #![cfg(feature = "webhooks")]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::Instrument;
 
 use std::time::Instant;
 
-use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
-use crate::application::chat::tool_loop::collect_engine_response;
-use crate::application::memory::manager::MemoryManager;
 use crate::application::orchestrator::trace::OrchestratorTrace;
-use crate::application::runtime::loops::{LoopDispatch, LoopHandler, Refused, Turns};
-use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
+use crate::application::runtime::loops::{LoopDispatch, Refused};
 use crate::application::trace_exec::{self, Cause, GatedTrace};
+use crate::bootstrap::one_shot::{config_planner, run_one_shot, PlannerSource};
 use crate::config::{Config, WebhookEndpointConfig};
-use crate::domain::message::{Message, Role};
 use crate::domain::secrets::SecretRegistry;
-use crate::domain::trace::{
-    http_status, line1, Component, EventDraft, RunKind, Status, RUN_CLOSED,
-};
+use crate::domain::trace::{http_status, line1, Component, EventDraft, Status};
 use crate::domain::workflow::node_id;
-use crate::ports::decision::Escalator;
-use crate::ports::engine::ToolExecutor;
-use crate::ports::engine::{Engine, EngineContext};
-use crate::ports::orchestration::ChatServiceFactory;
-use crate::ports::tool_activity::ToolActivityPort;
 use crate::ports::trace::TraceSink;
 use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -121,220 +108,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// (different prefix, identical shape).
 const SIG_HEADER: &str = "x-tengu-signature";
 
-/// Long-running entry point: takes the leases `tengu run` takes
-/// (`bootstrap::runtime::LeasePlan`: `runtime:<sandbox>`, and `state:<dir>`
-/// for an `[xmarket]` state dir — never beside `tengu run` of the sandbox or
-/// of another sandbox on its ledger; held ⇒ exit 1 naming the holder), then
-/// serves until SIGINT / SIGTERM (graceful: loop events and orchestrator
-/// turns drain ≤ `[runtime] shutdown_grace_secs`, then the leases are freed
-/// and `run.closed` written; a second signal exits 130) or a lost lease
-/// (exit 1).
-pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
-    use crate::application::runtime::{LeaseTiming, Supervisor};
-    use crate::bootstrap::runtime::{LeasePlan, OwnerLeases};
-
-    check_config(&config)?;
-    let addr = bind_addr(&config)?;
-    // Before anything slow: a SIGTERM during boot must stop us cleanly.
-    let signals = super::run::Signals::install()?;
-    let plan = LeasePlan::of(&config);
-    let timing = LeaseTiming::default();
-    let owner = OwnerLeases::take(&plan, timing.ttl_ms).await?;
-    let mut supervisor = Supervisor::new();
-    owner.keep(&mut supervisor, timing);
-    info!(
-        sandbox = %plan.sandbox,
-        leases = ?owner.resources(),
-        holder = %owner.holder(),
-        state_dir = %plan.state_dir.display(),
-        "tengu webhooks leases taken"
-    );
-    let stopper = supervisor.stopper();
-    let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
-    // This process's recording (module docs § Trace), after the leases.
-    let trace = crate::bootstrap::trace::open_sink(
-        &config,
-        Some(owner.holder()),
-        RunKind::Webhooks,
-        &secret_registry,
-    );
-    let holder = owner.holder().to_string();
-    let (served, drained) = serve_webhooks(
-        config,
-        secret_registry,
-        addr,
-        signals,
-        stopper.clone(),
-        (Arc::clone(&trace), holder),
-    )
-    .await;
-    supervisor
-        .shutdown(tokio::time::Instant::now() + grace)
-        .await;
-    let released = owner.release().await;
-    let stop = stopper.cause();
-    info!(lease_released = released, stop = ?stop, "tengu webhooks stopped");
-    let failed = served.is_err() || stop.as_ref().is_some_and(|s| s.failed);
-    trace.emit(
-        EventDraft::new(
-            Component::Runtime,
-            RUN_CLOSED,
-            if failed { Status::Failed } else { Status::Ok },
-        )
-        .payload(json!({
-            "reason": stop.as_ref().map(|s| s.reason.clone()),
-            "failed": failed,
-            "lease_released": released,
-            "drained": drained.map(|d| d.to_json()),
-        })),
-    );
-    served?;
-    match stop {
-        Some(s) if s.failed => anyhow::bail!("tengu webhooks stopped: {}", s.reason),
-        _ => Ok(()),
-    }
-}
-
-/// The listener under the leases: every endpoint loop built once, served
-/// until the stop signal (a signal, a lost lease), then the loop events and
-/// orchestrator turns drained (`None`: it never served). `rec` = the
-/// recording + the lease holder its audit lines name.
-async fn serve_webhooks(
-    config: Config,
-    secret_registry: Arc<SecretRegistry>,
-    addr: SocketAddr,
-    signals: super::run::Signals,
-    stopper: crate::application::runtime::Stopper,
-    rec: (Arc<dyn TraceSink>, String),
-) -> (
-    Result<()>,
-    Option<crate::application::runtime::loops::DrainReport>,
-) {
-    match listen(config, secret_registry, addr, signals, stopper, rec).await {
-        Ok((served, drained)) => (served, Some(drained)),
-        Err(e) => (Err(e), None),
-    }
-}
-
-async fn listen(
-    config: Config,
-    secret_registry: Arc<SecretRegistry>,
-    addr: SocketAddr,
-    mut signals: super::run::Signals,
-    stopper: crate::application::runtime::Stopper,
-    (trace, holder): (Arc<dyn TraceSink>, String),
-) -> Result<(Result<()>, crate::application::runtime::loops::DrainReport)> {
-    use crate::application::runtime::stopped;
-
-    let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
-    // Memory manager is shared across all requests — opening it per
-    // request would be wasteful (store open + embedder per webhook).
-    let memory_manager = Arc::new(MemoryManager::new());
-
-    // One `DecisionLoop` per loop referenced by an endpoint — built once so
-    // its action history survives across events. Escalation reuses the
-    // one-shot orchestrator path when `[orchestrator]` is configured; its
-    // turns, like an agent endpoint's, are the dispatch's (drained below).
-    let turns = Turns::new();
-    let escalator = orchestrator_escalator(
-        &config,
-        &memory_manager,
-        Arc::clone(&trace),
-        Arc::clone(&turns),
-    );
-    let rec = crate::bootstrap::trace::Recording::of(Arc::clone(&trace), Some(&holder));
-    let mut handlers: BTreeMap<String, Arc<dyn LoopHandler>> = BTreeMap::new();
-    for ep in config.webhooks.endpoints.values() {
-        let Some(name) = &ep.decision_loop else {
-            continue;
-        };
-        if handlers.contains_key(name) {
-            continue;
-        }
-        // Step / tool events into this process's recording; audit lines
-        // carry its runtime + run id.
-        let dl = crate::bootstrap::decision::build_decision_loop(
-            &config,
-            name,
-            escalator.clone(),
-            Arc::clone(&secret_registry),
-            rec.clone(),
-        )?;
-        handlers.insert(name.clone(), dl);
-    }
-    let loops = Arc::new(
-        LoopDispatch::new(
-            handlers,
-            config.runtime.max_decisions_in_flight,
-            config.runtime.max_queued_per_loop,
-        )
-        .with_trace(Arc::clone(&trace))
-        .with_turns(turns),
-    );
-
-    let state = app_state(
-        config,
-        memory_manager,
-        Arc::clone(&loops),
-        secret_registry,
-        trace,
-    )?;
-    let endpoints_summary: Vec<&str> = state
-        .config
-        .webhooks
-        .endpoints
-        .keys()
-        .map(|s| s.as_str())
-        .collect();
-    info!(
-        %addr,
-        endpoints = ?endpoints_summary,
-        sandbox = ?state.config.sandbox_name,
-        "tengu webhooks listening"
-    );
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind webhook listener to {}", addr))?;
-
-    let on_signal = stopper.clone();
-    let signal_task = tokio::spawn(async move {
-        let first = signals.next().await;
-        on_signal.stop(first, false);
-        let second = signals.next().await;
-        error!(
-            signal = second,
-            "second signal while draining — exiting now (code 130)"
-        );
-        std::process::exit(130);
-    });
-    let mut stop = stopper.subscribe();
-    let served = axum::serve(listener, router(state))
-        .with_graceful_shutdown(async move {
-            stopped(&mut stop).await;
-        })
-        .await
-        .context("webhook server exited unexpectedly");
-    // Not stopped yet ⇒ the server died on its own.
-    stopper.stop("webhook server exited", true);
-    // Loop events and orchestrator turns: every one ends (or is aborted)
-    // before the caller frees the leases and writes `run.closed`.
-    let drained = loops.drain(tokio::time::Instant::now() + grace).await;
-    info!(
-        finished = drained.finished,
-        dropped = drained.dropped,
-        aborted = drained.aborted,
-        turns_finished = drained.turns_finished,
-        turns_aborted = drained.turns_aborted,
-        "webhook loop events and turns drained"
-    );
-    signal_task.abort();
-    Ok((served, drained))
-}
-
 /// Refuse a config the listener cannot serve: disabled, no endpoints,
 /// planner endpoints without `[orchestrator]`, bad endpoint auth or loop refs.
-fn check_config(config: &Config) -> Result<()> {
+pub(crate) fn check_config(config: &Config) -> Result<()> {
     if !config.webhooks.enabled {
         return Err(anyhow!(
             "[webhooks] not enabled in this sandbox config — set `[webhooks] enabled = true` to start the listener"
@@ -366,64 +142,26 @@ pub(crate) fn bind_addr(config: &Config) -> Result<SocketAddr> {
         .with_context(|| format!("invalid bind address {bind}:{port}"))
 }
 
-/// The escalator loops use when `[orchestrator]` is configured: a
-/// low-confidence step becomes a one-shot orchestrator turn, recorded into
-/// `trace` under the loop event's cause and owned by `turns` (the dispatch's
-/// — module docs § Shutdown).
-pub(crate) fn orchestrator_escalator(
-    config: &Config,
-    memory_manager: &Arc<MemoryManager>,
-    trace: Arc<dyn TraceSink>,
-    turns: Arc<Turns>,
-) -> Option<Arc<dyn Escalator>> {
-    config.orchestrator.as_ref().map(|_| {
-        Arc::new(OrchestratorEscalator {
-            config: config.clone(),
-            memory_manager: Arc::clone(memory_manager),
-            factory: webhook_factory(config),
-            trace,
-            turns,
-        }) as Arc<dyn Escalator>
-    })
-}
-
-/// The planner / agent turns of a one-shot: rebuilt from config per call.
-fn webhook_factory(config: &Config) -> Arc<dyn ChatServiceFactory> {
-    Arc::new(WebhookChatServiceFactory {
-        cfg: Arc::new(config.clone()),
-    })
-}
-
 /// Validated shared state for [`router`]. `loops` must hold every loop an
 /// endpoint names (`tengu run` passes its dispatch with every loop) and owns
 /// the agent endpoints' turns; `trace` = the process's recording (module
 /// docs § Trace).
 pub(crate) fn app_state(
     config: Config,
-    memory_manager: Arc<MemoryManager>,
     loops: Arc<LoopDispatch>,
     secret_registry: Arc<SecretRegistry>,
     trace: Arc<dyn TraceSink>,
 ) -> Result<Arc<WebhookAppState>> {
-    let factory = webhook_factory(&config);
-    app_state_with(
-        config,
-        memory_manager,
-        loops,
-        secret_registry,
-        trace,
-        factory,
-    )
+    app_state_with(config, loops, secret_registry, trace, config_planner())
 }
 
-/// [`app_state`] with the turns' `factory` given (tests: a stub planner).
+/// [`app_state`] with the turns' `planner` given (tests: a stub engine).
 fn app_state_with(
     config: Config,
-    memory_manager: Arc<MemoryManager>,
     loops: Arc<LoopDispatch>,
     secret_registry: Arc<SecretRegistry>,
     trace: Arc<dyn TraceSink>,
-    factory: Arc<dyn ChatServiceFactory>,
+    planner: PlannerSource,
 ) -> Result<Arc<WebhookAppState>> {
     check_config(&config)?;
     for (name, ep) in &config.webhooks.endpoints {
@@ -435,11 +173,10 @@ fn app_state_with(
     }
     Ok(Arc::new(WebhookAppState {
         config,
-        memory_manager,
         loops,
         _secret_registry: secret_registry,
         trace,
-        factory,
+        planner,
     }))
 }
 
@@ -456,13 +193,12 @@ pub(crate) fn router(state: Arc<WebhookAppState>) -> Router {
 /// via the axum `State` extractor wrapping an `Arc`.
 pub(crate) struct WebhookAppState {
     config: Config,
-    memory_manager: Arc<MemoryManager>,
     /// Loop events for endpoints with `loop = "<name>"`, and the owner of
     /// every agent endpoint's turn (one dispatch per process: `tengu
     /// webhooks` builds its own, `tengu run` passes its).
     loops: Arc<LoopDispatch>,
-    /// The agent endpoints' planner / agent turns (`WebhookChatServiceFactory`).
-    factory: Arc<dyn ChatServiceFactory>,
+    /// The agent endpoints' planner call (`config_planner`).
+    planner: PlannerSource,
     /// Held for redaction parity with telegram (unused in v1 — webhook
     /// responses are 202s with no agent text). Kept for the inevitable
     /// future "sync mode" that mirrors telegram's `secret_registry.redact`.
@@ -578,7 +314,9 @@ async fn dispatch_webhook(
     // event of the request's work carry it.
     let session_id = format!("webhook-{}-{}", name, uuid::Uuid::new_v4());
     let rt = RequestTrace::begin(&*state.trace, &name, endpoint, &session_id, body.len());
-    let (code, answer) = handle_webhook(&state, &name, endpoint, &headers, &body, &rt).await;
+    let (code, answer) = handle_webhook(&state, &name, endpoint, &headers, &body, &rt)
+        .instrument(crate::bootstrap::trace::turn_span(Some(&session_id)))
+        .await;
     rt.responded(code, &answer);
     (code, Json(answer)).into_response()
 }
@@ -674,9 +412,11 @@ async fn handle_webhook(
     //    aren't required to be UTF-8 (binary webhooks exist) — fall
     //    through to lossy stringification rather than rejecting.
     let body_str = String::from_utf8_lossy(body);
+    //    The body is the sender's text: fenced (`domain::untrusted`).
     let user_message = format!(
         "{}\n\nPayload (raw body, may be JSON):\n{}",
-        endpoint.goal_template, body_str
+        endpoint.goal_template,
+        crate::domain::untrusted::fence(&format!("webhook:{name}"), &body_str)
     );
 
     // 6. Start the orchestrator turn — caller gets 202 immediately; the
@@ -692,8 +432,7 @@ async fn handle_webhook(
         let s = state_for_handle;
         run_one_shot(
             &s.config,
-            &s.memory_manager,
-            Arc::clone(&s.factory),
+            &s.planner,
             &session_id_for_handle,
             user_message,
             trace,
@@ -725,135 +464,6 @@ async fn handle_webhook(
             "agent": agent_name,
         }),
     )
-}
-
-/// Run one orchestrator turn for the synthesized webhook user message.
-/// Final agent text is written to the tracing log; durable side-effects
-/// (`agentic_memory` step summaries, metrics records) flow through the standard
-/// pipeline. Errors are logged and discarded — the listener stays up.
-/// `trace` = where its plans and steps are recorded (`None`: nowhere);
-/// every metrics record of the turn is in it when this returns (the
-/// barrier, `Orchestrator::flush_metrics`).
-async fn run_one_shot(
-    config: &Config,
-    memory_manager: &Arc<MemoryManager>,
-    factory: Arc<dyn ChatServiceFactory>,
-    session_id: &str,
-    user_message: String,
-    trace: Option<OrchestratorTrace>,
-) {
-    // Per-request orchestrator construction. `factory` is a
-    // `WebhookChatServiceFactory` — a per-turn rebuild-from-config pattern
-    // modelled on `EvalChatServiceFactory` in `adapters/inbound/eval.rs`.
-    // Avoids the `OrchestratorSnapshots` map that chat / telegram use (those
-    // surfaces pre-build per-agent state at startup and refresh it before
-    // each turn; webhooks are stateless one-shots, so each call just looks
-    // up the agent in `Config.agents` and constructs the engine + tools
-    // fresh).
-    let Some(orchestrator) = crate::bootstrap::orchestrator::build_orchestrator(
-        config,
-        factory,
-        Arc::clone(memory_manager),
-        session_id.to_string(),
-        trace,
-    ) else {
-        warn!(
-            session_id = %session_id,
-            "build_orchestrator returned None — webhook turn aborted (engine != \"rag\"). This is a sandbox-config issue, not a runtime crisis."
-        );
-        return;
-    };
-
-    let final_text = orchestrator.handle(user_message).await;
-    // The turn's last `metrics.recorded` is written before it ends (and its
-    // trace gate closes): nothing of it follows the run's closing event.
-    orchestrator.flush_metrics().await;
-    drop(orchestrator);
-    if final_text.trim().is_empty() {
-        warn!(
-            session_id = %session_id,
-            "webhook orchestrator turn returned empty output"
-        );
-        return;
-    }
-
-    let preview: String = final_text.chars().take(400).collect();
-    let truncated = final_text.chars().count() > 400;
-    info!(
-        session_id = %session_id,
-        output_chars = final_text.chars().count(),
-        preview = %preview,
-        truncated = truncated,
-        "webhook orchestrator turn completed"
-    );
-
-    // Persist the orchestrator's final output to Open Brain (`agentic_memory`,
-    // Postgres) with a synthetic step_id `"webhook-handler"`. Without this,
-    // webhook turns where the planner emitted `Direct { response }` (no
-    // subagent dispatched, so no `compress_and_store` and no backstop) leave
-    // nothing recallable. Coexists with subagent step summaries on the same
-    // session_id; different step_ids keep them distinct.
-    persist_webhook_output(session_id, &final_text).await;
-}
-
-/// Fire-and-forget persist of the webhook turn's final text into Open Brain
-/// (`agentic_memory`, Postgres). Logs success at info, errors at warn — never
-/// propagates. Embedding is best-effort: no `OPENROUTER_API_KEY` (or an embed
-/// error) stores a text-only memory.
-#[cfg(feature = "postgres_memory")]
-async fn persist_webhook_output(session_id: &str, final_text: &str) {
-    let embedding = match std::env::var("OPENROUTER_API_KEY") {
-        Ok(api_key) => {
-            let embedder = crate::adapters::outbound::memory::embedder::Embedder::new(
-                api_key,
-                // Open Brain is `vector(1536)`: always the pinned model.
-                crate::domain::memory::DEFAULT_EMBEDDING_MODEL.to_string(),
-            );
-            match embedder.embed(final_text).await {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    warn!(
-                        session_id = %session_id,
-                        error = %e,
-                        "webhook persist: embedding failed; writing text-only memory"
-                    );
-                    None
-                }
-            }
-        }
-        Err(_) => None,
-    };
-    match crate::adapters::outbound::tools::agentic_memory::write_step_summary_with_embedding(
-        session_id,
-        "webhook-handler",
-        final_text,
-        embedding.as_deref(),
-    )
-    .await
-    {
-        Ok(id) => info!(
-            entry_id = %id,
-            session_id = %session_id,
-            step_id = "webhook-handler",
-            "webhook output persisted to agentic_memory"
-        ),
-        Err(e) => warn!(
-            session_id = %session_id,
-            error = %e,
-            "webhook output persist FAILED — agentic_memory unavailable (is TENGU_MEMORY_DATABASE_URL set?)"
-        ),
-    }
-}
-
-/// Without `postgres_memory` there is no durable memory backend — the webhook
-/// turn still completes and its output is in the tracing log, just not
-/// recallable.
-#[cfg(not(feature = "postgres_memory"))]
-async fn persist_webhook_output(session_id: &str, _final_text: &str) {
-    warn!(
-        session_id = %session_id,
-        "webhook output not persisted — built without the `postgres_memory` feature"
-    );
 }
 
 /// How an endpoint authenticates senders.
@@ -1046,207 +656,12 @@ fn decode_nibble(b: u8) -> Result<u8, String> {
     }
 }
 
-/// `Escalator` for decision loops: a low-confidence step becomes a one-shot
-/// orchestrator turn on the loop's session id (planner → subagents), exactly
-/// like a planner-bound webhook. The loop event does not wait for it; the
-/// process's `turns` own it (module docs § Shutdown).
-struct OrchestratorEscalator {
-    config: Config,
-    memory_manager: Arc<MemoryManager>,
-    factory: Arc<dyn ChatServiceFactory>,
-    trace: Arc<dyn TraceSink>,
-    turns: Arc<Turns>,
-}
-
-#[async_trait]
-impl Escalator for OrchestratorEscalator {
-    async fn escalate(&self, session_id: String, message: String) {
-        let config = self.config.clone();
-        let memory_manager = Arc::clone(&self.memory_manager);
-        let factory = Arc::clone(&self.factory);
-        // Recorded under what the loop event runs caused by (its
-        // `loop.started`, a decide run's root), read before the spawn.
-        let parent = trace_exec::cause().and_then(|c| c.parent);
-        let gate = GatedTrace::new(Arc::clone(&self.trace));
-        let trace = OrchestratorTrace::of(&(Arc::clone(&gate) as Arc<dyn TraceSink>), parent);
-        let sid = session_id.clone();
-        let turn = trace_exec::close_after(gate, async move {
-            run_one_shot(&config, &memory_manager, factory, &sid, message, trace).await;
-        });
-        if self.turns.spawn(turn).is_err() {
-            warn!(session_id = %session_id, "escalation dropped: shutting down");
-        }
-    }
-}
-
-/// Per-turn `ChatServiceFactory` impl that rebuilds the engine + tools +
-/// system prompt from `Config.agents` for each `agent_name` it's asked to
-/// run. Mirrors `EvalChatServiceFactory` in `adapters/inbound/eval.rs`. Used by the
-/// webhook listener because webhook turns are stateless one-shots — there's
-/// no pre-built per-agent state to read from (unlike chat/telegram, which
-/// keep `OrchestratorSnapshots`).
-///
-/// The orchestrator agent (`Config.orchestrator.agent`, e.g. `crypto_researcher`)
-/// gets NO tools so the planner LLM emits plan JSON, not direct tool calls.
-/// Every other dispatched agent gets its full tool surface — the same one
-/// it has in chat/telegram.
-struct WebhookChatServiceFactory {
-    cfg: Arc<Config>,
-}
-
-#[async_trait]
-impl ChatServiceFactory for WebhookChatServiceFactory {
-    async fn run_turn(&self, agent_name: &str, text: &str) -> Result<String> {
-        let agent = self
-            .cfg
-            .agents
-            .get(agent_name)
-            .ok_or_else(|| anyhow!("unknown agent in webhook turn: {}", agent_name))?;
-
-        let engine_box = build_engine(agent_name, agent, self.cfg.claude_code.as_ref())?;
-        let engine: Arc<dyn Engine> = Arc::from(engine_box);
-
-        // The turn's one workspace — executor, skills and engine (a Claude
-        // Code CLI's cwd, its bridge): the agent's (`~` expanded — a literal
-        // `~` would be joined into runtime paths like
-        // `<workspace>/.tengu/cache.db`), else a temp dir for this turn,
-        // removed after it (`_turn_dir`), as a `run-agent` step — never the
-        // server's cwd.
-        let (workspace_path, _turn_dir): (PathBuf, _) =
-            crate::bootstrap::tools::workspace_or_temp(agent.workspace.as_deref(), "tengu-turn-")?;
-
-        // The process's vault values (never prompts): tool output reaches the
-        // model redacted, as in chat, `run-agent` and the bridge.
-        let secret_registry = Arc::new(
-            crate::adapters::outbound::secrets::process_secret_registry(None),
-        );
-        let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
-
-        // Orchestrator agent gets NO tools — its job is to emit JSON only.
-        // Doctrinal: LLM = heart, Open Brain + LLM Wiki = brain, tools =
-        // hands. The planner call must not have hands. Mirrors
-        // `EvalChatServiceFactory`.
-        let is_orchestrator_agent = self
-            .cfg
-            .orchestrator
-            .as_ref()
-            .map(|o| o.agent == agent_name)
-            .unwrap_or(false);
-
-        let base_tools = if is_orchestrator_agent {
-            Vec::new()
-        } else {
-            // The agent's `tools` list, as on every surface.
-            crate::bootstrap::tools::agent_base_tools(
-                agent, true, false, // memory tools off for webhook one-shots
-            )
-        };
-
-        let skill_source = FileSystemSkillSource::new(workspace_path.clone());
-        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry = SkillRegistry::new(base_reserved)
-            .with_allowlist(Some(agent.skill_packages.clone()))
-            .with_shell_skills(!agent.no_shell_fallback);
-        skill_registry.reload(&skill_source);
-
-        let current_tools = if is_orchestrator_agent {
-            Vec::new()
-        } else {
-            crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry)
-        };
-        let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
-            agent,
-            true,
-            &skill_registry,
-            &current_tools,
-        );
-
-        let mut tool_defs = current_tools.clone();
-        let inner_executor: Arc<dyn ToolExecutor> =
-            match crate::bootstrap::tools::build_tool_executor(
-                &workspace_path,
-                &current_tools,
-                &skill_registry,
-                &None,
-                &secret_registry,
-                log_activity,
-                None,
-                Some(&self.cfg.memory),
-                agent,
-                &self.cfg.mcp_servers,
-            ) {
-                Some(executor) => {
-                    let extra = executor.additional_tool_defs(&tool_defs);
-                    if !extra.is_empty() {
-                        tool_defs.extend(extra);
-                    }
-                    Arc::new(
-                        crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-                            Arc::new(executor),
-                            Arc::clone(&secret_registry),
-                        ),
-                    ) as Arc<dyn ToolExecutor>
-                }
-                None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
-            };
-
-        let messages = vec![
-            Message {
-                role: Role::System,
-                content: system_prompt.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-            Message {
-                role: Role::User,
-                content: text.to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        ];
-
-        let (bridge_tools, mcp_servers) = crate::bootstrap::tools::bridge_inputs(
-            engine.manages_own_workspace(),
-            &tool_defs,
-            &self.cfg.mcp_servers,
-        );
-        let engine_context = EngineContext {
-            workspace: Some(workspace_path.clone()),
-            system_prompt: Some(system_prompt.clone()),
-            bridge_tools,
-            max_tool_rounds: Some(agent.limits.max_tool_rounds),
-            max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
-            mcp_servers,
-        };
-
-        let response = collect_engine_response(
-            &*engine,
-            &messages,
-            &tool_defs,
-            &engine_context,
-            Some(&*inner_executor),
-            None,
-            None,
-            None,
-            agent.limits.max_tool_rounds,
-            agent.limits.max_tool_result_chars,
-            agent.limits.stream_event_timeout_secs,
-            agent.limits.compact_result_limit,
-        )
-        .await?;
-
-        Ok(response.text)
-    }
-}
-
-// `NoopActivity` + `NoopRuntimeToolExecutor` are shared with `inbound::eval`
-// via `adapters::noop`, and the Claude Code bridge inputs with it via
-// `bootstrap::tools::bridge_inputs`. Webhooks and evals both rebuild
-// per-turn services from config and need identical fallback impls.
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::runtime::loops::{LoopHandler, Turns};
+    use crate::domain::trace::RUN_CLOSED;
+    use std::collections::BTreeMap;
 
     /// Compute the expected signature for a body+secret. Used by tests
     /// to build inputs for `verify_hmac`.
@@ -1254,11 +669,7 @@ mod tests {
         let mut mac = HmacSha256::new_from_slice(secret).expect("hmac");
         mac.update(body);
         let bytes = mac.finalize().into_bytes();
-        let mut hex = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            hex.push_str(&format!("{:02x}", b));
-        }
-        format!("sha256={}", hex)
+        format!("sha256={}", crate::domain::canonical::hex(&bytes))
     }
 
     #[test]
@@ -1433,7 +844,6 @@ mod tests {
         let (loops, slow) = slow_dispatch_with(&["watch"], 100, 1);
         let state = app_state(
             loop_config(),
-            Arc::new(MemoryManager::new()),
             Arc::clone(&loops),
             Arc::new(SecretRegistry::new()),
             Arc::new(crate::adapters::outbound::noop::NoopTrace),
@@ -1487,7 +897,6 @@ mod tests {
         let (loops, slow) = slow_dispatch(&["watch"]);
         let state = app_state(
             loop_config(),
-            Arc::new(MemoryManager::new()),
             Arc::clone(&loops),
             Arc::new(SecretRegistry::new()),
             Arc::new(crate::adapters::outbound::noop::NoopTrace),
@@ -1535,7 +944,6 @@ mod tests {
         );
         let state = app_state(
             loop_config(),
-            Arc::new(MemoryManager::new()),
             Arc::clone(&loops),
             Arc::new(SecretRegistry::new()),
             sink.clone(),
@@ -1637,22 +1045,6 @@ mod tests {
         assert!(!text.contains("sha256="), "no header: {text}");
     }
 
-    /// A planner whose every call answers after `ms` with prose (a `Direct`
-    /// reply); `called` = it was entered.
-    struct SlowPlanner {
-        ms: u64,
-        called: std::sync::atomic::AtomicBool,
-    }
-
-    #[async_trait]
-    impl ChatServiceFactory for SlowPlanner {
-        async fn run_turn(&self, _agent: &str, _text: &str) -> Result<String> {
-            self.called.store(true, std::sync::atomic::Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(self.ms)).await;
-            Ok("A direct answer from the stub planner.".into())
-        }
-    }
-
     /// `[webhooks.endpoints.ask]` → the planner (`[orchestrator] agent =
     /// "planner"`), inline HMAC secret `k`; a recording sink, a dispatch that
     /// owns the turns, a planner answering after `ms`.
@@ -1662,7 +1054,7 @@ mod tests {
         Arc<WebhookAppState>,
         Arc<LoopDispatch>,
         Arc<crate::application::trace_exec::tests::MemTrace>,
-        Arc<SlowPlanner>,
+        Arc<crate::application::orchestrator::planner::testkit::TextEngine>,
     ) {
         let mut config = Config::default();
         config.webhooks.enabled = true;
@@ -1680,20 +1072,20 @@ mod tests {
         config.orchestrator = Some(toml::from_str("agent = \"planner\"").unwrap());
         let sink = Arc::new(crate::application::trace_exec::tests::MemTrace::default());
         let loops = Arc::new(LoopDispatch::new(BTreeMap::new(), 4, 64).with_turns(Turns::new()));
-        let planner = Arc::new(SlowPlanner {
-            ms,
-            called: Default::default(),
-        });
+        // A planner engine answering after `ms` with prose (a `Direct` reply).
+        use crate::application::orchestrator::planner::testkit;
+        let engine = testkit::TextEngine::new("A direct answer from the stub planner.", ms);
+        let stub = Arc::clone(&engine);
+        let planner: PlannerSource = Arc::new(move |_| Ok(Some(testkit::llm(Arc::clone(&stub)))));
         let state = app_state_with(
             config,
-            Arc::new(MemoryManager::new()),
             Arc::clone(&loops),
             Arc::new(SecretRegistry::new()),
             sink.clone(),
-            planner.clone(),
+            planner,
         )
         .unwrap();
-        (state, loops, sink, planner)
+        (state, loops, sink, engine)
     }
 
     async fn post_ask(state: &Arc<WebhookAppState>) -> StatusCode {
@@ -1757,12 +1149,12 @@ mod tests {
         let (state, loops, sink, planner) = planner_endpoint(60_000);
         assert_eq!(post_ask(&state).await, StatusCode::ACCEPTED);
         for _ in 0..400 {
-            if planner.called.load(std::sync::atomic::Ordering::SeqCst) {
+            if planner.called() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        assert!(planner.called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(planner.called());
         let t0 = std::time::Instant::now();
         let drained = loops
             .drain(tokio::time::Instant::now() + std::time::Duration::from_millis(100))
@@ -1808,7 +1200,6 @@ mod tests {
         let (loops, _) = slow_dispatch(&["other"]);
         let err = app_state(
             loop_config(),
-            Arc::new(MemoryManager::new()),
             loops,
             Arc::new(SecretRegistry::new()),
             Arc::new(crate::adapters::outbound::noop::NoopTrace),

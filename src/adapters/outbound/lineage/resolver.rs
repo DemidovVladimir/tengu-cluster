@@ -1,4 +1,4 @@
-//! `EvidenceResolver` on the filesystem (`docs/lineage-2026-10-06.md` § 1
+//! `EvidenceResolver` on the filesystem (`docs/lineage.md` § 1
 //! locators). Read-only; hashes are sha256 of the bytes, a dir's is the tree
 //! hash (`domain/evidence.rs::tree_hash`).
 //!
@@ -15,8 +15,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::config::paths::Layout;
+use crate::domain::canonical::sha256_hex;
 use crate::domain::evidence::{tree_hash, EvidenceRecord, ItemKind, ManifestEntry};
-use crate::domain::lineage::pins::bytes_sha256;
 use crate::domain::lineage::value::Locator;
 use crate::ports::lineage::{EvidenceResolver, Resolution};
 
@@ -69,14 +70,14 @@ pub(crate) fn path_sha256(path: &Path) -> Result<String, String> {
             let bytes = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             entries.push(ManifestEntry {
                 path: format!("d/{rel}"),
-                sha256: bytes_sha256(&bytes),
+                sha256: sha256_hex(&bytes),
                 bytes: bytes.len() as u64,
             });
         }
         return Ok(tree_hash("d", &entries));
     }
     std::fs::read(path)
-        .map(|b| bytes_sha256(&b))
+        .map(|b| sha256_hex(&b))
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -102,14 +103,11 @@ fn manifest_entries(vault: &Path) -> Vec<ManifestEntry> {
 
 impl FsResolver {
     fn state_dir(&self, state: &str) -> PathBuf {
-        self.tengu_home.join("state").join(state)
+        Layout::at(&self.tengu_home).state_dir(state)
     }
 
     fn vault_dir(&self, snapshot: &str) -> PathBuf {
-        self.tengu_home
-            .join("state")
-            .join("evidence")
-            .join(snapshot)
+        Layout::at(&self.tengu_home).vault(snapshot)
     }
 
     fn present(path: PathBuf, recorded: Option<String>, mutable: bool) -> Resolution {

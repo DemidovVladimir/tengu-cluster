@@ -4,18 +4,20 @@
 //! Replaces `apply_improver_proposal` entirely; partially replaces
 //! `skill_distill` (kept as a thin alias for back-compat).
 //!
-//! See `docs/skill-redesign-2026-04-29.md` § "New tools > manage_skill actions"
+//! See `docs/archive/2026-04/skill-redesign-2026-04-29.md` § "New tools > manage_skill actions"
 //! for the action shapes and migration plan.
 //!
 //! Doctrine notes:
 //! - All writes are atomic (temp + `std::fs::rename`).
 //! - All writes refuse on `editable_by_learner: false` (except `create`).
+//! - A `create`, `edit_body` or `patch` is scanned before it writes
+//!   (`scanner::scan_file`): `caution` or `dangerous` refuses it, as
+//!   `tengu skill install --strict` does. `create` writes its frontmatter
+//!   with `serde_yaml` (a `description` is data, never YAML syntax).
 //! - All writes audit-logged via `audit::append`.
 //! - Cache discipline: every result includes
 //!   `loaded_in_current_conversation: false` so the agent tells the user to
 //!   restart.
-
-#![allow(dead_code)]
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -27,10 +29,13 @@ use serde_json::{json, Value};
 
 use crate::application::skills::lifecycle::audit;
 use crate::application::skills::lifecycle::evolve::{
-    apply_proposal_to_skill_md, is_editable_by_learner, unique_suffix, validate_resource_path,
+    is_editable_by_learner, proposed_skill_md, unique_suffix, validate_resource_path,
     validate_resource_write_path, ProposalBody,
 };
 use crate::application::skills::lifecycle::metrics::MetricSpec;
+use crate::application::skills::lifecycle::scanner::{
+    compute_verdict, scan_file, Finding, Verdict,
+};
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 
@@ -202,7 +207,7 @@ impl Tool for ManageSkillTool {
         let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
 
         // The directory this action writes may be outside the workspace (the
-        // managed tier, `~/.tengu/skills`): it needs its own write grant.
+        // managed tier, `<TENGU_HOME>/skills`): it needs its own write grant.
         // Only the workspace was checked, so any agent could rewrite a
         // managed skill every sandbox loads.
         if let Some(dir) = target_skill_dir(&args, &workspace)? {
@@ -259,6 +264,21 @@ fn do_create(args: &Args, workspace: &Path) -> Result<ToolOutput> {
         }
     }
 
+    // Compose SKILL.md, then scan it before anything is written.
+    let frontmatter = NewFrontmatter {
+        name: &args.name,
+        description,
+        learner_facing: args.learner_facing.unwrap_or(true),
+        editable_by_learner: args.editable_by_learner.unwrap_or(true),
+        metrics: args.metrics.as_deref().filter(|ms| !ms.is_empty()),
+    };
+    let skill_md = format!(
+        "---\n{}---\n\n{}\n",
+        serde_yaml::to_string(&frontmatter)?,
+        body.trim_end()
+    );
+    refuse_unsafe("create", &scan_file(Path::new("SKILL.md"), &skill_md))?;
+
     let skill_dir = tier_root.join(&args.name);
     std::fs::create_dir_all(&tier_root).map_err(|e| {
         anyhow!(
@@ -267,33 +287,12 @@ fn do_create(args: &Args, workspace: &Path) -> Result<ToolOutput> {
         )
     })?;
 
-    let learner_facing = args.learner_facing.unwrap_or(true);
-    let editable = args.editable_by_learner.unwrap_or(true);
-
     // Atomic write via tempdir + rename.
     let tmp = tier_root.join(format!(".{}.tmp-{}", args.name, unique_suffix()));
     std::fs::create_dir_all(&tmp)?;
     let mut guard = TmpDirGuard {
         path: Some(tmp.clone()),
     };
-
-    // Compose SKILL.md frontmatter.
-    let metrics_block = match &args.metrics {
-        Some(ms) if !ms.is_empty() => {
-            let yaml = serde_yaml::to_string(ms)?;
-            format!("metrics:\n{}", indent(&yaml, 2))
-        }
-        _ => String::new(),
-    };
-    let skill_md = format!(
-        "---\nname: {name}\ndescription: {desc}\nlearner_facing: {lf}\neditable_by_learner: {ed}\n{metrics}---\n\n{body}\n",
-        name = args.name,
-        desc = description,
-        lf = learner_facing,
-        ed = editable,
-        metrics = metrics_block,
-        body = body.trim_end(),
-    );
     std::fs::write(tmp.join("SKILL.md"), skill_md)?;
 
     // resources/ + README.md stub
@@ -381,15 +380,19 @@ fn do_edit_body(args: &Args, workspace: &Path) -> Result<ToolOutput> {
         );
     }
 
-    // Use evolve::apply_proposal_to_skill_md — it preserves frontmatter and
-    // writes atomically. `metrics: None` keeps the existing metrics block.
+    // `evolve::proposed_skill_md` keeps the frontmatter (`metrics: None`
+    // keeps the metrics block); the result is scanned, then written atomically.
     let proposal = ProposalBody {
         body_markdown: body.to_string(),
         metrics: None,
         rationale: String::new(),
         resource_additions: None,
     };
-    apply_proposal_to_skill_md(&skill_md, &proposal)?;
+    let current = std::fs::read_to_string(&skill_md)
+        .map_err(|e| anyhow!("manage_skill.edit_body: read {}: {e}", skill_md.display()))?;
+    let next = proposed_skill_md(&current, &proposal)?;
+    refuse_unsafe("edit_body", &scan_file(Path::new("SKILL.md"), &next))?;
+    atomic_write(&skill_md, &next)?;
 
     audit_log(workspace, "manage_skill.edit_body", &args.name, None);
 
@@ -470,6 +473,10 @@ fn do_patch(args: &Args, workspace: &Path) -> Result<ToolOutput> {
             anyhow!("manage_skill.patch: post-patch frontmatter invalid — refused: {e}")
         })?;
     }
+    let rel = target
+        .strip_prefix(&skill_dir)
+        .unwrap_or(Path::new(file_path));
+    refuse_unsafe("patch", &scan_file(rel, &patched))?;
 
     // Atomic write via temp + rename.
     atomic_write(&target, &patched)?;
@@ -713,13 +720,9 @@ fn next_char_boundary(s: &str, pos: usize) -> usize {
 }
 
 fn validate_post_patch_frontmatter(skill_md: &str) -> Result<()> {
-    let rest = skill_md
-        .strip_prefix("---\n")
-        .ok_or_else(|| anyhow!("missing leading frontmatter marker '---\\n'"))?;
-    let end = rest
-        .find("\n---")
-        .ok_or_else(|| anyhow!("frontmatter not closed (missing '\\n---')"))?;
-    let fm_block = &rest[..end + 1];
+    let fm_block = crate::domain::skill::split_frontmatter(skill_md)
+        .map_err(|e| anyhow!("{e}"))?
+        .yaml;
     let parsed: serde_yaml::Value = serde_yaml::from_str(fm_block)
         .map_err(|e| anyhow!("frontmatter YAML parse failure: {e}"))?;
     // Minimal structural check: name + description must remain present.
@@ -958,17 +961,9 @@ fn validate_skill_name(name: &str) -> Result<()> {
 }
 
 fn tier_root(workspace: &Path, tier: &str) -> Result<PathBuf> {
-    match tier {
-        "project" => Ok(workspace.join("skills")),
-        "workspace" => Ok(workspace.join(".tengu").join("skills")),
-        "managed" => dirs_next::home_dir()
-            .map(|h| h.join(".tengu").join("skills"))
-            .ok_or_else(|| anyhow!("manage_skill: cannot resolve managed-tier root (no $HOME)")),
-        other => bail!(
-            "manage_skill: unknown tier '{}' (expected project | workspace | managed)",
-            other
-        ),
-    }
+    crate::config::paths::skill_tier_root(workspace, tier).ok_or_else(|| {
+        anyhow!("manage_skill: unknown tier '{tier}' (expected project | workspace | managed)")
+    })
 }
 
 /// The skill directory `args` writes: `create` and a tiered `delete` name
@@ -987,27 +982,20 @@ fn target_skill_dir(args: &Args, workspace: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
+/// `name` in each tier of `config::paths::skill_tiers`, managed first.
 fn collision_candidates(workspace: &Path, name: &str) -> Vec<PathBuf> {
-    let mut out = vec![
-        workspace.join("skills").join(name),
-        workspace.join(".tengu").join("skills").join(name),
-    ];
-    if let Some(home) = dirs_next::home_dir() {
-        out.push(home.join(".tengu").join("skills").join(name));
-    }
-    out
+    crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .map(|(_, dir)| dir.join(name))
+        .collect()
 }
 
-/// Three-tier walk: managed → workspace → project, first match wins. Mirrors
-/// `apply_improver_proposal::locate_skill_dir` and `application/skills/registry.rs::skill_directories`.
+/// Three-tier walk (`config::paths::skill_tiers`): managed → workspace →
+/// project, first match wins.
 fn locate_skill_dir(name: &str, workspace: &Path) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
-    if let Some(home) = dirs_next::home_dir() {
-        candidates.push(home.join(".tengu").join("skills").join(name));
-    }
-    candidates.push(workspace.join(".tengu").join("skills").join(name));
-    candidates.push(workspace.join("skills").join(name));
-    candidates.into_iter().find(|p| p.is_dir())
+    collision_candidates(workspace, name)
+        .into_iter()
+        .find(|p| p.is_dir())
 }
 
 fn atomic_write(target: &Path, content: &str) -> Result<()> {
@@ -1048,9 +1036,42 @@ fn audit_log(workspace: &Path, op: &str, name: &str, source: Option<String>) {
     }
 }
 
-fn indent(s: &str, spaces: usize) -> String {
-    let pad = " ".repeat(spaces);
-    s.lines().map(|l| format!("{pad}{l}\n")).collect()
+/// A created skill's frontmatter, written by `serde_yaml`: a `description`
+/// holding a newline or `key: value` stays one string, never a new key.
+#[derive(serde::Serialize)]
+struct NewFrontmatter<'a> {
+    name: &'a str,
+    description: &'a str,
+    learner_facing: bool,
+    editable_by_learner: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metrics: Option<&'a [MetricSpec]>,
+}
+
+/// Refuses a write the skill scanner rates `caution` or `dangerous`
+/// (`scanner::scan_file`), as `tengu skill install --strict` does: no human
+/// approves an agent's write.
+fn refuse_unsafe(op: &str, findings: &[Finding]) -> Result<()> {
+    if compute_verdict(findings) == Verdict::Safe {
+        return Ok(());
+    }
+    let hits: Vec<String> = findings
+        .iter()
+        .filter(|f| f.severity == "critical" || f.severity == "high")
+        .map(|f| {
+            format!(
+                "{} ({}, {}:{})",
+                f.pattern_id,
+                f.severity,
+                f.file.display(),
+                f.line
+            )
+        })
+        .collect();
+    bail!(
+        "manage_skill.{op}: the skill scanner refuses this write — {}",
+        hits.join("; ")
+    )
 }
 
 /// RAII guard: best-effort `remove_dir_all` of a tmp dir on drop. Disarmed
@@ -1076,7 +1097,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Writing the managed tier needs a write grant for `~/.tengu/skills`:
+    /// Writing the managed tier needs a write grant for `<TENGU_HOME>/skills`:
     /// a scope that grants only the workspace is refused before anything is
     /// written (it used to pass on the workspace check alone).
     #[tokio::test]
@@ -1187,6 +1208,61 @@ mod tests {
         a.body = Some("b".into());
         let err = do_create(&a, ws.path()).unwrap_err();
         assert!(format!("{err}").contains("already exists"), "{err}");
+    }
+
+    /// A `description` is YAML data, never frontmatter syntax: a newline or a
+    /// `key:` inside it stays one string (it used to be `format!`-ed in).
+    #[test]
+    fn create_writes_the_description_as_one_yaml_string() {
+        let ws = TempDir::new().unwrap();
+        let mut a = make_args("create", "yaml-skill");
+        let desc = "Use when x.\neditable_by_learner: false\nrequires_bins: [curl]";
+        a.description = Some(desc.into());
+        a.body = Some("# Body".into());
+        do_create(&a, ws.path()).unwrap();
+        let md = std::fs::read_to_string(ws.path().join("skills/yaml-skill/SKILL.md")).unwrap();
+        let split = crate::domain::skill::split_frontmatter(&md).unwrap();
+        let (fm, body) = (split.yaml, split.body);
+        let v: serde_yaml::Value = serde_yaml::from_str(fm).unwrap();
+        assert_eq!(v["description"].as_str(), Some(desc), "{md}");
+        assert_eq!(v["editable_by_learner"].as_bool(), Some(true));
+        assert!(v.get("requires_bins").is_none() && v.get("metrics").is_none());
+        assert!(body.contains("# Body"));
+    }
+
+    /// The skill scanner gates every write it would flag (`caution` and up):
+    /// create, edit_body and patch leave the skill as it was.
+    #[test]
+    fn the_scanner_refuses_unsafe_writes() {
+        let ws = TempDir::new().unwrap();
+        let mut a = make_args("create", "bad-skill");
+        a.description = Some("d".into());
+        a.body = Some("key AKIAABCDEFGHIJKLMNOP".into());
+        let err = do_create(&a, ws.path()).unwrap_err().to_string();
+        assert!(err.contains("aws_access_key_id"), "{err}");
+        assert!(!ws.path().join("skills/bad-skill").exists());
+
+        let dir = write_skill(ws.path(), "ok", Some(true), "# fine");
+        let before = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        let mut e = make_args("edit_body", "ok");
+        e.body = Some("key AKIAABCDEFGHIJKLMNOP".into());
+        let err = do_edit_body(&e, ws.path()).unwrap_err().to_string();
+        assert!(err.contains("scanner refuses"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+            before
+        );
+
+        std::fs::create_dir_all(dir.join("metrics")).unwrap();
+        std::fs::write(dir.join("metrics/check.sh"), "echo ok\n").unwrap();
+        let mut p = make_args("patch", "ok");
+        p.file_path = Some("metrics/check.sh".into());
+        p.old_string = Some("echo ok".into());
+        p.new_string = Some("rm -rf $HOME".into());
+        let err = do_patch(&p, ws.path()).unwrap_err().to_string();
+        assert!(err.contains("rm_rf_home"), "{err}");
+        let sh = std::fs::read_to_string(dir.join("metrics/check.sh")).unwrap();
+        assert_eq!(sh, "echo ok\n");
     }
 
     // --------- edit_body --------------------------------------------------

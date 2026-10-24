@@ -1,0 +1,208 @@
+# Egress policy — Tor by default, host allowlist, audit (2026-09-16, revised 2026-09-18)
+
+Code: `src/adapters/outbound/egress.rs`. Config: top-level `[egress]` (sandbox or base config). Enforced in code, not in the prompt. **Default is Tor**: with no `[egress]` section at all, every request tengu makes goes through `socks5h://127.0.0.1:9050` — the Arti + lyrebird-rs container from `make tor`.
+
+## Config
+
+```toml
+[egress]
+network = "tor"                      # DEFAULT. "open" = plain internet
+# proxy = "socks5h://127.0.0.1:9050" # default under tor (TENGU_TOR_PROXY overrides); socks5:// is rejected (DNS leak)
+# route_llm_api = true               # default under tor; false under open. Explicit value wins.
+allow_hosts = ["*.wikipedia.org", "api.coingecko.com"]   # sandbox-wide ceiling; empty = no ceiling
+deny_hosts = []                      # checked first
+https_only = true
+shell_network = "proxy_env"          # "proxy_env" (default, advisory) | "isolated" (macOS sandbox-exec)
+audit = true                         # default true
+# audit_log = "~/.tengu/logs/egress.jsonl"   # default
+```
+
+| `network` | `proxy` default | `route_llm_api` default | Meaning |
+|---|---|---|---|
+| `tor` (default) | `$TENGU_TOR_PROXY` or `socks5h://127.0.0.1:9050` | `true` | Tools, OpenRouter, embeddings, Claude Code CLI, Telegram — all via Tor. Fail-closed when the proxy is down. `engine = "local"` (`engines/local.rs`) is outside egress — direct to the local server. |
+| `open` | none (direct) | `false` | Plain internet. An explicit `proxy` (corporate, etc.) is still honoured for tool traffic. |
+
+Unknown keys are a parse error. Per-tool `net_hosts` scopes still apply — a request must pass **both**. `tengu doctor` prints the resolved policy; the parent CLI logs one warning at startup when the proxy port is unreachable.
+
+## What is controlled
+
+Every API client below except `http_request`, the crypto tools and A2A sends through one pipeline, `outbound/http_class.rs::GatedHttp`: gate on the request's own URL → optional `[rate_limits.*]` budget → the seal session on a proxy URL with no `Authorization` → send → the client's decoder → one audit record (`verdict`, `status`, `class` + `reason` on an error, `ms`, `weight` when budgeted).
+
+| Path | Control | Strength |
+|---|---|---|
+| `http_request` | proxy · `allow/deny_hosts` · `https_only` · every redirect hop re-checked · creds dropped cross-origin | enforced |
+| crypto tools (Privy, `tools/crypto/helpers.rs`) | tool client · `check_url` (`allow/deny_hosts`, `https_only`) + per-tool `net_hosts` on every request (Privy API, EVM RPC receipt polls) · `PRIVY_*` / `CHAIN_ID` / `EVM_RPC_URL` only through `env_reads` · audit per call (`tool` = the crypto tool, `host`, `path`, verdict) — 2026-10-01, `x-engine-parity-audit`. With `[keys.env] PRIVY_API_URL = "privy"` the Privy calls go to the seal proxy (host = the Worker) with the session, never the app secret (2026-10-09) | enforced |
+| Solana write tools' signer (`outbound/solana/privy.rs::PrivySigner`, `mode = "send"`, 2026-10-13) | tool client · `check_url` + the tool's `net_hosts` on every call · `PRIVY_API_URL` / `PRIVY_APP_ID` only through `env_reads` · only to the seal proxy's `privy` route with the session (`keys::auth_header_for`; never Privy directly, never a local app secret) · audit per call (`tool` = the write tool, `host`, `path`, verdict, status, ms) | enforced |
+| Solana tools — JSON-RPC (`outbound/solana/rpc.rs::SolanaRpc`) | tool client · `check_url` + per-tool `net_hosts` on every request · optional `[rate_limits.solana_rpc]` budget (weight 1, ≤ 10 s wait) · audit per call (`tool = "solana_rpc"`, `rpc_method`, `host`, no path) | enforced |
+| Solana tools — Jupiter / Pyth / datapi (`outbound/solana/http_json.rs::fetch_json` / `post_json`) | tool client · same gate · audit (`tool = "fetch_json"` / `"post_json"`, `host`, `path`, no query) | enforced |
+| Hyperliquid info (`outbound/hyperliquid/info.rs::HlInfo`, xmarket) | tool client · `check_url` + per-tool `net_hosts` on every request · `[rate_limits.hyperliquid]` budget before sending · audit per call (`tool = "hl_info"`, `info_type`, `weight`, `host`, `path` — path segments ≥ 8 chars `<redacted>`: a keyed `$HL_API_URL` never reaches the line or an error, 2026-10-01 review #15) | enforced |
+| Market-data backfill (`tengu history backfill`, `tengu backtest --fetch`, `outbound/backfill/`, xlab) | HL through `HlInfo` (above); GeckoTerminal through `backfill/gecko.rs::GeckoClient`: tool client · `check_url` + a scope pinning its host on every request · `[rate_limits.geckoterminal]` · audit per call (`tool = "gecko_ohlcv"`, `host`, `path` with the full pool address) — § Market-data backfill hosts | enforced |
+| SEC EDGAR filings (`tengu history events`, `outbound/backfill/sec.rs`, Phase 7) | `backfill/sec.rs::SecClient`: tool client · `check_url` + a scope pinning `www.sec.gov` + `data.sec.gov` on every request · `[rate_limits.sec]` · `User-Agent` = `$SEC_USER_AGENT` (required) · audit per call (`tool = "sec_edgar"`, `host`, `path` with the full CIK / accession) — § Market-data backfill hosts | enforced |
+| Source fetches (`tengu sources fetch`, `outbound/sources/`, O2 2026-10-08) | SEC through `SecClient` (above; the `[sources]` row's hosts, budget and User-Agent variable); EU TED through `outbound/sources/ted.rs::TedClient`: tool client · `check_url` + a scope of the row's `hosts` on every request · the row's `[rate_limits.<name>]` · audit per call (`tool = "ted_search"`, `host`, `path`; the query stays in the stored snapshot) — § Source hosts | enforced |
+| Agent-facing read tools over local stores: `source_evidence` (`sources.db`), `strategy_ranking`, `backtest`, `soe_view` / `soe_propose` / `soe_challenge` | no HTTP client: no request, no audit line (agents never fetch sources — `tengu sources fetch` is the operator's) | n/a |
+| Tengu Studio (`tengu studio`, default build, `adapters/inbound/studio/`) | inbound only: one listener on loopback (`127.x` · `::1` · `localhost`, anything else refused before binding — `guard.rs::loopback`), no outbound client; page assets embedded (CSP `default-src 'self'`). A Play runs `tengu run`'s runtime (`inbound::run::start_session`) in the Studio process under the sandbox's installed policy — its requests are the runtime's, audited as above | enforced |
+| MCP `http` servers | proxy (loopback exempt) | enforced |
+| A2A remotes (`outbound/a2a/`: the `a2a` tool, `tengu a2a card\|send\|get\|cancel`, 2026-10-10) | `peer_client`: proxy (loopback exempt — another harness on this host), redirects off · `check_url` + the tool's `net_hosts` on every request · only the hosts of the remote's `url` / `endpoint_url` (a card naming another host is refused before any request; the credential never leaves them) · credential variable only through `env_reads` · audit per request (`tool = "a2a"`, `remote`, `op`, `host`, `status`) — `docs/a2a.md` | enforced |
+| A2A server (`tengu a2a serve`, `adapters/inbound/a2a.rs`) | inbound only: binds `[a2a.server] bind:port` (default loopback); bearer token required unless loopback `allow_unauthenticated`; the turns it runs make their requests under the sandbox's policy, audited as above | enforced |
+| LLM API (OpenRouter, embeddings, wiki compiler, Jev decisions `outbound/decisions.rs`) | proxy iff `route_llm_api` | enforced |
+| Seal proxy (`[keys] proxy`, the `tengu-seal` Worker — `docs/sealed-keys.md`; provider keys are its Cloudflare secrets): `/healthz`, `/session`, `/whoami` (`outbound/keys`, `tengu keys`), and every client whose URL `[keys.env]` points at `<proxy>/<route>` | LLM-API client: proxy iff `route_llm_api`; its host must be in `allow_hosts` when a sandbox sets them (config load fails otherwise); the session goes to that origin only; the Worker forwards only to the route's `upstream` (`wrangler.toml` `ROUTES`), with the key only at that route's one header / path / query spot, for routes the session was granted; redirects not followed | enforced |
+| Claude Code CLI's own API traffic | `HTTPS_PROXY` = HTTP CONNECT on the proxy port iff `route_llm_api` (`claude_cli_env`) | advisory — the CLI honours the env |
+| Codex CLI's own API traffic (`engine = "codex"`, `engines/codex.rs`) | the same `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` iff `route_llm_api` (`claude_cli_env`) | advisory — the CLI honours the env |
+| Codex built-in shell / patch tool | `-s read-only` \| `workspace-write`: no network in either; apps, plugins, browser / computer use off (`-c features.<f>=false`); refused in a hardened sandbox | Codex's own sandbox (outside tengu scopes) |
+| Hosted web search: Claude Code profile `research` (WebSearch), Codex `[agents.<a>.codex] web_search = "cached" \| "live"` (default `disabled`) | runs at Anthropic / OpenAI on the subscription, not from this host: no request leaves here, no audit line; no WebFetch in any Claude Code profile — pages come through `http_request` | provider-side (nothing to gate here) |
+| Telegram Bot API (`tengu telegram`) | teloxide client (reqwest 0.11, `reqwest011` alias) through HTTP CONNECT on the proxy port whenever a proxy is set; 30s connect / 60s timeout | enforced |
+| `run_command` / shell skills | URL literals checked + audited; proxy env vars (loopback exempt) | advisory |
+| same, `shell_network = "isolated"` | kernel sandbox: only `localhost:<proxy port>` reachable, DNS blocked | enforced (macOS) |
+| MCP `stdio` servers | proxy env vars (loopback exempt) | advisory |
+| Claude Code builtin `Bash` | dropped (`editor_shell` → `editor`) while a proxy is set | enforced |
+| Claude Code CLI's own MCP servers (user / project / plugin) | never loaded: `--strict-mcp-config` on every run — the tengu bridge is its only MCP server (`engines/claude_code.rs::cli_args`) | enforced |
+| Tor entry (`deploy/tor/`) | `[bridges] enabled = true` — Arti dials only bridges, through lyrebird-rs | enforced (config) |
+| Docker tengu (`docker-compose.tor.yml`) | tengu on the internal `tor-front` network; Arti is the only thing it can reach | enforced (all traffic) |
+
+Arti serves HTTP CONNECT on the same port as SOCKS (`enable_http_connect = true` in `deploy/tor/arti.toml`), which is what the two env-var paths rely on: a `socks5h://host:port` proxy maps to `http://host:port` (`EgressPolicy::http_connect_proxy`).
+
+Fail-closed: proxy down → request errors (never falls back to direct). Invalid `[egress]` → config load fails; `run-agent` child exits. Children (`run-agent`, `mcp-bridge`) receive the parent's **resolved** policy as `TENGU_EGRESS`, so they never re-resolve defaults.
+
+## Solana LP tool hosts (2026-09-24)
+
+`docs/observations.md` has the per-tool list. Each host must be in the tool's `net_hosts` scope (and `allow_hosts` if set).
+
+| Host | Tools | State |
+|---|---|---|
+| `api.mainnet-beta.solana.com`, or the host of `$SOLANA_RPC_URL` | `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `sol_price` with `pool` | works (incl. gPA with memcmp); public limits: HTTP 429 → `rate_limited`, `-32429` → `quota_exhausted` |
+| `lite-api.jup.ag` | `sol_price`; oracle fallback of `jup_perps` / `lp_snapshot` / `dlmm_open_position` / `jup_perps_order`; `jupiter_swap`: Ultra `GET /ultra/v1/order`, `POST /ultra/v1/execute` (60 s timeout) | works (keyless) |
+| RPC write methods | `simulateTransaction`, `sendTransaction` (one attempt), `getLatestBlockhash`, `getBlockHeight`, `getPriorityFeeEstimate` (only on a `helius` host) — the write tools, same RPC host as the reads | works (simulate verified live; send not yet) |
+| `dlmm.datapi.meteora.ag` | `dlmm_pools` | works |
+| `hermes.pyth.network` | `sol_price` with `pyth_feed_id` only | HTTP 401 today → `auth_required` |
+
+| Rule | Detail |
+|---|---|
+| RPC URL = secret | may embed an api key: errors, headlines and audit carry the host only; read from `$SOLANA_RPC_URL` only when the tool scope has it in `env_reads`, else the public RPC is used (debug log, no error) |
+| Public API URLs | rendered with credential-like query values (`key`, `token`, `secret`, `auth`, `sig`, `password`) as `<redacted>` |
+| Tor | nothing special — the tool client is proxied; `sandboxes/lping` runs `network = "open"` (RPC / market APIs, latency) |
+
+## Hyperliquid hosts (xmarket, 2026-09-30)
+
+| Host | Client | State |
+|---|---|---|
+| `api.hyperliquid.xyz` (`POST /info`) | `outbound/hyperliquid/info.rs::HlInfo` (tool client, gate + audit per request) | works over `open` (probed 2026-09-30, 0.28–0.47 s); over Tor unverified until `hl-tor-probe` (M1) |
+| `api.hyperliquid-testnet.xyz` | same, when the scope may read `$HL_API_URL` (`env_reads`) and it is set | testnet |
+
+| Rule | Detail |
+|---|---|
+| Budget | `[rate_limits.hyperliquid] per_minute = 1200` (HL: 1200 weight / min / IP; `l2Book` 2, most info types 20, `userRole` 60, + 1 per 60 candles / 20 list items) — acquired before sending; a 429 drains the bucket for `Retry-After` |
+| 403 | `auth_required` "blocked (geo/WAF/Tor exit?)": CloudFront geo block, WAF or a blocked Tor exit — not a rate limit |
+| `500` + body `null` | `not_applicable` (unknown dex / coin), never counted as an outage |
+
+## Market-data backfill hosts (xlab, 2026-10-01)
+
+`tengu history backfill` and `tengu history events` (`src/adapters/inbound/cli/history.rs` → `src/adapters/outbound/backfill/`) run under the process's installed policy: `cli/mod.rs` installs the base config's `[egress]`, `--sandbox` re-installs the sandbox's (`bootstrap/sandbox.rs`). Spec: `docs/xlab-2026-10-01.md` § 4.
+
+| Host | Requests | Budget | Audit `tool` |
+|---|---|---|---|
+| `api.hyperliquid.xyz` (`$HL_API_URL` honoured: rows then get `source = hl:<host>`) | `POST /info` `candleSnapshot` (newest 5 000 bars per interval; weight 20 + 1 / 60 bars), `fundingHistory` (≤ 500 rows; 20 + 1 / 20 rows) | `[rate_limits.hyperliquid]`, waits ≤ 120 s | `hl_info` |
+| `api.geckoterminal.com` (`$GECKO_API_URL` overrides) | `GET /api/v2/networks/<solana\|robinhood>/pools/<pool>/ohlcv/<minute\|hour\|day>?aggregate&before_timestamp&limit=1000&currency=usd&token=<instrument address>` | `[rate_limits.geckoterminal]` (1 per request; the free API allows ~30 / min) | `gecko_ohlcv` |
+| `www.sec.gov` + `data.sec.gov` (`tengu history events`, 2026-10-08) | `GET /files/company_tickers.json` (once per run), `GET /submissions/CIK##########.json` (+ older pages), `GET /Archives/edgar/data/<cik>/<accession>/<accession>-index.htm` (one per filing not stored yet); header `User-Agent: $SEC_USER_AGENT` (refused without it) | `[rate_limits.sec]` (1 per request; xlab-w2 300 / min, burst 5; SEC allows 10 / s) | `sec_edgar` |
+
+| Rule | Detail |
+|---|---|
+| Ceiling | every host a run reads must be in `[egress] allow_hosts` when it is set (xlab: HL + Gecko; xlab-w2: + `www.sec.gov`, `data.sec.gov`) — an unlisted host is `denied`, nothing sent (verified 2026-10-01: a Gecko backfill under `allow_hosts = ["api.hyperliquid.xyz"]` → one `denied` line, exit 1) |
+| Retry | 429 / 5xx / timeout: `domain::backoff::next_delay` (5 retries, `Retry-After` respected, parks ≤ 5 min); a 429 also drains the named budget |
+| Attribution | `agent = cli`, `session = history-backfill:<start ms>`, `call_id = <instrument id>` (`egress::audited_as`) |
+| The `market_history` tool (`fetch = true`, `outbound/tools/xlab/history.rs`) | the same requests on the calling agent's tool client and scope: each checked against its `net_hosts`, `HL_API_URL` / `GECKO_API_URL` read only through `env_reads`; `Retry::TOOL` (2 retries, ≤ 5 s, parks ≤ 10 s); audit lines attributed like any tool call |
+| Archive files | `tengu history import-hl-archive` reads local files only; the S3 download (`aws s3 cp --request-payer requester`) is the operator's, outside tengu |
+
+## Source hosts (O2, 2026-10-08)
+
+`tengu sources fetch` (`src/adapters/inbound/cli/sources.rs` → `src/adapters/outbound/sources/`) reads one `[sources.registry.<id>]` row under the installed policy. `sandboxes/soe` sets `network = "open"` with the ceiling `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]`; every row's `hosts` must sit inside it (load rule). Doc: `docs/source-evidence.md`; page: `docs/tutorial/source-evidence.html`.
+
+| Host | Requests | Budget | Audit `tool` |
+|---|---|---|---|
+| `www.sec.gov` + `data.sec.gov` (`sec_edgar` row) | as `tengu history events` (submissions + older pages, one index page per filing without a stored `ok` record); `User-Agent` from the row's `user_agent_env` variable | the row's `rate_limit` (soe: `[rate_limits.sec]` 300 / min, burst 5) | `sec_edgar` |
+| `api.ted.europa.eu` (`ted_search` row) | `POST /v3/notices/search`, anonymous: the row's query for one publication day, an allow-list of fields (no contact field), pages of 250, `scope = ALL` | the row's `rate_limit` (soe: `[rate_limits.ted]` 60 / min, burst 2 — assumed, TED publishes none) | `ted_search` |
+
+| Rule | Detail |
+|---|---|
+| Gate | a disabled row, one without reviewed terms or one switched off at runtime (`tengu sources disable`) is refused before any request; the client's scope is the row's `hosts` |
+| Retry | `http_class::Retry::BACKFILL`; a 429 drains the row's budget; a TED reply with `timedOut: true` is retried as transient |
+| Attribution | `agent = cli`, `session = sources-fetch:<start ms>`, `call_id = <source>:sec:cik:<cik10>` (per CIK) or `<source>:query:<sha256>` (TED) |
+| Not here | agents never fetch: the `source_evidence` tool (O2 C9) reads `sources.db` only |
+
+## Run it
+
+| Where | Steps |
+|---|---|
+| Native | `make tor` (builds + starts Arti + lyrebird-rs, waits until `IsTor=true`; needs lyrebird-rs at `../lyrebird-rs` or `LYREBIRD_RS_DIR=<dir or git URL>`) → `tengu chat --sandbox <name>` → `tengu doctor --sandbox <name> --tor`. Stop: `make tor-down`. |
+| Docker | `make up` (adds `docker-compose.tor.yml`: tengu on `tor-front`, `TENGU_TOR_PROXY=socks5h://tor:9050`). `make doctor` runs the live check inside the container. Webhook port is not published in this mode. |
+| Open internet | `[egress] network = "open"` in the sandbox (no ceiling: `sandboxes/lping`, `jev-exec`, `unlimited`, `control-loop-lab` — Jev only, `a2a-lab` — its A2A self-call is loopback; Privy blocks Tor exits). With an `allow_hosts` ceiling + `https_only`: `xmarket` + `xmarket-weekend` (`api.hyperliquid.xyz`), `xlab` (+ `api.geckoterminal.com`), `xlab-w2` (+ `www.sec.gov`, `data.sec.gov`), `soe` (`www.sec.gov`, `data.sec.gov`, `api.ted.europa.eu`), `sealed-check` (`127.0.0.1`, `*.workers.dev` — the seal proxy only: Jev reaches OpenRouter through the `tengu-seal` Worker, `docs/sealed-check.md`) — LLM API traffic is outside the ceiling (proxy only). Tor: the base config, `tor-check`, `storage-test`. All must stay switchable to Tor: every new HTTP / WS / SSE client goes through this module (operator decision 2026-09-30, `docs/xmarket-tracker.md` convention 17). Docker: `make up NETWORK=open`. |
+
+## Tor stack (`deploy/tor/`)
+
+```
+tengu ─► tor (Arti :9050, SOCKS5 + HTTP CONNECT) ─► lyrebird-rs (managed PT) ─► obfs4 / snowflake bridge ─► Tor
+```
+
+| File | Role |
+|---|---|
+| `deploy/tor/Dockerfile` | Arti 2.6.0 (`cargo install --locked --features http-connect`) + lyrebird-rs built from the named build context `lyrebird-rs` (`cargo build --release --locked --bin lyrebird`). Healthcheck = `check.torproject.org` reports `IsTor:true`. |
+| `deploy/tor/arti.toml` | `[bridges] enabled = true`; Tor Browser's built-in obfs4 (7) + snowflake (2) lines; `[[bridges.transports]]` = `path = "/usr/local/bin/lyrebird"`, `run_on_startup = true` — Arti launches lyrebird-rs itself (pt-spec). State in the `tor-state` volume. |
+| `deploy/tor/compose.yml` (+ `compose.internal.yml`) | One service `tor`, `127.0.0.1:9050` published, networks `tor-front` (internal) + `tor-out`. `docker-compose.tor.yml` includes both files; the second drops the host port (tengu reaches `tor` by name, and a standalone `make tor` proxy may hold 9050). |
+
+| Fact | Detail |
+|---|---|
+| lyrebird-rs | Separate repo (`../lyrebird-rs`; `LYREBIRD_RS_DIR` = dir or git URL for make, exported to compose as `LYREBIRD_RS_SRC`). Rust port of the Tor Project's lyrebird; obfs4 + snowflake verified against Arti 2.6.0. Nothing from it is vendored here. |
+| Bridge lines | From the signed Tor Expert Bundle (lyrebird-rs `tools/arti-e2e/bridges.sh`). They rotate — `make tor-bridges` prints the current ones; paste into `deploy/tor/arti.toml`. |
+| What your ISP sees | obfs4: TLS-looking traffic to the bridge IPs; snowflake: HTTPS to the domain-fronted broker, STUN, WebRTC to volunteers — never a connection to a Tor relay. |
+| Why not embedded in tengu | Children, shell tools and MCP servers need a port anyway; per-step `run-agent` processes would each bootstrap; `reqwest` can't take an Arti stream. |
+| Upkeep | Bump `ARTI_VERSION`, update lyrebird-rs, refresh bridge lines with Tor Browser releases. |
+
+`tengu doctor --tor` prints the policy, TCP-checks the proxy, and asks `check.torproject.org` — non-zero exit unless `IsTor=true`.
+
+## Audit log
+
+One JSONL line per `http_request` hop and per shell command that has a URL or a network binary (`curl`, `wget`, `nc`, `ssh`, `git`, …). Parent, `run-agent` children and the MCP bridge append to the same file (`TENGU_EGRESS` carries the resolved path). A `denied` / `error` line is also a WARN line in `tengu.log` (target `tengu::egress`: tool, host, call id, status, reason); allowed ones are only in the JSONL.
+
+| Field | Meaning |
+|---|---|
+| `verdict` | `allowed` · `denied` (policy/scope, nothing sent) · `error` (sent/ran and failed — e.g. sandbox refusal) |
+| `url` | hop 0: exactly what the LLM wrote (`$VAR` unexpanded); later hops: redirect target |
+| `command`, `urls` | shell commands |
+| `method`, `status`, `ms`, `hop`, `host`, `headers` (names only), `auth_env`, `body`, `file_path` | `http_request` |
+| `ts`, `ts_ms`, `pid`, `session`, `agent`, `call_id`, `run_id`, `via`, `proxy`, `reason` | all records; `run_id` = this process's trace recording (`egress::set_run_id` when it opens; not an eval row's), else `TENGU_RUN_ID` (a traced `run-agent` step + its bridge), else `null` |
+
+| Attribution (`egress.rs::EgressPolicy::audit`) | `agent` · `session` · `call_id` |
+|---|---|
+| `tengu run` (or Studio's Play) tool feed `[feeds.<n>]` | the feed's agent · `feed:<n>` · `feed:<n>:<slot ms>:<i>` |
+| decision loop (`tengu run`, Studio's Play, `tengu webhooks`, `tengu decide`) | the loop's agent · the event's session id · `<loop>:<session>:<t>` |
+| `tengu history backfill`, `tengu backtest --fetch` (same code) | `cli` · `history-backfill:<start ms>` · the instrument id |
+| `tengu history events` (SEC EDGAR) | `cli` · `history-events:<start ms>` · the instrument id (`sec:company_tickers` for the ticker map) |
+| `tengu sources fetch` (O2) | `cli` · `sources-fetch:<start ms>` · `<source>:sec:cik:<cik10>` (SEC, per CIK) or `<source>:query:<sha256 of the query template>` (TED) |
+| an agent's tool call (chat, Telegram, plan steps, webhook / A2A agents, eval, the MCP bridge) | the record's own `agent`, else `TENGU_AGENT_NAME` (a `run-agent` child) · `TENGU_SESSION_ID` · the `ToolCall.id` (`chat:…`, `step:…`, `mcp:…`) |
+| everything else | the record's own `agent`, else `TENGU_AGENT_NAME` · `TENGU_SESSION_ID` · `null` — e.g. an SOE stage (`soe_cycle` job, `tengu soe cycle`): the stage agent · the run id (`adapters/outbound/soe/runner.rs`) |
+
+Every agent's tool stack is an `egress::AttributedExecutor` naming the call id (`bootstrap::tools::build_tool_executor`, the bridge); feeds and loops share one process, so the env cannot name them: `bootstrap` wraps their executors in a fuller one (agent, session). Each call runs under a task-local `CallScope` (a task the tool spawns does not inherit it); the outermost one names it. The same `run_id` / `session_id` are on every `tengu.log` line of a turn (span `turn`: chat / Telegram turn, webhook request, A2A task, `run-agent` step, bridge).
+
+```bash
+jq -c 'select(.verdict!="allowed")' ~/.tengu/logs/egress.jsonl       # what got blocked
+jq -r 'select(.tool=="http_request") | .host' ~/.tengu/logs/egress.jsonl | sort | uniq -c
+```
+
+## Limits
+
+| Gap | Why / mitigation |
+|---|---|
+| `proxy_env` shell | programs may ignore proxy env — use `isolated` (macOS) or Docker `make up` |
+| `isolated` on Linux | not implemented (config error) — use Docker `make up` |
+| Obfuscated URLs in shell | not caught by the URL check; `isolated` still blocks the connection |
+| `isolated` blocks all unix sockets too | `docker`, `ssh-agent` etc. fail inside `run_command` |
+| Claude Code CLI proxying | env-based (`HTTPS_PROXY`); network-enforced only under Docker `make up` |
+| No `User-Agent` on `http_request` | some sites (Wikipedia) return 403 — the LLM can set the header |
+| Bridge speed | obfs4 bootstraps in ~30 s; snowflake is slower (minutes) and is the fallback when obfs4 bridges are blocked |
+| Paid APIs | OpenRouter works over Tor; Privy blocks Tor exits — a sandbox calling it directly needs `network = "open"`. Through the seal proxy (`[keys.env] PRIVY_API_URL = "privy"`) tengu only reaches the Worker, which calls Privy; Tor reach of `workers.dev` is not tested live yet (`docs/sealed-keys.md` § Verified · open) |
+
+## Verified
+
+| When | What |
+|---|---|
+| 2026-09-16 (Arti 2.6.0 + Go lyrebird snowflake) | Arti guard log `via snowflake … is usable`; `tengu doctor --tor` → `IsTor=true`; HTTP CONNECT on 9050 → `IsTor:true`; `http_request` + shell `curl` → `IsTor:true`; unlisted host / plain http denied before sending; redirect to unlisted host blocked (unit test); `curl --noproxy`, base64-obfuscated URL, python raw socket under `isolated` → kernel refused; proxy down → error, no direct fallback; OpenRouter reachable over Tor (HTTP 200). |
+| 2026-09-18 (Arti 2.6.0 + lyrebird-rs managed PT) | See `docs/SESSION_HANDOFF.md` top section for the run log of `make tor` + `tengu doctor --tor`. Unit tests: `egress::tests` (17) cover network defaults, explicit overrides, `TENGU_EGRESS` round-trip, HTTP CONNECT mapping. |

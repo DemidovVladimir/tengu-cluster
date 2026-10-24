@@ -2,8 +2,6 @@
 //! the registered `Tool`, building the per-call `ToolCtx` with the scope
 //! configured for that tool.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -14,7 +12,6 @@ use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
-use crate::ports::memory::MemoryService;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool::{ConversationView, PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 use crate::ports::tool_activity::ToolActivityPort;
@@ -55,6 +52,7 @@ impl ToolRegistry {
     }
 
     /// Register a single tool directly.
+    #[cfg(test)]
     pub(crate) fn register_tool(&mut self, tool: Arc<dyn Tool>) {
         let name = tool.definition().name.clone();
         self.by_name.insert(name, tool);
@@ -99,7 +97,6 @@ pub(crate) struct PluginToolExecutor {
     pub workspace: std::path::PathBuf,
     pub shell: Arc<dyn ShellExecutionPort>,
     pub http: reqwest::Client,
-    pub memory_manager: Option<Arc<dyn MemoryService>>,
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
@@ -166,9 +163,7 @@ impl ToolExecutor for PluginToolExecutor {
             scope: &scope,
             shell: self.shell.as_ref(),
             http: &self.http,
-            memory_manager: self.memory_manager.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
-            activity: self.activity.as_ref(),
             conversation: ConversationView::new(messages),
             agent_config: self.agent_config.as_ref(),
             call_id: Some(call.id.as_str()).filter(|id| !id.is_empty()),
@@ -220,7 +215,6 @@ mod tests {
             workspace: std::path::PathBuf::from("."),
             shell: Arc::new(LocalShellExecutor::new()),
             http: reqwest::Client::new(),
-            memory_manager: None,
             secret_registry: Arc::new(SecretRegistry::new()),
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),

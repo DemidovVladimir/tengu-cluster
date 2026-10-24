@@ -1,5 +1,5 @@
 //! Studio builder routes (`tengu studio --sandbox <s> --allow-edit`;
-//! `docs/studio-builder-2026-10-10.md`). Every verdict comes from
+//! `docs/builder.md`). Every verdict comes from
 //! `application::builder` (compile + the real config loader); this file
 //! parses the request, runs the use case off the async workers and maps its
 //! refusal to a status. Without `--allow-edit` every route here is 404.

@@ -1,6 +1,6 @@
 //! Studio board — one recorded run folded over the workflow graph: the one
 //! place an event becomes a node colour, a highlighted edge, a grey node or
-//! a header fact (`TENGU_STUDIO_PLAN.md` § 4). Pure: events in `seq` order +
+//! a header fact (`docs/plans/TENGU_STUDIO_PLAN.md` § 4). Pure: events in `seq` order +
 //! the graph in, a per-event view and the board at a `seq` out; the page
 //! draws what this returns and decides nothing (feature `studio`).
 //!

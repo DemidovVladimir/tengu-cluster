@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tengu Orchestrator — Pipeline Diagram</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose' });
+</script>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --accent: #0a66c2;
+    --border: #d0d0d0;
+    --code-bg: #f0f0f0;
+    --pass-bg: #dfe7dd;
+    --pass-fg: #0a5a1a;
+    --warn-bg: #fef3cd;
+    --warn-fg: #7a5a00;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    color: var(--fg);
+    background: var(--bg);
+    margin: 0;
+    padding: 0;
+  }
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2.5rem 2rem 6rem 2rem;
+  }
+  nav {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 2rem;
+    font-size: 0.88rem;
+    z-index: 10;
+  }
+  nav a {
+    color: var(--accent);
+    margin-right: 1rem;
+    text-decoration: none;
+  }
+  nav a:hover { text-decoration: underline; }
+  h1 {
+    font-size: 2rem;
+    border-bottom: 2px solid var(--fg);
+    padding-bottom: 0.5rem;
+    margin-top: 0;
+  }
+  h2 {
+    font-size: 1.5rem;
+    margin-top: 3rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 1.2rem; margin-top: 2rem; }
+  h4 { font-size: 1rem; margin-top: 1.5rem; color: var(--muted); font-weight: 600; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    line-height: 1.4;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.85em;
+  }
+  .diagram {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+    text-align: center;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.55rem 0.85rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  .callout {
+    padding: 0.9rem 1.1rem;
+    border-left: 4px solid var(--accent);
+    background: #eef5fb;
+    border-radius: 0 4px 4px 0;
+    margin: 1rem 0;
+  }
+  .callout.pass {
+    border-left-color: var(--pass-fg);
+    background: var(--pass-bg);
+  }
+  .callout.warn {
+    border-left-color: var(--warn-fg);
+    background: var(--warn-bg);
+  }
+  .file-ref {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.85em;
+    color: var(--accent);
+  }
+  .timeline {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.82em;
+    background: #222;
+    color: #ddd;
+    padding: 1rem;
+    border-radius: 6px;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .timeline .event { color: #6c6; }
+  .timeline .warn { color: #fa6; }
+  .timeline .err { color: #f66; }
+  .timeline .tool { color: #aaf; }
+  .timeline .comment { color: #999; }
+  header.title {
+    padding: 2rem 0;
+    border-bottom: 3px solid var(--fg);
+    margin-bottom: 2rem;
+  }
+  header.title .subtitle {
+    color: var(--muted);
+    font-size: 1rem;
+    margin-top: 0.5rem;
+  }
+  .small { font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#overview">Overview</a>
+  <a href="#arch">Architecture</a>
+  <a href="#lifecycle">Lifecycle</a>
+  <a href="#sequential">Sequential</a>
+  <a href="#parallel">Parallel</a>
+  <a href="#diamond">Diamond</a>
+  <a href="#replan">Replan</a>
+  <a href="#retention">Retention</a>
+  <a href="#refs">Code refs</a>
+</nav>
+
+<div class="container">
+
+<header class="title">
+  <h1>Tengu Orchestrator — Pipeline</h1>
+  <div class="subtitle">Harness-owned orchestration, parallel + sequential execution, retention. Every diagram references exact file:line locations in the source tree. Current shape: planner = <code>RegistryPlanner</code> (file-backed <code>TENGU_PLANNER_REGISTRY.md</code>), worker = <code>SubprocessRunner</code> (one <code>tengu run-agent</code> child per step), step memory = Postgres <code>agentic_memory</code>. Line numbers as of 2026-10-08 (<code>main</code> at bc9bc12a038654ac4941c714abcfa777c99af631). Chat-turn orchestration only — <code>tengu run</code>, backtests, rankings, lineage and sources run without a planner (<a href="architecture-2026-04-27.html">architecture explorer</a>).</div>
+</header>
+
+<!-- ============================================================= -->
+<h2 id="overview">1 · Overview</h2>
+
+<p>
+A user message arrives on a channel (Telegram / TUI / Webhooks / Eval runner). The channel calls
+<code>Orchestrator::handle(prompt)</code>. The planner LLM (<code>PlannerLlm::call</code>: one engine call, no tools, no memory) emits a JSON plan, checked by <code>Plan::validate</code>;
+a Rust DAG executor dispatches each step as a <code>tengu run-agent</code> subprocess
+(<code>SubprocessRunner</code>) that runs its own LLM + tools loop; step summaries flow back
+over IPC as a single final response. No LLM ever sees the orchestration machinery directly.
+</p>
+
+<p>
+<strong>The three execution patterns on this page:</strong>
+</p>
+
+<table>
+  <thead><tr><th>Pattern</th><th>DAG shape</th><th>Tested by</th></tr></thead>
+  <tbody>
+    <tr><td>Sequential</td><td><code>s1 → s2</code></td><td>eval row <code>two_step_sequential</code></td></tr>
+    <tr><td>Parallel + synthesize</td><td><code>(s1, s2, ..., sN) → sM</code></td><td>eval row <code>parallel_fan_out</code></td></tr>
+    <tr><td>Diamond / mixed</td><td><code>s1 → (s2, s3) → s4</code></td><td>eval row <code>diamond_dag</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================= -->
+<h2 id="arch">2 · Top-level architecture</h2>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    subgraph CH["Channel layer"]
+      TG["Telegram<br/>adapters/inbound/telegram/"]
+      TUI["TUI<br/>tui/mod.rs"]
+      WH["Webhooks<br/>adapters/inbound/webhooks.rs"]
+      EV["Eval runner<br/>adapters/inbound/eval/"]
+    end
+
+    subgraph OR["Orchestrator subsystem"]
+      H["Orchestrator::handle<br/>mod.rs:86"]
+      RD["replan::drive<br/>replan.rs:13"]
+      P["RegistryPlanner<br/>planner.rs:151<br/>TENGU_PLANNER_REGISTRY.md"]
+      EX["DagExecutor::run<br/>executor.rs:26"]
+      RT["RetryPolicy<br/>retry.rs:13"]
+      EV_BUS["EventBus broadcast<br/>events.rs"]
+    end
+
+    subgraph PT["Planner LLM call, no tools, no memory"]
+      PLLM["PlannerLlm::call<br/>planner.rs:28"]
+      CE["collect_engine_response<br/>application/chat/tool_loop.rs:124"]
+      ENG["engine of the [orchestrator] agent<br/>bootstrap/orchestrator.rs::planner_llm"]
+    end
+
+    subgraph WK["Worker dispatch, subprocess"]
+      SR["SubprocessRunner::run_step<br/>outbound/subprocess_runner.rs:316"]
+      CHILD["tengu run-agent<br/>adapters/inbound/cli/run_agent.rs::run_agent_subprocess<br/>own LLM + tools loop"]
+      AM["Postgres agentic_memory<br/>outbound/tools/agentic_memory/<br/>compress_and_store"]
+    end
+
+    TG -- orchestrator per sender --> H
+    TUI -- one orchestrator per process --> H
+    WH -- one-shot turn per POST --> H
+    EV -- one orchestrator per row --> H
+
+    H --> RD
+    RD --> P
+    P --> PLLM
+    PLLM --> CE
+    CE --> ENG
+    CE -- plan JSON + TurnTelemetry --> PLLM
+    P -- PlannerVerdict --> RD
+    RD --> EX
+    EX --> RT
+    RT --> SR
+    SR -- AgentIpcInput · stdin JSON · plan_state --> CHILD
+    CHILD -- AgentIpcOutput · summary + metrics --> SR
+    CHILD -.-> AM
+    AM -. recall lanes .-> P
+    EX -. broadcast .-> EV_BUS
+
+    EV_BUS -. subscribers .-> TG
+    EV_BUS -. subscribers .-> TUI
+    EV_BUS -. subscribers .-> EV
+</pre>
+</div>
+
+<p class="small">Shaded groups = subsystems. Solid arrows = per-call data flow. Dotted arrows = broadcast / fire-and-forget.</p>
+
+<!-- ============================================================= -->
+<h2 id="lifecycle">3 · Request lifecycle</h2>
+
+<p>
+A full <code>Orchestrator::handle(prompt)</code> call, annotated with the exact
+file and line that owns each step.
+</p>
+
+<div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+    participant User
+    participant Ch as Channel
+    participant Or as Orchestrator
+    participant Pl as RegistryPlanner
+    participant LLM as PlannerLlm → engine (no tools, no memory)
+    participant Ex as DagExecutor
+    participant Rn as SubprocessRunner
+    participant Ch2 as tengu run-agent
+    participant Mem as agentic_memory (Postgres)
+
+    User->>Ch: prompt
+    Ch->>Or: handle(prompt)
+    Or->>Pl: plan(prompt)
+    Pl->>Pl: ensure_planner_registry (TENGU_PLANNER_REGISTRY.md)
+    Pl->>Mem: recall lanes (postgres_memory)
+    Pl->>LLM: PlannerLlm::call (skills/orchestrator/SKILL.md + one message)
+    LLM-->>Pl: JSON text + TurnTelemetry (planner MetricsRecord)
+    Pl->>Pl: parse_verdict (raw → fences → prose → Direct fallback)
+    Pl-->>Or: PlannerVerdict::Plan
+    Or->>Or: run_step(step, inputs, plan) → IPC plan_state
+    Or-->>Ch: emit PlanCreated
+    Or->>Or: Plan::validate (invalid → replan)
+    Or->>Ex: run(plan, worker)
+
+    loop for each ready step
+      Ex->>Ex: plan.ready_steps(&completed)
+      Ex->>Ex: tokio::spawn per step
+      Ex-->>Ch: emit StepStarted
+      Ex->>Rn: run_step_with_retry → run_step(step, step_inputs)
+      Rn->>Rn: agents.get(step.agent) with a description — else Err, no spawn
+      Rn->>Ch2: spawn; AgentIpcInput on stdin (goal + step_inputs, plan_state, sandbox_config)
+      Ch2->>Ch2: LLM + tools loop (max_tool_rounds)
+      Ch2->>Mem: compress_and_store / summary backstop
+      Ch2-->>Rn: AgentIpcOutput (summary, metrics) on stdout
+      Rn-->>Ex: Ok(summary) | Err (step_timeout_secs) → Exhausted after 3
+      Ex-->>Ch: emit StepSucceeded
+    end
+
+    Ex-->>Or: ExecResult::Done(leaf output; parallel leaves joined)
+    Or-->>Ch: emit PlanCompleted
+    Ch-->>User: final_response
+</pre>
+</div>
+
+<h4>Reference map</h4>
+<table>
+  <thead><tr><th>Step</th><th>File</th><th>Line</th></tr></thead>
+  <tbody>
+    <tr><td>Channel builds the orchestrator (TG, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/telegram/</td><td>session.rs (planner_llm at startup), turn.rs (orchestrator_for, execute_orchestrator_turn)</td></tr>
+    <tr><td>Channel builds the orchestrator (TUI, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/tui/mod.rs</td><td>242 (planner_llm + build_orchestrator) / 846 (handle)</td></tr>
+    <tr><td>Channel dispatch (Webhooks, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/webhooks.rs</td><td>run_one_shot 699 (planner_llm per turn, build_orchestrator 723)</td></tr>
+    <tr><td>planner_llm / build_orchestrator</td><td class="file-ref">src/bootstrap/orchestrator.rs</td><td>123 / 212</td></tr>
+    <tr><td>Orchestrator::handle</td><td class="file-ref">src/application/orchestrator/mod.rs</td><td>86</td></tr>
+    <tr><td>replan::drive</td><td class="file-ref">src/application/orchestrator/replan.rs</td><td>13</td></tr>
+    <tr><td>RegistryPlanner::plan + parse_verdict</td><td class="file-ref">src/application/orchestrator/planner.rs</td><td>518 (plan), 26 (parse_verdict), 151 (struct)</td></tr>
+    <tr><td>Registry + plan render</td><td class="file-ref">src/application/orchestrator/shared_files.rs</td><td>ensure_planner_registry, routable_agents, render_plan_state, plan_state_block</td></tr>
+    <tr><td>DagExecutor::run</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>26</td></tr>
+    <tr><td>plan.ready_steps</td><td class="file-ref">src/domain/plan.rs</td><td>91</td></tr>
+    <tr><td>tokio::spawn per ready step</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>63</td></tr>
+    <tr><td>abort_in_flight (cancel / exhaustion)</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>161</td></tr>
+    <tr><td>render_step_inputs</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>254</td></tr>
+    <tr><td>RetryPolicy::run_step_with_retry</td><td class="file-ref">src/application/orchestrator/retry.rs</td><td>37</td></tr>
+    <tr><td>SubprocessRunner::run_step / run_with_timeout</td><td class="file-ref">src/adapters/outbound/subprocess_runner.rs</td><td>316 / 191</td></tr>
+    <tr><td>run_agent_subprocess (child)</td><td class="file-ref">src/adapters/inbound/cli/run_agent.rs</td><td>79</td></tr>
+    <tr><td>PlannerLlm::call (planner LLM call, 2026-10-22)</td><td class="file-ref">src/application/orchestrator/planner.rs</td><td>28</td></tr>
+    <tr><td>collect_engine_response</td><td class="file-ref">src/application/chat/tool_loop.rs</td><td>124</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================= -->
+<h2 id="sequential">4 · Sequential execution</h2>
+
+<h4>Prompt</h4>
+<pre><code>Look up the HTTP status codes for 200 and 404, then write a two-sentence summary contrasting them.</code></pre>
+
+<h4>Plan emitted</h4>
+<pre><code>{
+  "kind": "plan",
+  "steps": [
+    {"id": "s1", "agent": "researcher",
+     "goal": "Gather concise descriptions of HTTP 200 and 404",
+     "depends_on": []},
+    {"id": "s2", "agent": "writer",
+     "goal": "Write a two-sentence summary contrasting 200 and 404 using s1 output",
+     "depends_on": ["s1"]}
+  ]
+}</code></pre>
+
+<h4>DAG</h4>
+<div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    s1["s1 · researcher<br/>deps=[]"]:::done --> s2["s2 · writer<br/>deps=[s1]"]:::done
+    s2 --> leaf(["final_response"]):::leaf
+    classDef done fill:#dfe,stroke:#0a0,color:#060;
+    classDef leaf fill:#fff,stroke:#666,stroke-dasharray:4 4;
+</pre>
+</div>
+
+<h4>Observed timeline</h4>
+<div class="timeline">
+T+0.0s   <span class="event">orchestrator:plan_created</span>  steps=[s1:researcher(deps=[]), s2:writer(deps=[s1])]
+T+0.1s   <span class="event">orchestrator:step_started</span>  s1:researcher
+T+0.1s   <span class="tool">http_request</span>  GET .../Status/200
+T+1.4s   <span class="tool">http_request</span>  GET .../Status/404
+T+14.2s  <span class="event">orchestrator:step_succeeded</span>  s1   <span class="comment">← executor enqueues s2 only now</span>
+T+14.3s  <span class="event">orchestrator:step_started</span>  s2:writer
+T+22.8s  <span class="event">orchestrator:step_succeeded</span>  s2
+T+22.9s  <span class="event">orchestrator:plan_completed</span>  cancelled=false
+</div>
+
+<div class="callout pass">
+<strong>Invariant:</strong> <code>s2.depends_on = [s1]</code>, so <code>ready_steps</code>
+at <code class="file-ref">domain/plan.rs:91</code> returns <code>[s1]</code> first, then
+<code>[s2]</code> only after <code>s1</code> is in <code>completed</code>. The 0.1s gap
+between <code>s1 succeeded</code> and <code>s2 started</code> is the guarantee.
+</div>
+
+<h4>Core logic</h4>
+<pre><code>// domain/plan.rs:91
+pub fn ready_steps(&self, completed: &HashSet&lt;StepId&gt;) -> Vec&lt;&Step&gt; {
+    self.steps
+        .iter()
+        .filter(|s| {
+            !completed.contains(&s.id) && s.depends_on.iter().all(|d| completed.contains(d))
+        })
+        .collect()
+}</code></pre>
+
+<p class="small">
+<code>depends_on.iter().all(|d| completed.contains(d))</code> is the ONLY code
+that decides sequential vs parallel. Everything else falls out from it.
+</p>
+
+<!-- ============================================================= -->
+<h2 id="parallel">5 · Parallel execution</h2>
+
+<h4>Prompt</h4>
+<pre><code>In parallel, give a one-line definition of: unicorn startup, decacorn startup, hectocorn startup, zebra startup. Then list all four with their definitions.</code></pre>
+
+<h4>Plan emitted</h4>
+<pre><code>{
+  "kind": "plan",
+  "steps": [
+    {"id": "s1", "agent": "researcher", "goal": "Define 'unicorn startup'",   "depends_on": []},
+    {"id": "s2", "agent": "researcher", "goal": "Define 'decacorn startup'",  "depends_on": []},
+    {"id": "s3", "agent": "researcher", "goal": "Define 'hectocorn startup'", "depends_on": []},
+    {"id": "s4", "agent": "researcher", "goal": "Define 'zebra startup'",     "depends_on": []},
+    {"id": "s5", "agent": "writer",
+     "goal": "List all four terms with their definitions from s1-s4",
+     "depends_on": ["s1","s2","s3","s4"]}
+  ]
+}</code></pre>
+
+<h4>DAG</h4>
+<div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    s1["s1 · researcher<br/>unicorn"]:::p --> s5
+    s2["s2 · researcher<br/>decacorn"]:::p --> s5
+    s3["s3 · researcher<br/>hectocorn"]:::p --> s5
+    s4["s4 · researcher<br/>zebra"]:::p --> s5
+    s5["s5 · writer (synthesizer)<br/>deps=[s1,s2,s3,s4]"]:::leaf --> final(["final_response"]):::leafend
+    classDef p fill:#dfe,stroke:#0a0;
+    classDef leaf fill:#eef,stroke:#06c;
+    classDef leafend fill:#fff,stroke:#666,stroke-dasharray:4 4;
+</pre>
+</div>
+
+<h4>Observed timeline — interleaving as proof of concurrency</h4>
+<div class="timeline">
+T+0.0s   <span class="event">orchestrator:plan_created</span>  (5 steps)
+T+0.1s   <span class="event">orchestrator:step_started</span>  s1 ┐
+T+0.1s   <span class="event">orchestrator:step_started</span>  s2 │ all four start
+T+0.1s   <span class="event">orchestrator:step_started</span>  s3 │ within ~100ms
+T+0.1s   <span class="event">orchestrator:step_started</span>  s4 ┘
+T+0.2s   <span class="tool">http_request</span>  (s3)  <span class="comment">← interleaved, proof of tokio::spawn</span>
+T+0.3s   <span class="tool">http_request</span>  (s1)
+T+0.3s   <span class="tool">http_request</span>  (s4)
+T+0.4s   <span class="tool">http_request</span>  (s2)
+...
+T+8.9s   <span class="event">orchestrator:step_succeeded</span>  s2
+T+9.2s   <span class="event">orchestrator:step_succeeded</span>  s3
+T+9.5s   <span class="event">orchestrator:step_succeeded</span>  s1
+T+9.8s   <span class="event">orchestrator:step_succeeded</span>  s4   <span class="comment">← s5 now eligible</span>
+T+9.9s   <span class="event">orchestrator:step_started</span>  s5
+T+15.1s  <span class="event">orchestrator:step_succeeded</span>  s5
+T+15.2s  <span class="event">orchestrator:plan_completed</span>
+</div>
+
+<div class="callout pass">
+<strong>Invariant:</strong> interleaved tool calls prove concurrent execution.
+If one researcher were doing all four sequentially, tool calls would be grouped
+by step (all of s1's, then all of s2's). The interleaving is only possible
+because <code>tokio::spawn</code> ran the four researchers on independent tasks — each step is its own <code>tengu run-agent</code> child process.
+</div>
+
+<h4>Core logic</h4>
+<pre><code>// application/orchestrator/executor.rs:49 — the dispatch loop (spawn at :63)
+for step in plan.ready_steps(&completed) {
+    if in_flight.contains(&step.id) {
+        continue;
+    }
+    let step_inputs = render_step_inputs(step, &completed_outputs, worker.input_cap(step));
+    // ... clone worker / policy / events / step ...
+    in_flight.insert(step.id.clone());
+    let _ = events.send(OrchestratorEvent::StepStarted { step_id: step.id.clone(), agent: step.agent.clone() });
+    futures.push(tokio::spawn(async move {
+        let outcome = run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events).await;
+        (step_clone.id, outcome)
+    }));
+}</code></pre>
+
+<p class="small">
+Every ready step gets its own <code>tokio::spawn</code>. <code>FuturesUnordered</code>
+awaits whichever task completes first — no ordering between parallel siblings.
+An exhausted step, a panic or a cancel aborts every sibling still running
+(<code>abort_in_flight</code>, <code>:161</code>; the dropped <code>run-agent</code> child is
+<code>kill_on_drop</code>). Parallel leaves with no join step are joined in plan order,
+one <code>### &lt;id&gt; (&lt;agent&gt;)</code> section each (<code>Plan::leaves</code>).
+</p>
+
+<!-- ============================================================= -->
+<h2 id="diamond">6 · Diamond (mixed) execution</h2>
+
+<h4>Prompt</h4>
+<pre><code>First enumerate two plausible interpretations of "what is an agent?". Then, in parallel, research each — one from the AI/LLM perspective, one from the real-estate broker perspective. Finally, write a short note acknowledging both meanings exist.</code></pre>
+
+<h4>Plan emitted</h4>
+<pre><code>{
+  "kind": "plan",
+  "steps": [
+    {"id": "s1", "agent": "researcher", "goal": "Enumerate two interpretations",  "depends_on": []},
+    {"id": "s2", "agent": "researcher", "goal": "Research AI view from s1",       "depends_on": ["s1"]},
+    {"id": "s3", "agent": "researcher", "goal": "Research real-estate view",      "depends_on": ["s1"]},
+    {"id": "s4", "agent": "writer",     "goal": "Short note acknowledging both",  "depends_on": ["s2","s3"]}
+  ]
+}</code></pre>
+
+<h4>DAG (diamond)</h4>
+<div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    s1["s1 · researcher<br/>enumerate"]:::root --> s2["s2 · researcher<br/>AI view"]:::mid
+    s1 --> s3["s3 · researcher<br/>real-estate view"]:::mid
+    s2 --> s4["s4 · writer<br/>synthesizer"]:::leaf
+    s3 --> s4
+    s4 --> final(["final_response"]):::leafend
+    classDef root fill:#dfe,stroke:#0a0;
+    classDef mid fill:#ffe,stroke:#c80;
+    classDef leaf fill:#eef,stroke:#06c;
+    classDef leafend fill:#fff,stroke:#666,stroke-dasharray:4 4;
+</pre>
+</div>
+
+<h4>Observed timeline</h4>
+<div class="timeline">
+T+0.0s   <span class="event">plan_created</span>  s1 → (s2, s3) → s4
+T+0.1s   <span class="event">step_started</span>  s1
+         <span class="comment">(s2 and s3 NOT yet started — waiting for s1)</span>
+T+6.3s   <span class="event">step_succeeded</span>  s1   <span class="comment">← releases s2 AND s3</span>
+T+6.4s   <span class="event">step_started</span>  s2  ┐ parallel fan-out
+T+6.4s   <span class="event">step_started</span>  s3  ┘ after s1 complete
+T+14.1s  <span class="event">step_succeeded</span>  s2
+T+14.9s  <span class="event">step_succeeded</span>  s3
+T+15.0s  <span class="event">step_started</span>  s4   <span class="comment">← waits for BOTH s2 and s3</span>
+T+20.2s  <span class="event">step_succeeded</span>  s4
+T+20.3s  <span class="event">plan_completed</span>
+</div>
+
+<div class="callout pass">
+<strong>Two invariants, one predicate:</strong>
+<ul>
+  <li><code>s2</code>/<code>s3</code> don't start until <code>s1 ∈ completed</code></li>
+  <li><code>s4</code> doesn't start until <em>both</em> <code>s2</code> AND <code>s3 ∈ completed</code></li>
+</ul>
+Both fall out of the same <code>.all(|d| completed.contains(d))</code> check in <code>ready_steps</code>.
+</div>
+
+<!-- ============================================================= -->
+<h2 id="replan">7 · Replan (step exhaustion)</h2>
+
+<p>
+What happens when the planner emits a valid-shape plan but with a broken detail —
+e.g. inventing an agent name that's not in the roster.
+</p>
+
+<h4>Trace (since 2026-10-22: <code>Plan::validate</code> before any step; before, the bad step ran 3 attempts and 13 s of backoff first)</h4>
+<div class="timeline">
+T+0.0s   <span class="event">plan_created</span>  steps=[s1:<span class="err">analyst</span>(deps=[]), ...]   <span class="comment">← "analyst" not in roster</span>
+T+0.0s   <span class="warn">replan_triggered</span>  invalid plan: step "s1" names agent "analyst", which is not a routable agent (...); routable agents: [...]
+T+2.7s   <span class="event">plan_created</span>  steps=[s1:<span class="event">researcher</span>(deps=[]), ...]   <span class="comment">← repaired</span>
+...     <span class="comment">continues normally</span>
+</div>
+
+<h4>Flow</h4>
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    A["Planner emits plan #1<br/>(bad agent name)"] --> B{"replan::drive → Plan::validate<br/>known_agents = routable [agents.*]"}
+    B -- "Err: UnknownAgent — no step runs, no retry wait" --> E["ReplanTriggered event"]
+    E --> F["planner.replan(msg, prior_plan, failed_id, error)"]
+    F --> G["Plan #2<br/>(repaired)"]
+    G --> H{"Plan::validate"}
+    H -- Ok --> I["DagExecutor::run"]
+    I --> J["PlanCompleted"]
+</pre>
+</div>
+
+<h4>Core logic</h4>
+<pre><code>// application/orchestrator/replan.rs:13 (drive), abridged
+ExecResult::NeedsReplan { failed, error } => {
+    if replans_left == 0 { /* PlanCompleted: "Unable to complete the request after N replans…" */ }
+    replans_left -= 1;
+    let _ = events.send(OrchestratorEvent::ReplanTriggered { reason: error.clone() });
+    match planner.replan(user_message, &amp;plan, &amp;failed.0, &amp;error).await {
+        Ok(PlannerVerdict::Plan { plan: new_plan }) =&gt; plan_opt = Some(new_plan),
+        Ok(PlannerVerdict::Direct { response }) =&gt; return response,
+        Err(err) =&gt; return format!("System error: replan call failed: {}", err),
+    }
+}</code></pre>
+
+<p class="small">
+Bounded by <code>OrchestratorConfig.max_replans</code> (default 2).
+Every plan (initial and replanned) goes through <code>domain/plan.rs::Plan::validate</code> in
+<code>replan::drive</code> before any step: empty plan, duplicate ids, unknown agents, unknown dependencies,
+cycles — an invalid plan replans with the error text. Only <code>[agents.*]</code> blocks with a
+<code>description</code> count (<code>WorkerHandle::known_agents</code>) — the planner sees the same subset
+(<code>shared_files::routable_agents</code>); <code>SubprocessRunner::run_step</code> still fails fast on an
+unknown agent as a backstop. <code>skills/orchestrator/SKILL.md</code> forbids
+inventing agent names, so this trace rarely triggers — kept as the canonical tier-2 recovery example.
+</p>
+
+<!-- ============================================================= -->
+<h2 id="retention">8 · Retention pipeline</h2>
+
+<p>
+Every eval run writes artifacts to disk by default. Retention caps the growth
+so repeated runs don't litter the repo.
+</p>
+
+<h4>Writes per run</h4>
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    subgraph R1["Top-level (per invocation)"]
+        T["evals/runs/<ts>/"]
+        T --> TM["<skill>-<row>.md (one per row)"]
+        T --> TR["report.json"]
+    end
+    subgraph R2["Per-skill lifecycle (rolling)"]
+        M["metrics.json (rolling avg)"]
+        H["history.jsonl (append-only)"]
+        PR["metrics/runs/<ts>/ (detail)"]
+    end
+    Run["tengu eval"] --> T
+    Run --> M
+    Run --> H
+    Run --> PR
+    classDef bounded fill:#dfe,stroke:#0a0;
+    class T,PR bounded;
+</pre>
+</div>
+
+<h4>Retention knobs</h4>
+<table>
+  <thead><tr><th>Artifact</th><th>Knob</th><th>Default</th><th>Code</th></tr></thead>
+  <tbody>
+    <tr><td><code>evals/runs/&lt;ts&gt;/</code></td><td><code>--keep-runs N</code> (pruned at start; ignored with <code>--out</code>)</td><td>10</td><td class="file-ref">adapters/inbound/eval/mod.rs::prune_old_run_dirs</td></tr>
+    <tr><td><code>skills/&lt;name&gt;/metrics/runs/&lt;ts&gt;/</code></td><td><code>--max-runs N</code> (<code>0</code> = no pruning)</td><td>10</td><td class="file-ref">application/skills/lifecycle/storage.rs::finalize_run (via RunSkillOptions.max_per_run_reports)</td></tr>
+    <tr><td><code>metrics.json</code></td><td>always kept (rolling)</td><td>—</td><td>—</td></tr>
+    <tr><td><code>history.jsonl</code></td><td>always appended</td><td>—</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h4><code>--no-persist</code> — skip transcripts and metrics</h4>
+<div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    Arg["--no-persist"] --> Opt["RunSkillOptions.persist = false"]
+    Opt --> S1["run_row: persist_transcript = false<br/>(no transcript)"]
+    Opt --> S3["run_skill: finalize_run not called<br/>(no metrics.json / history.jsonl / metrics/runs)"]
+    Arg -.still.-> K["eval::run: evals/runs/&lt;ts&gt;/ + report.json written"]
+    Opt --> Sum["in-memory SkillReport still printed to stdout"]
+</pre>
+</div>
+<p class="small">The flag's help text says it also skips <code>report.json</code>; the code does not
+(<code>adapters/inbound/eval/mod.rs</code> <code>run</code>: <code>create_dir_all(&amp;out_dir)</code>, then
+<code>std::fs::write(report_path, …)</code> with no <code>no_persist</code> check).</p>
+
+<h4>100 runs — with vs without retention</h4>
+<table>
+  <thead><tr><th></th><th>Without retention</th><th>With defaults</th><th>With --no-persist</th></tr></thead>
+  <tbody>
+    <tr><td>Top-level run dirs</td><td>100</td><td>≤10</td><td>≤10</td></tr>
+    <tr><td>Per-row transcripts</td><td>~900</td><td>~90</td><td>0</td></tr>
+    <tr><td>report.json</td><td>100</td><td>10</td><td>≤10</td></tr>
+    <tr><td>Per-skill run dirs</td><td>100</td><td>≤10</td><td>0</td></tr>
+    <tr><td><strong>Total files</strong></td><td><strong>~1200</strong></td><td><strong>~112</strong></td><td><strong>≤10</strong></td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+<strong>Plus <code>.gitignore</code> covers</strong> <code>/evals/runs/</code> and
+<code>/skills/*/metrics/runs/</code> — so <code>git status</code> stays clean even
+between retention sweeps.
+</div>
+
+<h4>Usage examples</h4>
+<pre><code># Validate it still works (default retention, keep last 10)
+./target/release/tengu eval orchestration-e2e
+
+# Iterate on a single row: no transcripts / metrics (report.json still written, gitignored)
+./target/release/tengu eval orchestration-e2e --filter parallel_fan_out --no-persist
+
+# Keep only the last 3 runs (aggressive retention)
+./target/release/tengu eval orchestration-e2e --keep-runs 3
+
+# Keep everything (effectively disable retention)
+./target/release/tengu eval orchestration-e2e --keep-runs 9999</code></pre>
+
+<!-- ============================================================= -->
+<h2 id="refs">9 · Code reference index</h2>
+
+<table>
+  <thead><tr><th>Concept</th><th>File</th><th>Key symbols</th></tr></thead>
+  <tbody>
+    <tr><td>Orchestrator public API</td><td class="file-ref">application/orchestrator/mod.rs</td><td><code>Orchestrator::{new,handle,subscribe}</code> — <code>new(planner, worker, policy, max_replans, bus)</code></td></tr>
+    <tr><td>Replan loop</td><td class="file-ref">application/orchestrator/replan.rs</td><td><code>drive()</code> — <code>Plan::validate</code> each plan, then the executor</td></tr>
+    <tr><td>Planner</td><td class="file-ref">application/orchestrator/planner.rs</td><td><code>PlannerLlm::call</code> (the planner's one engine call), <code>RegistryPlanner::{new,plan,replan}</code>, <code>parse_verdict</code>, <code>extract_balanced_json_object</code>, <code>load_orchestrator_skill_body</code> (trait <code>Planner</code>: <code>ports/orchestration.rs</code>)</td></tr>
+    <tr><td>Planner registry + plan state</td><td class="file-ref">application/orchestrator/shared_files.rs</td><td><code>routable_agents</code>, <code>render_registry</code>, <code>ensure_planner_registry</code>, <code>render_plan_state</code> / <code>plan_state_block</code>, <code>scan_skill_names</code></td></tr>
+    <tr><td>DAG executor</td><td class="file-ref">application/orchestrator/executor.rs</td><td><code>DagExecutor::run</code>, <code>ExecResult</code>, <code>render_step_inputs</code>, <code>abort_in_flight</code> (trait <code>WorkerHandle</code>: <code>ports/orchestration.rs</code>)</td></tr>
+    <tr><td>Worker (subprocess)</td><td class="file-ref">adapters/outbound/subprocess_runner.rs</td><td><code>SubprocessRunner::{new,run_step,run_with_timeout}</code>, <code>AgentIpcInput</code>, <code>AgentIpcOutput</code>, <code>forward_child_log</code></td></tr>
+    <tr><td>Subagent child</td><td class="file-ref">adapters/inbound/cli/run_agent.rs</td><td><code>run_agent_subprocess</code> (loads parent config, <code>[agents.&lt;name&gt;]</code>, LLM + tools loop, <code>compress_and_store</code>), <code>try_persist_agentic_step_summary</code></td></tr>
+    <tr><td>Retry</td><td class="file-ref">application/orchestrator/retry.rs</td><td><code>RetryPolicy</code>, <code>run_step_with_retry</code>; by class (<code>StepFailure</code>): transient / timeout <code>1s, 2s, 4s … ≤ 9s</code>, fatal / decode none</td></tr>
+    <tr><td>Plan topology</td><td class="file-ref">domain/plan.rs</td><td><code>Step</code>, <code>AgentCompose</code>, <code>Plan::{ready_steps,leaves}</code>; <code>validate</code> (every plan, in <code>replan::drive</code>), <code>single_leaf</code> (tests only)</td></tr>
+    <tr><td>Events</td><td class="file-ref">application/orchestrator/events.rs</td><td><code>OrchestratorEvent</code>, <code>EventBus</code>, <code>new_bus()</code></td></tr>
+    <tr><td>Planner engine (2026-10-22)</td><td class="file-ref">bootstrap/orchestrator.rs</td><td><code>planner_llm(config)</code> → <code>PlannerLlm</code>, <code>build_orchestrator(config, llm, session_id, trace)</code>; <code>ChatServiceFactory</code> (<code>run_turn</code> only) serves <code>tengu evolve</code> alone</td></tr>
+    <tr><td>Channel dispatch (Telegram)</td><td class="file-ref">adapters/inbound/telegram/</td><td><code>planner_llm</code> at startup (<code>session.rs</code>), <code>orchestrator_for</code> + <code>execute_orchestrator_turn</code> (<code>turn.rs</code>)</td></tr>
+    <tr><td>Channel dispatch (TUI)</td><td class="file-ref">adapters/inbound/tui/mod.rs</td><td><code>planner_llm</code> + <code>build_orchestrator</code> @ 242; <code>orch.handle</code> in the engine thread @ 846</td></tr>
+    <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">adapters/inbound/webhooks.rs</td><td><code>run_one_shot</code> @ 699: <code>planner_llm</code> + <code>build_orchestrator</code> per POST</td></tr>
+    <tr><td>Eval dispatch + retention</td><td class="file-ref">adapters/inbound/eval/</td><td><code>run_row_via_orchestrator</code> (<code>PlannerLlm</code> per row; steps are <code>run-agent</code> children; judge observations from <code>RowObserver</code>), <code>prune_old_run_dirs</code>, <code>RunSkillOptions</code></td></tr>
+    <tr><td>Memory manager</td><td class="file-ref">application/memory/manager.rs</td><td><code>MemoryManager::{set_vector_backend,ingest_one,ingest_batch,search,delete_entry,clear_all,stats}</code> — workspace vector backend behind the memory tools (injector / writer / providers removed 2026-10-22)</td></tr>
+    <tr><td>Vector store</td><td class="file-ref">ports/memory.rs</td><td><code>VectorStore</code> trait</td></tr>
+    <tr><td>Disk backend</td><td class="file-ref">adapters/outbound/memory/disk_vector.rs</td><td><code>DiskVectorStore</code> (only built-in <code>VectorStore</code>)</td></tr>
+    <tr><td>Agentic memory (Postgres)</td><td class="file-ref">adapters/outbound/tools/agentic_memory/mod.rs</td><td><code>AgenticMemoryPlugin</code> (<code>postgres_memory</code> feature) — step summaries, planner recall lanes</td></tr>
+    <tr><td>Embedder</td><td class="file-ref">adapters/outbound/memory/embedder.rs</td><td><code>Embedder::{embed,embed_batch}</code></td></tr>
+    <tr><td>Config</td><td class="file-ref">config/mod.rs</td><td><code>OrchestratorConfig</code> (agent, max_attempts_per_step, max_replans, route_explicit_agents, engine="rag"); <code>AgentConfig.description</code> (routable subagent); <code>LimitsConfig.{max_tool_rounds,step_timeout_secs}</code></td></tr>
+  </tbody>
+</table>
+
+<p class="small" style="margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+Companion docs on main:
+<a href="orchestrator-pipeline.md">orchestrator-pipeline.md</a> (same content in Markdown),
+<a href="validation-checklist.md">validation-checklist.md</a> (30-min validation runbook),
+<a href="orchestration-test-scenarios.md">orchestration-test-scenarios.md</a> (20 manual scenarios),
+<a href="architecture-2026-04-27.md">architecture-2026-04-27.md</a> (canonical walkthrough),
+<a href="configuration.md">configuration.md</a> (sandbox config reference),
+<a href="harness-architecture.md">harness-architecture.md</a> (historical PR #6–#13 map).
+</p>
+
+</div>
+</body>
+</html>

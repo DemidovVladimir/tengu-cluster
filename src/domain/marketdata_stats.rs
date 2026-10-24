@@ -25,8 +25,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::marketdata::{fmt_time, Bar, FundingPoint, Interval};
+use crate::domain::marketdata::{Bar, FundingPoint, Interval};
 use crate::domain::observation::{set_int, set_num, Features, ObsStatus, Observed, ReadError};
+use crate::domain::time::fmt_time;
 
 /// Bar-level statistics of a window (module table).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

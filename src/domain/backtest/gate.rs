@@ -21,8 +21,8 @@ use serde_json::{json, Map, Value};
 use crate::domain::backtest::engine::{Candidate, Trade};
 use crate::domain::backtest::stats::{calibration, paired_diff_ci, Calibration, DiffCi};
 use crate::domain::decision::{StepOutcome, Verdict};
-use crate::domain::marketdata::fmt_time;
 use crate::domain::observation::{Features, MAX_FEATURES};
+use crate::domain::time::fmt_time;
 
 /// The terminal action that trades.
 pub const TAKE: &str = "take";

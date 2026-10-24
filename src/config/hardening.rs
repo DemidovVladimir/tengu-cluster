@@ -4,14 +4,14 @@
 //! untrusted source text: an `[soe]` section (the Software Opportunity
 //! Engine, `config/soe.rs`). One code path for all three
 //! (`risk-gate-enforcement`). Doc: `docs/engine-backends.md` § Claude
-//! Code, `docs/xmarket-risk-paper-2026-09-30.md` § Load rules.
+//! Code, `docs/xmarket-risk-paper.md` § Load rules.
 //!
 //! | Rule (hardened sandbox; a `validation_errors` violation fails `Config::load`) | Enforced by | Why |
 //! |---|---|---|
-//! | Every `engine = "claude_code"` agent sets `[agents.<a>.claude_code] builtin_tools_profile = "none"` — no block = `editor_shell` = refused | `validation_errors` | built-in Read / Write / Bash ignore tengu scopes: they could read the key or edit a store |
+//! | Every `engine = "claude_code"` agent sets `[agents.<a>.claude_code] builtin_tools_profile = "none"` — no block = `none` (the default since 2026-10-22) | `validation_errors` | built-in Read / Write / Bash ignore tengu scopes: they could read the key or edit a store |
 //! | No `engine = "codex"` agent | `validation_errors` | the Codex CLI's built-in shell and patch tool ignore tengu scopes and cannot be switched off reliably across CLI versions (`engines/codex.rs`) |
 //! | The CLI sees only the tengu bridge | `--strict-mcp-config` on every run (`engines/claude_code.rs::cli_args`) | the operator's own MCP servers run outside tengu scopes and egress |
-//! | Profile `none` runs the CLI without user / project / local settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md discovery and auto-memory | `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (`cli_args`; CLI 2.1.286: OAuth + the bridge work; `--safe-mode` drops the bridge, `--bare` OAuth) | hooks and plugins run shell commands outside tengu scopes; a planted `CLAUDE.md` / `.claude/` steers the model |
+//! | Every profile runs the CLI without user / project / local settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md discovery and auto-memory | `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (`cli_args`; CLI 2.1.286: OAuth + the bridge work; `--safe-mode` drops the bridge, `--bare` OAuth) | hooks and plugins run shell commands outside tengu scopes; a planted `CLAUDE.md` / `.claude/` steers the model |
 //! | A plan step's `compose` only narrows its base agent's tools and skills | `run-agent` (`bootstrap::tools::compose_agent`) | a planner fed hostile text must not hand a routable agent `write_file` or an exec tool |
 //! | No `[[mcp_servers]]` | `validation_errors` | foreign processes with this filesystem |
 //! | No configured scope grants `shell_bins`; tools without a scope run no shell (`AgentConfig::no_shell_fallback`, set by `Config::fold_default_scopes`; the bridge too) | `validation_errors` + runtime | a shell reads and writes any file |
@@ -97,12 +97,12 @@ fn claude_code_errors(cfg: &Config) -> Vec<String> {
     agents
         .into_iter()
         .filter_map(|(id, agent)| {
-            // Trimmed, like `BuiltinToolsProfile::parse`.
-            let got = match agent.claude_code.as_ref() {
-                Some(cc) if cc.builtin_tools_profile.trim() == "none" => return None,
-                Some(cc) => format!("builtin_tools_profile = \"{}\"", cc.builtin_tools_profile),
-                None => format!("no [agents.{id}.claude_code] block (= \"editor_shell\")"),
-            };
+            // Trimmed, like `BuiltinToolsProfile::parse`; no block = `none`.
+            let raw = agent.claude_code.as_ref()?.builtin_tools_profile.as_str();
+            if raw.trim() == "none" {
+                return None;
+            }
+            let got = format!("builtin_tools_profile = \"{raw}\"");
             Some(format!(
                 "agents.{id}: engine = \"claude_code\" in a hardened sandbox (Solana signer, \
                  [risk] or [soe]) needs [agents.{id}.claude_code] builtin_tools_profile = \"none\" — got {got}; \
@@ -212,7 +212,7 @@ fn protected_paths(cfg: &Config, tengu_home: &Path) -> Vec<Protected> {
     let mut out = Vec::new();
     out.push(Protected::dir(
         "<TENGU_HOME>/state",
-        &tengu_home.join("state"),
+        &super::paths::Layout::at(tengu_home).state(),
     ));
     if let Some(r) = &cfg.risk {
         let kill = expand_tilde(&r.kill_switch_file);
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn signing_sandbox_refuses_claude_code_with_builtins_on_or_no_block() {
+    fn signing_sandbox_refuses_claude_code_with_builtins_on() {
         for profile in ["read_only", "editor", "editor_shell", " editor_shell"] {
             let err = load(
                 true,
@@ -349,19 +349,21 @@ mod tests {
                 "{profile}: {err}"
             );
         }
-        let err = load(true, "").unwrap_err().to_string();
-        assert!(
-            err.contains("got no [agents.exec.claude_code] block (= \"editor_shell\")"),
-            "{err}"
-        );
+        // No block = profile `none` (the default since 2026-10-22).
+        assert!(load(true, "").is_ok());
     }
 
     /// `[risk]` hardens like a signer (convention 12): the paper book and
     /// the kill-switch file must be out of reach of built-in tools.
     #[test]
     fn risk_sandbox_is_hardened_like_a_signer() {
-        let risk: Config = toml::from_str(RISK_SANDBOX).expect("parse");
+        let mut risk: Config = toml::from_str(RISK_SANDBOX).expect("parse");
         assert!(requires_hardened_claude_code(&risk));
+        assert!(claude_code_errors(&risk).is_empty(), "no block = none");
+        risk.agents.get_mut("exec").unwrap().claude_code =
+            Some(crate::config::AgentClaudeCodeConfig {
+                builtin_tools_profile: "editor_shell".into(),
+            });
         let errs = claude_code_errors(&risk);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(

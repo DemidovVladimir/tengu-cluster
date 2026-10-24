@@ -3,9 +3,18 @@
 //! Asserts that every `Tool::execute` body under `src/adapters/outbound/{tools,mcp_client}/`
 //! begins with a `ctx.scope.check_*()` call. This prevents new tools from
 //! shipping without explicit scope gating.
+//!
+//! Also: no new module-wide `#![allow(dead_code)]` under `src/`
+//! ([`MODULE_DEAD_CODE_ALLOWED`], shrink-only).
 
 use std::fs;
 use std::path::Path;
+
+/// The only files allowed a module-wide `#![allow(dead_code)]` (it hides a
+/// whole module from rustc). Shrink-only: a file leaves when its consumer
+/// ships, nothing joins — put an item-level allow with its reason instead.
+/// `domain/soe/portfolio.rs`: `PublicBrief` waits for its O7 sanitizer.
+const MODULE_DEAD_CODE_ALLOWED: &[&str] = &["src/domain/soe/portfolio.rs"];
 
 /// Collect all `.rs` files under a directory, recursively.
 fn collect_rs_files(dir: &Path) -> Vec<std::path::PathBuf> {
@@ -101,5 +110,35 @@ fn every_tool_execute_checks_scope() {
         violations.is_empty(),
         "Tools missing scope enforcement:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn module_wide_dead_code_allows_only_shrink() {
+    use regex::Regex;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let inner_allow = Regex::new(r"^\s*#!\[(allow|cfg_attr)\(.*\bdead_code\b").unwrap();
+    let mut found: Vec<String> = collect_rs_files(&root.join("src"))
+        .into_iter()
+        .filter(|f| {
+            fs::read_to_string(f)
+                .unwrap()
+                .lines()
+                .any(|l| inner_allow.is_match(l))
+        })
+        .map(|f| {
+            f.strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    found.sort();
+    assert_eq!(
+        found, MODULE_DEAD_CODE_ALLOWED,
+        "module-wide `#![allow(dead_code)]` changed: delete what rustc flags (or use an \
+         item-level allow with its reason); when one is removed, drop it from \
+         MODULE_DEAD_CODE_ALLOWED"
     );
 }

@@ -1,7 +1,7 @@
 //! `SqliteObservationStore` — `ports::observation::ObservationStore` over
-//! `<workspace>/.tengu/observations.db` (one `observations` table; WAL +
-//! busy_timeout so run-agent children, the MCP bridge and decision loops can
-//! share it). Slot-monotonic upsert, `Error` rows never stored, rows older
+//! `<workspace>/.tengu/observations.db` (one `observations` table; 0600, WAL
+//! + busy_timeout, `sqlite.rs::open_wal`, so run-agent children, the MCP
+//! bridge and decision loops can share it). Slot-monotonic upsert, `Error` rows never stored, rows older
 //! than 7 days purged on open. `get` errors on a row that does not parse
 //! (`get_many` skips it); `put_if_unchanged` is one conditional statement
 //! (atomic across processes). Every call runs on `spawn_blocking`.
@@ -21,6 +21,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::adapters::outbound::history_sqlite::SqliteHistoryStore;
+use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::config::recorder::RecorderConfig;
 use crate::config::sections::SandboxSections;
 use crate::domain::observation::{now_ms, ObsStatus, Observation};
@@ -60,42 +61,25 @@ ON CONFLICT(key) DO NOTHING";
 
 #[derive(Clone)]
 pub(crate) struct SqliteObservationStore {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
 }
 
 impl SqliteObservationStore {
     /// Open (creating) `<workspace>/.tengu/observations.db` and purge rows
     /// older than 7 days.
     pub(crate) fn open(workspace: &Path) -> Result<Self> {
-        let dir = workspace.join(".tengu");
-        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let path = dir.join("observations.db");
-        let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+        let conn = open_wal(
+            &workspace.join(".tengu").join("observations.db"),
+            Durability::Full,
+        )?;
         conn.execute_batch(SCHEMA_SQL)?;
         conn.execute(
             "DELETE FROM observations WHERE observed_at_ms < ?1",
             params![now_ms() - RETENTION_MS],
         )?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: SharedConn::new(conn, "observation store"),
         })
-    }
-
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || {
-            let guard = conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("observation store lock: {e}"))?;
-            f(&guard)
-        })
-        .await
-        .context("observation store task")?
     }
 }
 
@@ -146,27 +130,29 @@ impl RowValues {
 impl ObservationStore for SqliteObservationStore {
     async fn get(&self, key: &str) -> Result<Option<Observation>> {
         let key = key.to_string();
-        self.with_conn(move |c| read_body(c, &key)?.map(|b| parse_row(&key, &b)).transpose())
+        self.conn
+            .run(move |c| read_body(c, &key)?.map(|b| parse_row(&key, &b)).transpose())
             .await
     }
 
     async fn get_many(&self, keys: &[String]) -> Result<Vec<Option<Observation>>> {
         let keys = keys.to_vec();
-        self.with_conn(move |c| {
-            let mut out = Vec::with_capacity(keys.len());
-            for k in &keys {
-                out.push(read_body(c, k)?.and_then(|b| match parse_row(k, &b) {
-                    Ok(o) => Some(o),
-                    Err(e) => {
-                        let error = format!("{e:#}");
-                        warn!(key = %k, %error, "observation row does not parse; ignoring it");
-                        None
-                    }
-                }));
-            }
-            Ok(out)
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                let mut out = Vec::with_capacity(keys.len());
+                for k in &keys {
+                    out.push(read_body(c, k)?.and_then(|b| match parse_row(k, &b) {
+                        Ok(o) => Some(o),
+                        Err(e) => {
+                            let error = format!("{e:#}");
+                            warn!(key = %k, %error, "observation row does not parse; ignoring it");
+                            None
+                        }
+                    }));
+                }
+                Ok(out)
+            })
+            .await
     }
 
     async fn put(&self, obs: &Observation) -> Result<bool> {
@@ -174,14 +160,15 @@ impl ObservationStore for SqliteObservationStore {
             return Ok(false);
         }
         let v = RowValues::of(obs)?;
-        self.with_conn(move |c| {
-            let n = c.execute(
-                UPSERT_SQL,
-                params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body],
-            )?;
-            Ok(n > 0)
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                let n = c.execute(
+                    UPSERT_SQL,
+                    params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body],
+                )?;
+                Ok(n > 0)
+            })
+            .await
     }
 
     async fn put_if_unchanged(
@@ -193,32 +180,34 @@ impl ObservationStore for SqliteObservationStore {
             return Ok(false);
         }
         let v = RowValues::of(obs)?;
-        self.with_conn(move |c| {
-            let n = match expected_observed_at_ms {
-                Some(expected) => c.execute(
-                    UPDATE_IF_SQL,
-                    params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body, expected],
-                )?,
-                None => c.execute(
-                    INSERT_IF_ABSENT_SQL,
-                    params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body],
-                )?,
-            };
-            Ok(n > 0)
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                let n = match expected_observed_at_ms {
+                    Some(expected) => c.execute(
+                        UPDATE_IF_SQL,
+                        params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body, expected],
+                    )?,
+                    None => c.execute(
+                        INSERT_IF_ABSENT_SQL,
+                        params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body],
+                    )?,
+                };
+                Ok(n > 0)
+            })
+            .await
     }
 
     async fn remove(&self, keys: &[String]) -> Result<usize> {
         let keys = keys.to_vec();
-        self.with_conn(move |c| {
-            let mut n = 0;
-            for k in &keys {
-                n += c.execute("DELETE FROM observations WHERE key = ?1", params![k])?;
-            }
-            Ok(n)
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                let mut n = 0;
+                for k in &keys {
+                    n += c.execute("DELETE FROM observations WHERE key = ?1", params![k])?;
+                }
+                Ok(n)
+            })
+            .await
     }
 }
 

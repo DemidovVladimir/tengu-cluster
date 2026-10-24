@@ -2,10 +2,70 @@
 
 use async_trait::async_trait;
 
+use crate::config::AgentConfig;
+use crate::domain::message::{Message, Role};
 use crate::domain::plan::Plan;
-use crate::ports::orchestration::{OrchestratorChatPort, Planner, PlannerVerdict};
+use crate::ports::engine::{Engine, EngineContext};
+use crate::ports::orchestration::{Planner, PlannerVerdict, TurnTelemetry};
 
 use std::sync::Arc;
+
+/// The planner's one LLM call: the `[orchestrator] agent`'s engine, the
+/// planner prompt as system prompt, the assembled planner message as the
+/// only message — and nothing else: no tools, no tool executor, no bridge,
+/// no `[[mcp_servers]]`, no memory, no history. The planner holds an engine,
+/// not a chat service, so "the planner has no hands" (doctrine 1) is
+/// structural, and every surface (chat, Telegram, webhooks, eval, A2A) runs
+/// the same call with the same telemetry.
+#[derive(Clone)]
+pub struct PlannerLlm {
+    pub engine: Arc<dyn Engine>,
+    /// `[agents.<orchestrator.agent>]`: its model, workspace and limits.
+    pub agent: Arc<AgentConfig>,
+}
+
+impl PlannerLlm {
+    pub async fn call(
+        &self,
+        system_prompt: &str,
+        text: &str,
+    ) -> anyhow::Result<(String, TurnTelemetry)> {
+        let started = std::time::Instant::now();
+        let limits = &self.agent.limits;
+        let context = EngineContext {
+            workspace: self.agent.workspace.clone(),
+            system_prompt: Some(system_prompt.to_string()),
+            bridge_tools: None,
+            max_tool_rounds: Some(limits.max_tool_rounds),
+            max_mcp_result_chars: Some(limits.max_mcp_result_chars),
+            mcp_servers: Vec::new(),
+        };
+        let messages = [Message {
+            role: Role::User,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let resp = crate::application::chat::tool_loop::collect_engine_response(
+            self.engine.as_ref(),
+            &messages,
+            &[],
+            &context,
+            None,
+            &crate::application::chat::tool_loop::LoopOpts::from_limits(limits),
+        )
+        .await?;
+        let telemetry = TurnTelemetry {
+            prompt_tokens: resp.input_tokens_delta,
+            cached_input_tokens: resp.cached_input_tokens_delta,
+            completion_tokens: resp.output_tokens_delta,
+            model: self.agent.model.clone(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            response_chars: resp.text.chars().count() as u32,
+        };
+        Ok((resp.text, telemetry))
+    }
+}
 
 /// Parse the orchestrator LLM's response into a [`PlannerVerdict`].
 ///
@@ -13,16 +73,10 @@ use std::sync::Arc;
 ///   1. Raw JSON — parses directly.
 ///   2. JSON wrapped in markdown fences (```json ... ```).
 ///   3. JSON embedded in prose ("Here's my plan: {...}. Let me know if…").
-///   4. **Phase 7.4 — pure-prose fallback.** Some engines (notably
-///      Claude Code CLI) return conversational text even when the system
-///      prompt says JSON-only. When NO balanced `{...}` substring exists
-///      at all, we wrap the whole text as a `Direct { response: ... }`
-///      verdict. This is a safety net — much better UX than a hard parse
-///      error, and the user still gets the model's reply.
-///
-/// Phase 7.1 — promoted from `OrchestratorAgentPlanner::parse_verdict`
-/// (associated function with no `self`) to a free function when that
-/// type was deleted. RagPlanner is the only remaining caller.
+///   4. Pure prose: some engines (notably the Claude Code CLI) answer
+///      conversationally despite a JSON-only prompt. With no balanced
+///      `{...}` substring at all, the whole text becomes a
+///      `Direct { response }` verdict, so the user still gets the reply.
 pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
     let trimmed = raw.trim();
 
@@ -48,7 +102,7 @@ pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
         }
     }
 
-    // Path 4 (Phase 7.4): pure-prose fallback. Some engines (Claude Code
+    // Path 4: pure-prose fallback. Some engines (Claude Code
     // CLI in particular) return conversational text even when told to
     // emit JSON-only. Rather than failing the whole turn, wrap the text
     // as a Direct verdict — same as if the planner had said
@@ -134,36 +188,29 @@ fn extract_balanced_json_object(s: &str) -> Option<String> {
 }
 
 // =====================================================================
-// RagPlanner — the only Planner implementation as of Phase 7.1.
+// RegistryPlanner — the only Planner implementation.
 //
 // Loads `TENGU_PLANNER_REGISTRY.md` per turn and prepends the full roster
 // to the user message; uses `parse_verdict` (free fn above) for tolerant
 // JSON parsing of the LLM's plan output.
 // =====================================================================
 
-#[derive(Debug, Clone)]
-struct RegistryHit {
-    kind: String,
-    name: String,
-    score: f32,
-}
-
-pub struct RagPlanner {
+pub struct RegistryPlanner {
     orchestrator_agent: String,
-    chat: Arc<dyn OrchestratorChatPort>,
+    llm: PlannerLlm,
     memory_config: crate::config::MemoryConfig,
     /// Routable subagents (`[agents.*]` blocks with a `description`),
     /// rendered into `TENGU_PLANNER_REGISTRY.md` every planner turn.
     agents: Vec<(String, crate::config::AgentConfig)>,
     workspace: std::path::PathBuf,
-    /// Phase 4c — body of `skills/orchestrator/SKILL.md` (frontmatter
+    /// Body of `skills/orchestrator/SKILL.md` (frontmatter
     /// stripped) used as the planner system prompt. Falls back to a
     /// hardcoded minimal instruction if the file is missing.
     system_prompt: String,
-    /// Phase 6.4 (lite) — in-memory ring buffer of recent user messages
-    /// for THIS RagPlanner instance. Survives within one channel session,
+    /// In-memory ring buffer of recent user messages
+    /// for THIS RegistryPlanner instance. Survives within one channel session,
     /// lost on restart; mixes turns from concurrent Telegram chats sharing
-    /// one RagPlanner. Used as the source of the "## Recent user messages
+    /// one RegistryPlanner. Used as the source of the "## Recent user messages
     /// this session" prompt block. With `postgres_memory`, the current user
     /// message is also written to Postgres `agentic_memory`.
     session_history: tokio::sync::Mutex<Vec<String>>,
@@ -171,11 +218,6 @@ pub struct RagPlanner {
     /// `crate::bootstrap::orchestrator::build_orchestrator` and shared with
     /// `SubprocessRunner` so planner and subagent writes line up.
     session_id: String,
-    /// Phase 6.1 (full) — optional event bus for emitting
-    /// `OrchestratorEvent::RagQueried` on every `plan()`/`replan()`.
-    /// `None` means structured events are silently dropped (the
-    /// `tracing::info!` line still fires regardless).
-    bus: Option<crate::application::orchestrator::events::EventBus>,
     /// Source of the registry's TOOLS section: the tool catalog plus every
     /// `[[mcp_servers]]` tool (`<server>__<tool>`, live `tools/list`).
     tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
@@ -191,40 +233,32 @@ pub struct RagPlanner {
     embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
 }
 
-impl RagPlanner {
+impl RegistryPlanner {
     pub fn new(
         orchestrator_agent: String,
-        chat: Arc<dyn OrchestratorChatPort>,
+        llm: PlannerLlm,
+        // The planner's system prompt: `skills/orchestrator/SKILL.md`'s body,
+        // read by bootstrap (`planner_prompt`), else [`FALLBACK_PLANNER_PROMPT`].
+        system_prompt: String,
         memory_config: crate::config::MemoryConfig,
         agents: Vec<(String, crate::config::AgentConfig)>,
         tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
         recall: Option<Arc<dyn crate::ports::memory::RecallStore>>,
         embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
-        bus: Option<crate::application::orchestrator::events::EventBus>,
-        // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
-        // and shared with `SubprocessRunner`, so the parent's recall query
-        // and the child's `compress_and_store` write key match. Pre-Fix-B
-        // the planner minted independently here and the runner minted
-        // independently of THAT, so within-session output recall (Fix A)
-        // would have filtered to a session_id no one else used.
+        // Resolved once by `build_orchestrator` and shared with
+        // `SubprocessRunner`: the parent's recall query and the child's
+        // `compress_and_store` write use the same key.
         session_id: String,
     ) -> Self {
-        let system_prompt = load_orchestrator_skill_body().unwrap_or_else(|| {
-            tracing::warn!(
-                "skills/orchestrator/SKILL.md missing or unreadable; using fallback inline planner prompt"
-            );
-            FALLBACK_PLANNER_PROMPT.to_string()
-        });
         Self {
             orchestrator_agent,
-            chat,
+            llm,
             memory_config,
             agents,
             workspace: std::env::current_dir().unwrap_or_default(),
             system_prompt,
             session_history: tokio::sync::Mutex::new(Vec::new()),
             session_id,
-            bus,
             tool_directory,
             tool_defs: tokio::sync::OnceCell::new(),
             recall,
@@ -249,7 +283,7 @@ impl RagPlanner {
         }
     }
 
-    async fn load_registry_block(&self) -> (String, Vec<RegistryHit>) {
+    async fn load_registry_block(&self) -> String {
         let tool_defs = self
             .tool_defs
             .get_or_init(|| async {
@@ -263,29 +297,15 @@ impl RagPlanner {
             &self.agents,
             tool_defs,
         ) {
-            Ok(snapshot) => {
-                let hits = snapshot
-                    .entries
-                    .into_iter()
-                    .map(|entry| RegistryHit {
-                        kind: entry.kind,
-                        name: entry.name,
-                        score: 1.0,
-                    })
-                    .collect();
-                (snapshot.prompt_block, hits)
-            }
+            Ok(block) => block,
             Err(e) => {
                 tracing::warn!(error = %e, "planner registry file unavailable");
-                (
-                    "\n## Planner registry\n\n_(registry file unavailable)_\n\n".to_string(),
-                    Vec::new(),
-                )
+                "\n## Planner registry\n\n_(registry file unavailable)_\n\n".to_string()
             }
         }
     }
 
-    /// Phase 6.4 (lite) — push the current user message into the session
+    /// Push the current user message into the session
     /// history buffer and return the formatted "recent dialogue" block.
     /// Returns an empty string for the first turn (no prior context to show).
     async fn update_and_format_history(&self, user_message: &str) -> String {
@@ -310,11 +330,10 @@ impl RagPlanner {
         format_history(&hist, limit)
     }
 
-    /// Phase 6.4 (full, read-back) — semantic recall over durable user messages.
+    /// Semantic recall over durable user messages.
     /// Returns a formatted prompt block of the top-K semantically-similar
     /// prior user messages, or an empty string when:
-    /// - the config knob `memory.cross_session_msg_top_k` is 0 (default,
-    ///   so existing users see no behaviour change),
+    /// - the config knob `memory.cross_session_msg_top_k` is 0 (the default),
     /// - the memory backend is unavailable,
     /// - the search returns nothing (collection empty / cold start), or
     /// - every hit is a near-duplicate of the current message (filtered out
@@ -324,11 +343,8 @@ impl RagPlanner {
     /// `persist_user_message()` so the just-written current message can
     /// never appear in its own recall block. (The semantic embedder will
     /// happily return a self-match at score ~1.0 if we read after writing.)
-    /// Fix E (2026-05-09) — `embed_vec` is the cached user-message vector
-    /// from `plan()`; when `Some`, skip the duplicate embedder call.
-    /// `None` means the caller didn't pre-compute (or the upstream embed
-    /// already failed) — we fall back to embedding internally for backward
-    /// compatibility with replan() and standalone test paths.
+    /// `embed_vec` is the user-message vector `plan()` already computed;
+    /// with `None` (replan, tests, a failed upstream embed) it embeds here.
     async fn cross_session_recall_block(
         &self,
         user_message: &str,
@@ -357,17 +373,13 @@ impl RagPlanner {
                 "_(prior user messages from Postgres `agentic_memory`, excluding the current turn)_\n\n",
             );
             for (i, h) in hits.iter().enumerate() {
-                let snippet: String = h.content.chars().take(400).collect();
                 s.push_str(&format!(
-                    "{}. score={:.2}  kind={}  {}\n",
+                    "{}. score={:.2}  kind={}\n{}\n",
                     i + 1,
                     h.score,
                     h.kind,
-                    snippet
+                    recalled(h)
                 ));
-                if h.content.chars().count() > 400 {
-                    s.push_str("   …(truncated)\n");
-                }
             }
             s.push('\n');
             return s;
@@ -375,7 +387,7 @@ impl RagPlanner {
         String::new()
     }
 
-    /// Fix A (2026-05-09) — within-session output recall.
+    /// Within-session output recall.
     ///
     /// Returns a formatted prompt block of the top-K semantically-similar
     /// step outputs from THIS session (filtered to `self.session_id`), or
@@ -384,10 +396,9 @@ impl RagPlanner {
     /// - Postgres `agentic_memory` is unavailable, or
     /// - no outputs in this session match.
     ///
-    /// Pairs with Fix B's unified session_id wiring: the `run-agent` step
-    /// summary capture stamps `AgentIpcInput.session_id`, which now equals
-    /// the planner's `session_id`. Without Fix B this filter would never
-    /// match (parent and child mint independent UUIDs).
+    /// The `run-agent` step summary capture stamps `AgentIpcInput.session_id`,
+    /// which is the planner's own `session_id` (one id per surface session),
+    /// so the filter matches this session's steps.
     async fn session_output_recall_block(
         &self,
         user_message: &str,
@@ -414,19 +425,15 @@ impl RagPlanner {
             let mut s = String::from("\n## Recent step outputs (this session)\n\n");
             s.push_str("_(prior subagent results from Postgres `agentic_memory`, filtered to this `session_id`)_\n\n");
             for (i, h) in hits.iter().enumerate() {
-                let snippet: String = h.content.chars().take(400).collect();
                 let step = h.step_id.as_deref().unwrap_or(&h.id);
                 s.push_str(&format!(
-                    "{}. score={:.2}  kind={}  step={}\n   {}\n",
+                    "{}. score={:.2}  kind={}  step={}\n{}\n",
                     i + 1,
                     h.score,
                     h.kind,
                     step,
-                    snippet
+                    recalled(h)
                 ));
-                if h.content.chars().count() > 400 {
-                    s.push_str("   …(truncated)\n");
-                }
             }
             s.push('\n');
             return s;
@@ -434,7 +441,7 @@ impl RagPlanner {
         String::new()
     }
 
-    /// Phase 6.4 (full) — durably persist a user message to the configured
+    /// Durably persist a user message to the configured
     /// runtime memory backend.
     /// Called from `plan()` only (not `replan()`, which receives the same
     /// `user_message` in the same turn cycle — a second write would create
@@ -468,32 +475,9 @@ impl RagPlanner {
     }
 }
 
-/// Read `skills/orchestrator/SKILL.md` from cwd and return the body
-/// (everything after the YAML frontmatter, if present). Returns `None` if
-/// the file is missing or unreadable. Phase 4c.
-fn load_orchestrator_skill_body() -> Option<String> {
-    let path = std::path::Path::new("skills/orchestrator/SKILL.md");
-    let content = std::fs::read_to_string(path).ok()?;
-    if content.starts_with("---") {
-        // Strip frontmatter: skip the opening `---`, then everything up to
-        // and including the next `---` line.
-        let after_first = &content[3..];
-        if let Some(end) = after_first.find("\n---") {
-            // +4 to skip "\n---" and any trailing newline.
-            let mut body_start = end + 4;
-            let bytes = after_first.as_bytes();
-            if body_start < bytes.len() && bytes[body_start] == b'\n' {
-                body_start += 1;
-            }
-            return Some(after_first[body_start..].trim_start().to_string());
-        }
-    }
-    Some(content)
-}
-
 /// Last-resort planner prompt used when `skills/orchestrator/SKILL.md` is
-/// missing on disk. Phase 4c.
-const FALLBACK_PLANNER_PROMPT: &str = "You are the orchestrator for tengu-cluster.
+/// missing on disk.
+pub(crate) const FALLBACK_PLANNER_PROMPT: &str = "You are the orchestrator for tengu-cluster.
 
 For every user message you receive the available agents, skills, tools, and the user's message.
 
@@ -509,12 +493,43 @@ Rules:
 - The harness rejects anything that is not valid JSON matching one of the two shapes above.
 ";
 
-#[async_trait]
-impl Planner for RagPlanner {
-    fn session_id(&self) -> Option<String> {
-        Some(self.session_id.clone())
+impl RegistryPlanner {
+    /// The planner's LLM call (`phase` `plan` / `replan`) and its metrics
+    /// record — a failed call's too (model, latency, layers; no usage).
+    async fn call_llm(
+        &self,
+        phase: &'static str,
+        context: &str,
+        layers: Vec<crate::domain::metrics::MetricsLayer>,
+    ) -> anyhow::Result<String> {
+        let started = std::time::Instant::now();
+        let result = self.llm.call(&self.system_prompt, context).await;
+        let failed = TurnTelemetry {
+            model: self.llm.agent.model.clone(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            ..TurnTelemetry::default()
+        };
+        let (raw, telemetry) = match &result {
+            Ok((raw, telemetry)) => (raw.as_str(), telemetry),
+            Err(_) => ("", &failed),
+        };
+        emit_planner_metrics(
+            phase,
+            &self.session_id,
+            &self.orchestrator_agent,
+            context,
+            &self.system_prompt,
+            layers,
+            telemetry,
+            raw,
+            result.is_ok(),
+        );
+        result.map(|(raw, _)| raw)
     }
+}
 
+#[async_trait]
+impl Planner for RegistryPlanner {
     async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict> {
         // Embed the user message once per turn and reuse the vector across
         // Postgres memory recall/write lanes when `postgres_memory` is on.
@@ -522,12 +537,7 @@ impl Planner for RagPlanner {
         let embed_vec: Option<Vec<f32>> = self.embed_text(user_message).await;
         let embed_slice = embed_vec.as_deref();
 
-        let (registry_block, hits) = self.load_registry_block().await;
-
-        // Phase 6.1 (lite + full) — surface the planner's input roster on
-        // both the tracing channel (always) and the OrchestratorEvent bus
-        // (when one is wired into this planner).
-        emit_rag_query("plan", user_message, &hits, self.bus.as_ref());
+        let registry_block = self.load_registry_block().await;
 
         // Semantic recall of prior user messages from runtime memory BEFORE
         // we persist the current
@@ -538,22 +548,19 @@ impl Planner for RagPlanner {
             .cross_session_recall_block(user_message, embed_slice)
             .await;
 
-        // Phase 6.4 (full, write) — durable persist of user message AFTER
+        // Durable persist of the user message AFTER
         // the read above. Fail-soft: if embedder or Postgres is unavailable
         // we still want to plan and respond (in-memory buffer covers this
         // turn for "Recent user messages this session" injection).
         self.persist_user_message(user_message, embed_slice).await;
 
-        // Phase 6.4 (lite) — append current message to per-instance
+        // Append the current message to the per-instance
         // history buffer, then format the last N for prompt injection.
         let history_block = self.update_and_format_history(user_message).await;
 
-        // Fix A (2026-05-09) — within-session output recall on the normal
-        // plan() path. Without this, prior step outputs are only readable
-        // on replan; follow-up questions like "was the report
-        // created?" return "I have no record of that step." Off by default
-        // (`within_session_output_top_k = 0`) so existing users see no
-        // behaviour change.
+        // Within-session output recall on the plan() path, so a follow-up
+        // ("was the report created?") sees this session's step outputs.
+        // Off by default (`within_session_output_top_k = 0`).
         let session_recall_block = self
             .session_output_recall_block(user_message, embed_slice)
             .await;
@@ -579,24 +586,7 @@ impl Planner for RagPlanner {
             crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
-        let (raw, telemetry) = self
-            .chat
-            .run_orchestrator_turn_with_system_metered(
-                &self.orchestrator_agent,
-                &self.system_prompt,
-                &combined,
-            )
-            .await?;
-        emit_planner_metrics(
-            "plan",
-            &self.session_id,
-            &self.orchestrator_agent,
-            &combined,
-            &self.system_prompt,
-            layers,
-            &telemetry,
-            &raw,
-        );
+        let raw = self.call_llm("plan", &combined, layers).await?;
         parse_verdict(&raw)
     }
 
@@ -607,10 +597,9 @@ impl Planner for RagPlanner {
         failed_step_id: &str,
         error: &str,
     ) -> anyhow::Result<PlannerVerdict> {
-        let (registry_block, hits) = self.load_registry_block().await;
-        emit_rag_query("replan", user_message, &hits, self.bus.as_ref());
+        let registry_block = self.load_registry_block().await;
 
-        // Phase 6.5 — cross-plan recall. Pull the top-K most similar
+        // Cross-plan recall. Pull the top-K most similar
         // step outputs so the planner sees relevant prior work before
         // deciding the new plan. Failure is non-fatal — we still replan
         // with whatever roster we have.
@@ -641,15 +630,14 @@ impl Planner for RagPlanner {
                         String::from("\n## Relevant prior step outputs (cross-plan recall)\n\n");
                     s.push_str("_(prior subagent results from Postgres `agentic_memory`)_\n\n");
                     for (i, h) in hits.iter().enumerate() {
-                        let snippet: String = h.content.chars().take(400).collect();
                         let step = h.step_id.as_deref().unwrap_or(&h.id);
                         s.push_str(&format!(
-                            "{}. score={:.2}  kind={}  step={}\n   {}\n\n",
+                            "{}. score={:.2}  kind={}  step={}\n{}\n\n",
                             i + 1,
                             h.score,
                             h.kind,
                             step,
-                            snippet
+                            recalled(h)
                         ));
                     }
                     s
@@ -659,7 +647,7 @@ impl Planner for RagPlanner {
             String::new()
         };
 
-        // Phase 6.4 (lite) — recent dialogue context for replan too.
+        // Recent dialogue context for replan too.
         // Don't append again (same user_message already pushed by plan()
         // earlier in this turn cycle); just read the last N for injection.
         let history_block = self.format_history_only().await;
@@ -672,13 +660,16 @@ impl Planner for RagPlanner {
         // so `embed_vec = None` falls through to the str-input path.
         let cross_session_block = self.cross_session_recall_block(user_message, None).await;
 
-        let prior_plan_text = serde_json::to_string_pretty(prior_plan)?;
+        let prior_plan_text = serde_json::to_string(prior_plan)?;
+        // The error carries the step's partial output: fenced.
         let failure_block = format!(
             "\n## A previous plan failed\n\n\
-             Failed step: {}\nError after retries: {}\n\n\
+             Failed step: {}\nError after retries:\n{}\n\n\
              Prior plan steps:\n{}\n\n\
              Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n",
-            failed_step_id, error, prior_plan_text,
+            failed_step_id,
+            crate::domain::untrusted::fence(&format!("step-error:{failed_step_id}"), error),
+            prior_plan_text,
         );
         let context = format!(
             "{}{}{}{}{}## Original user message\n\n{}",
@@ -700,32 +691,15 @@ impl Planner for RagPlanner {
             crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
-        let (raw, telemetry) = self
-            .chat
-            .run_orchestrator_turn_with_system_metered(
-                &self.orchestrator_agent,
-                &self.system_prompt,
-                &context,
-            )
-            .await?;
-        emit_planner_metrics(
-            "replan",
-            &self.session_id,
-            &self.orchestrator_agent,
-            &context,
-            &self.system_prompt,
-            layers,
-            &telemetry,
-            &raw,
-        );
+        let raw = self.call_llm("replan", &context, layers).await?;
         parse_verdict(&raw)
     }
 }
 
 /// Build a `MetricsRecord` from the planner's per-layer breakdown +
-/// engine telemetry and emit it via the global metrics sink. Pure side-effect
-/// — never returns an error and never blocks. Phase metrics — landed
-/// alongside the metrics module.
+/// engine telemetry (`ok` false: a failed call, no usage) and emit it via
+/// the global metrics sink. Pure side-effect — never returns an error and
+/// never blocks.
 #[allow(clippy::too_many_arguments)]
 fn emit_planner_metrics(
     phase: &'static str,
@@ -734,8 +708,9 @@ fn emit_planner_metrics(
     combined_prompt: &str,
     system_prompt: &str,
     layers: Vec<crate::domain::metrics::MetricsLayer>,
-    telemetry: &crate::ports::orchestration::TurnTelemetry,
+    telemetry: &TurnTelemetry,
     raw_response: &str,
+    ok: bool,
 ) {
     let prompt_chars = (combined_prompt.chars().count() + system_prompt.chars().count()) as u32;
     let prompt_bytes = (combined_prompt.len() + system_prompt.len()) as u32;
@@ -748,12 +723,8 @@ fn emit_planner_metrics(
         format!("replanner/{}", orchestrator_agent)
     };
     crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
-        ts_unix: crate::domain::metrics::now_unix(),
-        session_id: session_id.to_string(),
-        kind: crate::domain::metrics::MetricsKind::Planner,
-        agent: agent_label,
-        model: telemetry.model.clone(),
         prompt_tokens: telemetry.prompt_tokens,
+        cached_input_tokens: telemetry.cached_input_tokens,
         completion_tokens: telemetry.completion_tokens,
         total_tokens,
         prompt_chars,
@@ -763,11 +734,27 @@ fn emit_planner_metrics(
             .max(raw_response.chars().count() as u32),
         latency_ms: telemetry.latency_ms,
         layers,
-        step_id: None,
+        ok,
+        ..crate::domain::metrics::MetricsRecord::call(
+            crate::domain::metrics::MetricsKind::Planner,
+            session_id.to_string(),
+            agent_label,
+            telemetry.model.clone(),
+        )
     });
 }
 
-/// Phase 6.4 (lite) — render the planner's per-session history buffer as a
+/// One recalled Open Brain row in a planner recall block: its first 400
+/// chars in a `domain::untrusted` fence, origin `memory:<kind>`.
+fn recalled(h: &crate::domain::memory::RecallHit) -> String {
+    let mut text: String = h.content.chars().take(400).collect();
+    if h.content.chars().count() > 400 {
+        text.push_str(" …(truncated)");
+    }
+    crate::domain::untrusted::fence(&format!("memory:{}", h.kind), &text)
+}
+
+/// Render the planner's per-session history buffer as a
 /// markdown "recent dialogue" block. Shows the last `limit` user messages.
 /// Returns an empty string when there's only one entry (just the current
 /// turn — no prior context worth showing).
@@ -794,67 +781,34 @@ fn format_history(hist: &[String], limit: usize) -> String {
     s
 }
 
-/// Phase 6.1 (lite + full) — emit one info-level tracing line per planner
-/// call AND fire `OrchestratorEvent::RagQueried` on the bus if one was
-/// wired into this planner. The tracing line and the bus event carry the
-/// same payload (top-10 hits with kind/name/score), so subscribers can
-/// pick whichever transport suits them.
-///
-/// Bus send failure is non-fatal — `broadcast::Sender::send` returns
-/// `Err` only when there are no live receivers, which is the steady
-/// state on cold-start before the channel adapter subscribes; we silently
-/// ignore that case rather than spamming warnings.
-fn emit_rag_query(
-    phase: &'static str,
-    query: &str,
-    hits: &[RegistryHit],
-    bus: Option<&crate::application::orchestrator::events::EventBus>,
-) {
-    // Tracing — same shape as the lite version, kept for `RUST_LOG=tengu=info`.
-    if hits.is_empty() {
-        tracing::info!(phase, query, "rag query returned 0 hits");
-    } else {
-        let summary: Vec<String> = hits
-            .iter()
-            .take(10)
-            .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
-            .collect();
-        tracing::info!(
-            phase,
-            query,
-            hits = %summary.join(", "),
-            "rag query returned {} hits",
-            hits.len()
-        );
-    }
-
-    // Structured event — only when a bus is wired (the standalone unit
-    // tests pass `None`).
-    if let Some(bus) = bus {
-        let payload_hits: Vec<crate::application::orchestrator::events::RagQueriedHit> = hits
-            .iter()
-            .take(10)
-            .map(
-                |h| crate::application::orchestrator::events::RagQueriedHit {
-                    kind: h.kind.as_str().to_string(),
-                    name: h.name.clone(),
-                    score: h.score,
-                },
-            )
-            .collect();
-        let _ = bus.send(
-            crate::application::orchestrator::events::OrchestratorEvent::RagQueried {
-                phase,
-                query: query.to_string(),
-                hits: payload_hits,
-            },
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The planner's call has no hands on any surface: no tools, no bridge,
+    /// no `[[mcp_servers]]`; the planner prompt is the system prompt, the
+    /// assembled message the only message, and the engine's usage is the
+    /// telemetry (webhook and eval planner turns used to drop both).
+    #[tokio::test]
+    async fn planner_call_has_no_hands_and_reports_usage() {
+        let engine = testkit::TextEngine::new("{\"kind\":\"direct\",\"response\":\"hi\"}", 0);
+        let llm = testkit::llm(engine.clone());
+        let (text, telemetry) = llm.call("PLANNER PROMPT", "the message").await.unwrap();
+        assert!(text.contains("\"direct\""));
+        assert_eq!(
+            (telemetry.prompt_tokens, telemetry.completion_tokens),
+            (100, 7)
+        );
+        assert_eq!(telemetry.model, "stub/planner");
+        assert!(engine.called());
+        let seen = engine.calls.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        let s = &seen[0];
+        assert_eq!((s.tools, s.bridge_tools, s.mcp_servers), (0, None, 0));
+        assert_eq!(s.system_prompt.as_deref(), Some("PLANNER PROMPT"));
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.messages[0].content, "the message");
+    }
     use crate::domain::plan::StepId;
 
     #[test]
@@ -881,12 +835,8 @@ mod tests {
         assert!(parse_verdict(raw).is_ok());
     }
 
-    /// Phase 7.4 prose-fallback — non-empty malformed input is wrapped as a
-    /// `Direct { response }` verdict rather than returning `Err`. Pre-7.4 this
-    /// test asserted `is_err()` on `"{"`; that contract changed when the
-    /// fallback landed (`parse_verdict` Path 4) so engines like Claude Code
-    /// that emit conversational prose stop hard-erroring the whole turn.
-    /// Truly empty input is the ONLY remaining error case.
+    /// Non-empty malformed input becomes a `Direct { response }` verdict
+    /// (`parse_verdict` Path 4); only empty input is an error.
     #[test]
     fn rejects_only_empty_input() {
         // Empty input still errors — there's nothing to wrap.
@@ -937,6 +887,105 @@ mod tests {
         match v {
             PlannerVerdict::Direct { response } => assert_eq!(response, r#"{"embedded": true}"#),
             _ => panic!(),
+        }
+    }
+}
+
+/// A stub planner engine for tests on any surface.
+#[cfg(test)]
+pub(crate) mod testkit {
+    use super::PlannerLlm;
+    use crate::domain::message::{Message, ModelInfo, StreamEvent, ToolDef};
+    use crate::ports::engine::{Engine, EngineContext};
+    use std::sync::{Arc, Mutex};
+
+    /// What one call was given.
+    #[derive(Debug, Clone)]
+    pub(crate) struct Seen {
+        pub tools: usize,
+        pub bridge_tools: Option<usize>,
+        pub mcp_servers: usize,
+        pub system_prompt: Option<String>,
+        pub messages: Vec<Message>,
+    }
+
+    /// Answers every call with `text` (usage 100 in / 7 out) after
+    /// `delay_ms`, recording what it was given.
+    pub(crate) struct TextEngine {
+        pub text: String,
+        pub delay_ms: u64,
+        pub calls: Mutex<Vec<Seen>>,
+    }
+
+    impl TextEngine {
+        pub(crate) fn new(text: &str, delay_ms: u64) -> Arc<Self> {
+            Arc::new(Self {
+                text: text.to_string(),
+                delay_ms,
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// Whether a call was entered (before its delay).
+        pub(crate) fn called(&self) -> bool {
+            !self.calls.lock().unwrap().is_empty()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Engine for TextEngine {
+        fn id(&self) -> &str {
+            "text-stub"
+        }
+        fn context_window(&self) -> usize {
+            100_000
+        }
+        fn supports_tool_use(&self) -> bool {
+            true
+        }
+        fn manages_own_workspace(&self) -> bool {
+            true
+        }
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+        async fn run(
+            &self,
+            messages: &[Message],
+            tools: &[ToolDef],
+            context: &EngineContext,
+        ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>>
+        {
+            self.calls.lock().unwrap().push(Seen {
+                tools: tools.len(),
+                bridge_tools: context.bridge_tools.as_ref().map(Vec::len),
+                mcp_servers: context.mcp_servers.len(),
+                system_prompt: context.system_prompt.clone(),
+                messages: messages.to_vec(),
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            Ok(Box::pin(futures::stream::iter(vec![
+                StreamEvent::TextDelta {
+                    text: self.text.clone(),
+                },
+                StreamEvent::Usage {
+                    input_tokens: 100,
+                    output_tokens: 7,
+                    cached_input_tokens: 0,
+                },
+                StreamEvent::Done,
+            ])))
+        }
+    }
+
+    /// `engine` as the planner's call, with a default agent block.
+    pub(crate) fn llm(engine: Arc<TextEngine>) -> PlannerLlm {
+        PlannerLlm {
+            engine,
+            agent: Arc::new(
+                toml::from_str("engine = \"openrouter\"\nmodel = \"stub/planner\"")
+                    .expect("agent block"),
+            ),
         }
     }
 }

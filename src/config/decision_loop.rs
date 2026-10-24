@@ -1,6 +1,6 @@
 //! `[decision_loops.<name>]` — a System One (Jev) control loop over existing
 //! tools. Behaviour lives here in TOML; the loop itself is
-//! `application::decision_loop`. Design: `docs/decision-loop-plan-2026-09-24.md`.
+//! `application::decision_loop`. Design: `docs/decision-loops.md`.
 //!
 //! ```toml
 //! [decision_loops.lp_watch]
@@ -74,8 +74,10 @@ pub(crate) struct DecisionLoopConfig {
     /// When true (default), non-`read_only` actions are logged, not run.
     #[serde(default = "default_true")]
     pub dry_run: bool,
-    /// Hand low-confidence steps to the orchestrator (planner → subagents).
-    /// Only surfaces with an orchestrator (the webhook listener) can escalate.
+    /// Hand low-confidence steps to the orchestrator (planner → subagents):
+    /// a process with `[orchestrator]` — `tengu run`, Studio's Play,
+    /// `tengu webhooks` (`bootstrap::one_shot`) — escalates; `tengu decide`
+    /// and replays never do (the step stops).
     #[serde(default = "default_true")]
     pub escalate: bool,
     /// Reducer for the incoming event: `{name = "<path>"}` (see

@@ -54,17 +54,14 @@ impl SubprocessStageRunner {
         AgentIpcInput {
             goal: req.goal.clone(),
             agent_name: req.agent.clone(),
-            model: String::new(),
-            tools: Vec::new(),
-            skills: Vec::new(),
             max_turns: agent.limits.max_tool_rounds,
-            sandbox: None,
             session_id: req.dir.id().to_string(),
             step_id: stage_id(req),
             compose: None,
             sandbox_config: self.runner.sandbox_name.clone(),
             plan_state: None,
             trace: None,
+            journal: None,
         }
     }
 }
@@ -169,7 +166,7 @@ pub(crate) fn skill_sha256_of(skill_packages: &[String], workspace: &Path) -> St
             .find(|p| p.is_file())
             .and_then(|p| std::fs::read(p).ok());
         let sha = match found {
-            Some(bytes) => sha256_hex(&String::from_utf8_lossy(&bytes)),
+            Some(bytes) => sha256_hex(String::from_utf8_lossy(&bytes).as_bytes()),
             None => "MISSING".to_string(),
         };
         skills.insert(name.clone(), sha);
@@ -186,20 +183,12 @@ mod tests {
 
     fn metric(agent: &str) -> MetricsRecord {
         MetricsRecord {
-            ts_unix: 0,
-            session_id: "2026-W41".into(),
-            kind: MetricsKind::Subagent,
-            agent: agent.into(),
-            model: "synthetic-model".into(),
             prompt_tokens: 12_000,
             completion_tokens: 900,
             total_tokens: 12_900,
-            prompt_chars: 0,
-            prompt_bytes: 0,
-            response_chars: 0,
             latency_ms: 1_000,
-            layers: Vec::new(),
             step_id: Some("ARCHITECT".into()),
+            ..MetricsRecord::call(MetricsKind::Subagent, "2026-W41", agent, "synthetic-model")
         }
     }
 
@@ -267,7 +256,6 @@ mod tests {
             output: "2 proposals written".into(),
             metrics: vec![metric("soe_architect"), metric("soe_architect")],
             tools: Vec::new(),
-            trace: Vec::new(),
         };
         let runner = SubprocessStageRunner::new(Some("soe".into()), agents())
             .with_exe(fake_child(tmp.path(), &failed));
@@ -295,7 +283,7 @@ mod tests {
             ("soe_architect", "2026-W41", "ARCHITECT", Some("soe"))
         );
         assert_eq!(sent.goal, request("soe_architect").goal);
-        assert!(sent.tools.is_empty() && sent.model.is_empty());
+        assert!(sent.plan_state.is_none(), "a stage has no plan");
 
         // An ok child: the summary, else its output.
         let ok = AgentIpcOutput::Ok {
@@ -303,7 +291,6 @@ mod tests {
             summary: String::new(),
             metrics: vec![metric("soe_architect")],
             tools: Vec::new(),
-            trace: Vec::new(),
         };
         let r = reply_of(ok, 7);
         assert!(r.ok && r.error.is_none());

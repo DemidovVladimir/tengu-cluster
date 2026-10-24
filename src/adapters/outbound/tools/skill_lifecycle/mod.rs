@@ -1,7 +1,5 @@
 //! Skill-lifecycle plugin — registers the `skill_distill` LLM-callable tool.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-//! Strategy ranking (`docs/strategy-ranking-automation-2026-10-08.md` SR-2 /
+//! Strategy ranking (`docs/ranking.md` SR-2 /
 //! SR-3): the runs of one ranking date under a ranking contract
 //! (`domain/lineage/ranking.rs`) in, one ranking out — per cohort, weakest
 //! to strongest. Pure: the coordinator (`application/ranking/`, SR-5) reads
@@ -50,7 +50,7 @@ use crate::domain::lineage::ranking::{
 use crate::domain::lineage::value::{Locator, Time, TimeOrder};
 use crate::domain::lineage::variant::VariantStatus;
 use crate::domain::lineage::Registry;
-use crate::domain::marketdata::fmt_time;
+use crate::domain::time::fmt_time;
 use crate::domain::tz::Zone;
 
 /// `ranking.json`'s schema tag.
@@ -646,7 +646,7 @@ pub fn select(contract: &RankingContract, cutoff_ms: i64, runs: &[RunInput]) -> 
 /// What the coordinator stamps on a ranking.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RankingStamp {
-    /// `pins::toml_digest` of the contract file (= its `[[sealed]]` row).
+    /// `canonical::toml_digest` of the contract file (= its `[[sealed]]` row).
     pub contract_sha256: String,
     /// The ranking date in the contract's zone.
     pub date: NaiveDate,

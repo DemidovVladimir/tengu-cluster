@@ -1,4 +1,4 @@
-//! Variant — `lineage/variants/<id>.toml` (`docs/lineage-2026-10-06.md` § 2,
+//! Variant — `lineage/variants/<id>.toml` (`docs/lineage.md` § 2,
 //! roadmap P3): one materially different version of a family's strategy
 //! (Sunday vs Saturday entry, top-4, a liquidity cut …) — what was searched.
 //!

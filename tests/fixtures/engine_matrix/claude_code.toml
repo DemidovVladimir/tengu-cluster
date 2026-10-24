@@ -1,8 +1,8 @@
 # Engine-matrix fixture sandbox (x-engine-matrix-smoke): the Claude CLI on the
 # subscription, hardened (built-in tools off — required by [risk]; the engine
 # always passes --strict-mcp-config), tools through `tengu mcp-bridge`.
-# tests/engine_matrix.rs runs `tengu run-agent` on it once per tool set (build
-# with --features claude_code); the doctor's smoke turn:
+# tests/engine_matrix.rs runs `tengu run-agent` on it once per tool set; the
+# doctor's smoke turn:
 #   tengu -c tests/fixtures/engine_matrix/claude_code.toml doctor --engines
 # The test sets TENGU_MATRIX_WORKSPACE (a fresh temp dir holding the token
 # file), TENGU_HOME (fresh: ledger.db) and a registered secret

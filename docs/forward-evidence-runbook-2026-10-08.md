@@ -6,7 +6,7 @@ Why: Phases 7–11 kept W1 (`docs/p10-w2-candidate-2026-10-08.md`). Forward week
 
 | When (New York · UTC · Berlin) | Do |
 |---|---|
-| Before the stop (Mon 2026-10-12) | Do NOT `git pull` in the main checkout: origin/main now has `lineage/rankings/`, which the frozen binary `tengu-acdef66` refuses (W1 load error, verified 2026-10-08). After the stop: delete the untracked local copies `docs/strategy-ranking-automation-2026-10-08.md` and `TENGU_STUDIO_PLAN.md` (they are tracked upstream), then pull. |
+| Before the stop (Mon 2026-10-12) | Do NOT `git pull` in the main checkout: origin/main now has `lineage/rankings/`, which the frozen binary `tengu-acdef66` refuses (W1 load error, verified 2026-10-08). After the stop: delete the untracked local copies `docs/ranking.md` and `docs/plans/TENGU_STUDIO_PLAN.md` (they are tracked upstream), then pull. |
 | ≤ Fri 10-09 19:30 · 23:30 · Sat 01:30 | Mac on AC power, lid open, online. In a terminal: `tmux new -s xmw`, then `cd ~/development/tengu-cluster && TENGU_SECRETS_LOADED= caffeinate -i -s nice -n 10 ~/.cache/tengu-xm.noindex/weekend/tengu-acdef66 run --sandbox xmarket-weekend` (detach: Ctrl-b d) |
 | any time | `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66 doctor --sandbox xmarket-weekend --live` (exit 0 = heartbeat fresh, feeds live) · `… risk status --sandbox xmarket-weekend` |
 | Fri 20:00 · Sat 00:00 · Sat 02:00 | anchor: `mkt_ctx/1` recorded |
@@ -33,7 +33,7 @@ Binary: `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` = main `acdef66fc45252
 |---|---|
 | Grade | `lineage/experiments/fwd.rule_w.2026-10-09.graded.toml`: capped +203.98 bps (n 4), shadow +108.34 (n 75), verdict PENDING, M3 tally 2 / 12 |
 | Vaults | `w1-2026-10-12` (step 1) · `w1-2026-10-12-bars` (step 4's `market.db` + the pmset log) |
-| Step 3 as run | the command above reads every `mkt_ctx/1` name (134) and the sleep-gap funding hour is MISSING; add `--fill-book next --market-db <bars vault>/xlab/market.db --instruments <the 75 universe ids>` (as in `docs/w1-p0-weekend-2026-10-06.md`) |
+| Step 3 as run | the command above reads every `mkt_ctx/1` name (134) and the sleep-gap funding hour is MISSING; add `--fill-book next --market-db <bars vault>/xlab/market.db --instruments <the 75 universe ids>` (as in `docs/archive/2026-10/w1-p0-weekend-2026-10-06.md`) |
 | Result rows | the `ledger:<account>` extractor grades the whole account and the weekend ledger is cumulative: `extract` only the cumulative rows (n 8 / 149 after #2); weekend-only rows carry no `extract` (`fwd.rule_w.2026-10-09.graded`, fixed 2026-10-13 after `lineage verify --evidence` reported 6 × `result_mismatch`) |
 | Not run | the Jev gate run (`tengu evidence evaluate`) |
 | Next weekend | AC power + lid open checked before the entry, or a VPS (`inc.2026-10-10.host-on-battery`, `inc.2026-10-12.host-sleep`) |

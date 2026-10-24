@@ -25,7 +25,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::cycle::{FORECAST, FORECAST_LINE};
 use crate::application::evidence::manifest_bytes;
@@ -38,10 +37,6 @@ use crate::ports::soe::{CycleStore, RunDir, RunStatus, StateLog, MANIFEST};
 /// The file whose bytes measure the run, never decide it.
 pub(crate) const OPS: &str = "ops.json";
 
-fn sha256_bytes(b: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(b))
-}
-
 /// One manifest entry per file of `dir`, sorted by path.
 pub(crate) fn entries(store: &dyn CycleStore, dir: &RunDir) -> Result<Vec<ManifestEntry>> {
     let mut out = Vec::new();
@@ -51,7 +46,7 @@ pub(crate) fn entries(store: &dyn CycleStore, dir: &RunDir) -> Result<Vec<Manife
             .with_context(|| format!("{dir}/{name}: listed, not readable"))?;
         out.push(ManifestEntry {
             path: name,
-            sha256: sha256_bytes(&bytes),
+            sha256: sha256_hex(&bytes),
             bytes: bytes.len() as u64,
         });
     }

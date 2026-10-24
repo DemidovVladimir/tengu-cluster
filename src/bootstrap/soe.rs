@@ -33,7 +33,7 @@ use crate::config::sections::SandboxSections;
 use crate::config::soe::SoeConfig;
 use crate::config::sources::sources_db;
 use crate::config::Config;
-use crate::domain::lineage::pins::toml_digest;
+use crate::domain::canonical::toml_digest;
 use crate::domain::lineage::value::RecordKind;
 use crate::domain::tz::Zone;
 use crate::ports::runtime::{Ownership, RuntimeJob};
