@@ -1,5 +1,5 @@
 //! Execution-trace plumbing the instrumentation sites share
-//! (`TENGU_STUDIO_PLAN.md` ST-12; envelope `domain/trace.rs`, port
+//! (`docs/plans/TENGU_STUDIO_PLAN.md` ST-12; envelope `domain/trace.rs`, port
 //! `ports/trace.rs`): which event caused what a task does now, and the
 //! tool-call decorator.
 //!

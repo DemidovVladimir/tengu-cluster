@@ -194,7 +194,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | G-SR1 | seals both ranking contracts as drafted (`tengu lineage seal ranking:<id>`) or changes them first | every ranking — refused while unsealed (`tengu lineage verify` warns `ranking_unsealed`) | `docs/strategy-ranking-automation-2026-10-08.md` § Operator decisions |
 | G-O0 | signs the private SOE profile (`tengu soe init` writes the UNSIGNED template `<TENGU_HOME>/state/soe/operator.toml`: four money values `REQUIRED`, add `[[capabilities]]`, sign); approves each source row's terms + hash and enables it; approves committing sanitized planning docs | a source `enabled = true`; the first live cycle | `docs/soe-2026-10-08.md` § 1, § 15.1 |
 | SOE-G0 lock | after G-O0 + G-WKND (✅ 2026-10-12): appends SOE-G0's `[[frozen]]` row to `lineage/locks.toml` | nothing in code (a CANDIDATE runs) | same, § 15.1 #8 |
-| Operator Review #2 (SOE G-R2; not `TENGU_ROADMAP.md`'s trading Review #2 after P13 — not reached) | 4 frozen live weekly cycles, each graded; a replay of ≥ 8 older dated cases with a counted holdout read; `tengu soe review` packet | STOP: nothing from O5–O8 | same, §§ 15.2–15.4 |
+| Operator Review #2 (SOE G-R2; not `docs/plans/TENGU_ROADMAP.md`'s trading Review #2 after P13 — not reached) | 4 frozen live weekly cycles, each graded; a replay of ≥ 8 older dated cases with a counted holdout read; `tengu soe review` packet | STOP: nothing from O5–O8 | same, §§ 15.2–15.4 |
 | Live engine-matrix legs | sets `xlab_rank` (`strategy_ranking`), `sources` (`source_evidence`), `soe` (`soe_view` · `soe_propose` · `soe_challenge`): only the offline local legs ran; openrouter + claude_code live legs not run, local on the operator's PC; also `tengu run --sandbox xlab-w2` live; since #52 also the 11 live `codex_*` legs (open sets only) | each tool's definition of done (CLAUDE.md "How to add a new tool" step 4) | `tests/engine_matrix.rs` module table |
 | ~~Operator Review #3~~ | ✅ answered 2026-10-10 by the operator's request ("something similar to n8n"): the builder (ST-50) built, merged 2026-10-13 as #52 | — | `docs/studio-builder-2026-10-10.md` (design: `docs/studio-editor-design-2026-10-08.md`) |
 
@@ -203,10 +203,10 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | When | Do |
 |---|---|
 | Until the weekend #2 stop (Mon 2026-10-12) | the main checkout stays at `10bdbb53a27390f6a67fd73826740befe05ababe`: the frozen `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` runs from it, and its W1 load refuses origin/main's `lineage/rankings/` (verified 2026-10-08, runbook row "Before the stop"). Work in worktrees only |
-| After the stop, before `git pull` | `git checkout -- docs/forward-evidence-runbook-2026-10-08.md` (the local edit = upstream's blob `aa7ccff6f4cd980d64d2f6e6a40a47dde5676c0b`, nothing lost) · `rm TENGU_STUDIO_PLAN.md docs/strategy-ranking-automation-2026-10-08.md` (untracked older drafts; tracked upstream since #44 / #40) · `rm handoff_for_check.md` if present (not on disk, not in git on 2026-10-09) · then `git pull` |
+| After the stop, before `git pull` | `git checkout -- docs/forward-evidence-runbook-2026-10-08.md` (the local edit = upstream's blob `aa7ccff6f4cd980d64d2f6e6a40a47dde5676c0b`, nothing lost) · `rm docs/plans/TENGU_STUDIO_PLAN.md docs/strategy-ranking-automation-2026-10-08.md` (untracked older drafts; tracked upstream since #44 / #40) · `rm handoff_for_check.md` if present (not on disk, not in git on 2026-10-09) · then `git pull` |
 | Stays untracked | the private research docs of cleanup row C1 |
 
-### Studio (#44) — tracker `TENGU_STUDIO_PLAN.md` § 8
+### Studio (#44) — tracker `docs/plans/TENGU_STUDIO_PLAN.md` § 8
 
 | Item | State |
 |---|---|
@@ -264,7 +264,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | U8 | PRs #25 + #26 merged |
 | U9 | `sandboxes/xmarket` desk stays unbound |
 | U10 | forward run `VALID_WITH_LIMITATIONS` and Saturday prereg `UNRESOLVED` accepted |
-| Next | Phase 6 decision evaluation: first D1 (`data_asof` in reports), D2 (count CLI holdout reads), D3 (never prune a registered run), D11 (late funding from HL history) — `TENGU_ROADMAP.md` § Phase 6, gate G6 |
+| Next | Phase 6 decision evaluation: first D1 (`data_asof` in reports), D2 (count CLI holdout reads), D3 (never prune a registered run), D11 (late funding from HL history) — `docs/plans/TENGU_ROADMAP.md` § Phase 6, gate G6 |
 | P6 fixes (2026-10-08) | D2 `tengu backtest --split` counts its holdout reads (`via = "cli"`) · D3 retention never prunes a run the registry cites (`GenerationScope::cited_runs`) · D1 every report records `data_through_ms`, `--data-through` reruns on the same data (the warehouse-growth problem; named apart from the per-candidate `data_asof_ms`) · W1 pins re-verified: 37 OK, 0 errors |
 | D11 → Phase 9 (operator 2026-10-08) | late funding from HL `fundingHistory` needs a new opt-in tool (`hl_ctx` schema is W1-pinned, exec tools have no network); ≈ $0.015 a weekend — built with the P9 cost model |
 | P6 core (done 2026-10-08) | `tengu evidence evaluate <run dir>` (`domain/backtest/evaluation.rs`): rules · Jev · HOLD on the same candidates, per candidate + per trade, calibration, latency, cost, verdict. W1 gate run: per trade +28.93 [−23.5, +81.6] (reproduced), per candidate −35.79 [−61.9, −6.6], jev − hold +14.66 [+3.0, +27.5] ⇒ Jev UNPROVEN; G6 PASS — `docs/p6-decision-evaluation-2026-10-08.md` |
@@ -275,7 +275,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | Weekend #2 (prereg 2026-10-08) | `fwd.rule_w.2026-10-09` sealed 2026-10-08T12:56:28Z (before the 2026-10-10T00:00:00Z anchor); frozen binary `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` (sha256 `fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445`); operator start ≤ Fri 19:30 ET — `docs/forward-evidence-runbook-2026-10-08.md` |
 | Next | forward evidence: the W1 desk + recorder every weekend (operator: `tengu run --sandbox xmarket-weekend` Fri ≤ 19:30 ET; M3 go needs 12 weekends, 2 so far (since 2026-10-12)), counterfactual grading of stops / labels / net-of-cost each Monday; D11 open |
 
-## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
+## Resume here (Tue 2026-10-06) — `docs/plans/TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
 
 Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568a7`). Review package: `docs/w1-review-2026-10-06.md`. **No Phase 6+ until the operator answers APPROVE / APPROVE_WITH_FIXES / REWORK / ABORT_DIRECTION.**
 
@@ -314,7 +314,7 @@ Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kep
 | B2 | `~/.tengu/state/xmarket/` | 646 MB | xmarket paper ledger + recorder history | xmarket work finished | `rm -rf` |
 | B3 | `~/.tengu/state/research/` | 8.3 GB | `market-scan-2026-10-05/`, `qnt/`, `sliding/` research data | research finished | `rm -rf` |
 | B4 | `~/.cache/tengu-xm.noindex/tengu-xlab-f554db0` | 107 MB | xlab binary (one file) | with B1 | `rm` |
-| C1 | main checkout `docs/crypto-opportunity-research-2026-10-05.md`, `docs/crypto-opportunity-deep-dive-2026-10-06.{md,html}`, `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` | ~160 KB | private, untracked (never committed — public repo): the two crypto research docs + the three SOE planning docs (private figures; committing sanitized versions is a G-O0 item). Not C1: the untracked `TENGU_STUDIO_PLAN.md` + `docs/strategy-ranking-automation-2026-10-08.md` — tracked upstream, deleted before the post-weekend pull (§ Weekend no-pull rule) | operator decides: move somewhere private, or drop | `rm` the six files |
+| C1 | main checkout `docs/crypto-opportunity-research-2026-10-05.md`, `docs/crypto-opportunity-deep-dive-2026-10-06.{md,html}`, `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` | ~160 KB | private, untracked (never committed — public repo): the two crypto research docs + the three SOE planning docs (private figures; committing sanitized versions is a G-O0 item). Not C1: the untracked `docs/plans/TENGU_STUDIO_PLAN.md` + `docs/strategy-ranking-automation-2026-10-08.md` — tracked upstream, deleted before the post-weekend pull (§ Weekend no-pull rule) | operator decides: move somewhere private, or drop | `rm` the six files |
 | D1 | `~/.tengu/logs/` | 75 MB | `decisions.jsonl`, `egress.jsonl`, `risk.jsonl`, `tengu.log`, `maps/` (execution maps by sha256); `trace/<sandbox>/` appears once a post-#44 binary runs `tengu run` / `decide` on `~/.tengu` | no longer needed for audit | truncate or `rm` the files (the dir is recreated) |
 | D2 | `~/lping-workspace/.tengu/`, `~/.tengu/state/solana-writes.db` | 128 KB, 28 KB | lping observation cache, Solana write lease store | lping work finished | `rm -rf` / `rm` |
 | F1 | `~/tengu-lab/` | 464 KB | control-loop-lab + Studio: workspace `control-loop-lab/{in,out}` (the lab agent's only fs roots, empty); the lab `TENGU_HOME` `home/` (312 KB: `logs/trace/<sandbox>/<run_id>.jsonl`, `logs/decisions.jsonl`, `logs/maps/`, `state/`) and the Studio validation home `home-validation-2026-10-09/` (152 KB: `logs/` + `state/`; its trace `cbd8cd05-30fb-4177-aa99-0b978f0e83e5` backs `docs/studio-evidence/`) | Studio / lab work finished (after Operator Review #3) | `rm -rf ~/tengu-lab` (only ever lab data — `docs/control-loop-lab-2026-10-08.md` reset steps) |

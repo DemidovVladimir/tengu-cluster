@@ -1,6 +1,6 @@
 # Control-loop lab — baseline real-Jev run (2026-10-08)
 
-ST-03 evidence (TENGU_STUDIO_PLAN.md § 8) for `sandboxes/control-loop-lab`, run row by row against the matrix in `docs/control-loop-lab-2026-10-08.md`. **Verdict: A0–A15 all pass.** Every A1–A4 try hit (3 of 3 each). The run corrected nine details of the runbook (§ Corrections).
+ST-03 evidence (docs/plans/TENGU_STUDIO_PLAN.md § 8) for `sandboxes/control-loop-lab`, run row by row against the matrix in `docs/control-loop-lab-2026-10-08.md`. **Verdict: A0–A15 all pass.** Every A1–A4 try hit (3 of 3 each). The run corrected nine details of the runbook (§ Corrections).
 
 ## Setup
 

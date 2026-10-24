@@ -1,5 +1,5 @@
 //! `[studio]` — Tengu Studio knobs (`tengu studio`, `adapters/inbound/studio`;
-//! `TENGU_STUDIO_PLAN.md` § 6). `deny_unknown_fields`; absent = every
+//! `docs/plans/TENGU_STUDIO_PLAN.md` § 6). `deny_unknown_fields`; absent = every
 //! default.
 //!
 //! | Key | Default | Effect |

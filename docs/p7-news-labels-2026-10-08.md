@@ -1,6 +1,6 @@
 # Phase 7 — news / information labels (2026-10-08)
 
-`TENGU_ROADMAP.md` Phase 7, gate G7: do weekend moves with real-world information behave unlike thin-market noise? Built point-in-time labels for every rule W candidate and tested the label policies against rule W.
+`docs/plans/TENGU_ROADMAP.md` Phase 7, gate G7: do weekend moves with real-world information behave unlike thin-market noise? Built point-in-time labels for every rule W candidate and tested the label policies against rule W.
 
 ## Built
 

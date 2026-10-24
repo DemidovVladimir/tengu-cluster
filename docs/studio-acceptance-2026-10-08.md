@@ -8,7 +8,7 @@ the branch history; review correction 2026-10-09). Review re-run of the guards, 
 `kill -9`: § Review below.
 Lab home `TENGU_HOME=$HOME/tengu-lab/home`, sandbox `control-loop-lab` (`[studio] control = true`).
 Sanitized: the token is never shown (64 hex, length checked); the key never printed. Plan:
-`TENGU_STUDIO_PLAN.md` § 6, § 8 ST-30 / ST-31. Window 2026-10-09T06:58:03Z → 06:58:29Z.
+`docs/plans/TENGU_STUDIO_PLAN.md` § 6, § 8 ST-30 / ST-31. Window 2026-10-09T06:58:03Z → 06:58:29Z.
 
 ## Commands
 

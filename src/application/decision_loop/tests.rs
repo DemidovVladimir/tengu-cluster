@@ -1654,7 +1654,7 @@ async fn decide_terminal_returns_the_engine_error() {
     assert_eq!(line["ts_ms"], json!(T0));
 }
 
-// ── trace (TENGU_STUDIO_PLAN.md ST-12) ──────────────────────────────
+// ── trace (docs/plans/TENGU_STUDIO_PLAN.md ST-12) ──────────────────────────────
 
 use crate::application::trace_exec::tests::MemTrace;
 

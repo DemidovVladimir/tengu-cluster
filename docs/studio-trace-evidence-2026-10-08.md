@@ -1,6 +1,6 @@
 # Studio trace evidence — ST-12 / Gate 2 (2026-10-08)
 
-`TENGU_STUDIO_PLAN.md` ST-12 + Gate 2: the control-loop lab run for real, then `tengu trace show` reconstructs every run. Gate 2 is **waived by the operator's 2026-10-08 instruction**, not reviewed. Event contract: `docs/runtime-2026-09-30.md` § Trace. Runbook rows G6–G8: `docs/control-loop-lab-2026-10-08.md`.
+`docs/plans/TENGU_STUDIO_PLAN.md` ST-12 + Gate 2: the control-loop lab run for real, then `tengu trace show` reconstructs every run. Gate 2 is **waived by the operator's 2026-10-08 instruction**, not reviewed. Event contract: `docs/runtime-2026-09-30.md` § Trace. Runbook rows G6–G8: `docs/control-loop-lab-2026-10-08.md`.
 
 | Item | Value |
 |---|---|

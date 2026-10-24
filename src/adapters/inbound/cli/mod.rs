@@ -138,7 +138,7 @@ enum Commands {
         #[arg(long)]
         map: Option<PathBuf>,
     },
-    /// Tengu Studio (TENGU_STUDIO_PLAN.md): with no subcommand, the local
+    /// Tengu Studio (docs/plans/TENGU_STUDIO_PLAN.md): with no subcommand, the local
     /// browser UI (feature `studio`, on by default): loopback only, prints
     /// its URL (with a per-process token) on stdout; Play / Stop / send-event
     /// only with `[studio] control = true` or `--allow-control`. `graph`

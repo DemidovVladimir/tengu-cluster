@@ -1,5 +1,5 @@
 //! Execution trace — the versioned, correlated event envelope every runtime
-//! component writes once (`TENGU_STUDIO_PLAN.md` § 5) and Studio / `tengu
+//! component writes once (`docs/plans/TENGU_STUDIO_PLAN.md` § 5) and Studio / `tengu
 //! trace` read back. Pure data + ordering / bounding rules; the JSONL store
 //! is `adapters/outbound/trace_store.rs`, the port `ports/trace.rs`.
 //!
@@ -150,7 +150,7 @@ impl Status {
     ];
 
     /// How Studio colours a node or an edge whose latest event has this
-    /// status ([`Tone`]; `TENGU_STUDIO_PLAN.md` § 4). The one mapping:
+    /// status ([`Tone`]; `docs/plans/TENGU_STUDIO_PLAN.md` § 4). The one mapping:
     /// the board and the page's legend both read it.
     pub(crate) fn tone(self) -> Tone {
         match self {
@@ -183,7 +183,7 @@ impl Status {
     }
 }
 
-/// A Studio colour (`TENGU_STUDIO_PLAN.md` § 4 "Visual semantics"): decided
+/// A Studio colour (`docs/plans/TENGU_STUDIO_PLAN.md` § 4 "Visual semantics"): decided
 /// in Rust ([`Status::tone`], the board's legal set), served as a name; the
 /// page maps the name to a CSS token and decides nothing.
 ///

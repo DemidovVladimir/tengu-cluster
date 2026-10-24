@@ -42,7 +42,7 @@
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
 //!
-//! Trace ([`DecisionLoop::with_trace`]; `TENGU_STUDIO_PLAN.md` ST-12): each
+//! Trace ([`DecisionLoop::with_trace`]; `docs/plans/TENGU_STUDIO_PLAN.md` ST-12): each
 //! step writes, under what caused the event (`trace_exec::cause`:
 //! `loop.started`, a decide `trigger.*`):
 //!

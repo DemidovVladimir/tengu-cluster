@@ -1,6 +1,6 @@
 # ST-90 clean-room acceptance (2026-10-09)
 
-> `TENGU_STUDIO_PLAN.md` ST-90. A fresh clone of origin/main at #44 followed `docs/control-loop-lab-2026-10-08.md` and `docs/studio-2026-10-08.md` as written, then ran the repository checks. Run by a clean-room agent; recorded by the coordinator.
+> `docs/plans/TENGU_STUDIO_PLAN.md` ST-90. A fresh clone of origin/main at #44 followed `docs/control-loop-lab-2026-10-08.md` and `docs/studio-2026-10-08.md` as written, then ran the repository checks. Run by a clean-room agent; recorded by the coordinator.
 
 **Verdict: PASS.** A fresh clone follows both quick starts, and A0–A15, G1–G8, S1/S2/S4 and the Studio Play/Stop flow behave as documented. Every repository check is green. The 8 doc fixes it found are applied (§ Doc corrections).
 

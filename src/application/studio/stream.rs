@@ -1,4 +1,4 @@
-//! Studio live delivery (`TENGU_STUDIO_PLAN.md` § 5: "live transport is
+//! Studio live delivery (`docs/plans/TENGU_STUDIO_PLAN.md` § 5: "live transport is
 //! bounded and may lag; durable evidence remains replayable"): one recorded
 //! run, or the run of the runtime that holds the lease now, as a bounded
 //! per-client stream of [`StreamItem`]s. The trace file is the source

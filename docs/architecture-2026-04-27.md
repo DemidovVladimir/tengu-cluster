@@ -473,7 +473,7 @@ Sandbox `sandboxes/soe` (bound to SOE-G0): one job feed `soe_week` (`at = ["Mon 
 
 ### 2.18 Execution trace + Tengu Studio (2026-10-09)
 
-The trace is what Studio reads; the page draws what Rust computed (graph, colours, legality, health, control verdicts). Docs: `docs/studio-2026-10-08.md`, `docs/control-loop-lab-2026-10-08.md`, `docs/runtime-2026-09-30.md` § Trace, `TENGU_STUDIO_PLAN.md`; page `docs/tutorial/studio.html`.
+The trace is what Studio reads; the page draws what Rust computed (graph, colours, legality, health, control verdicts). Docs: `docs/studio-2026-10-08.md`, `docs/control-loop-lab-2026-10-08.md`, `docs/runtime-2026-09-30.md` § Trace, `docs/plans/TENGU_STUDIO_PLAN.md`; page `docs/tutorial/studio.html`.
 
 | File | What it owns |
 |---|---|

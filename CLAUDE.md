@@ -177,7 +177,7 @@ config, channels) — it is the index into everything below.
     `domain/{marketdata*,backtest/,canonical.rs}`, `ports/market_data.rs`,
     `adapters/outbound/{market_data.rs,backfill/,decision_cache.rs,tools/xlab/}`,
     `application/backtest/`, `config/backtest.rs` or `sandboxes/xlab`.
-12. **`TENGU_HANDOFF.md` + `TENGU_ROADMAP.md`** — operator intent (W1 → W2 → evolution,
+12. **`docs/plans/TENGU_HANDOFF.md` + `docs/plans/TENGU_ROADMAP.md`** — operator intent (W1 → W2 → evolution,
     gated phases, STOP at operator reviews) — and **`docs/lineage-2026-10-06.md`**:
     the `lineage/` registry (one TOML file per record), `tengu evidence` (vault,
     grade, regrade, coverage), generation binding. State: P0–P11 done, Operator
@@ -203,7 +203,7 @@ config, channels) — it is the index into everything below.
     `adapters/outbound/{soe,sources}/`, `adapters/outbound/tools/{soe,sources}/`,
     `bootstrap/soe.rs`, `adapters/inbound/cli/{soe.rs,soe/,sources.rs}`, feed kind
     `job` (`config/feeds.rs`), `skills/soe-{architect,critic}/` or `sandboxes/soe`.
-15. **`docs/studio-2026-10-08.md`** + **`TENGU_STUDIO_PLAN.md`** (delivery contract,
+15. **`docs/studio-2026-10-08.md`** + **`docs/plans/TENGU_STUDIO_PLAN.md`** (delivery contract,
     tracker § 8) — Tengu Studio: workflow graph, execution trace (envelope +
     coverage: `docs/runtime-2026-09-30.md` § Trace), routes, security model,
     Play / Stop; lab runbook `docs/control-loop-lab-2026-10-08.md`; editor designed in
@@ -265,7 +265,7 @@ flow, audit these for staleness **before declaring done**:
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
 | `src/domain/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
-| `docs/studio-2026-10-08.md` + `TENGU_STUDIO_PLAN.md` § 8 | If you changed `tengu studio` (routes, guard, control, `[studio]`, the page in `web/studio/`), `control-loop-lab` or the trace envelope / coverage (`docs/runtime-2026-09-30.md` § Trace): keep the operator doc true and tick the § 8 row (status, evidence, commit). |
+| `docs/studio-2026-10-08.md` + `docs/plans/TENGU_STUDIO_PLAN.md` § 8 | If you changed `tengu studio` (routes, guard, control, `[studio]`, the page in `web/studio/`), `control-loop-lab` or the trace envelope / coverage (`docs/runtime-2026-09-30.md` § Trace): keep the operator doc true and tick the § 8 row (status, evidence, commit). |
 | `docs/studio-evidence/` | Screenshots of the Studio page on the lab (idle · running · replay, lab `TENGU_HOME`): retake when `web/studio/` or a served view changes what the page shows. |
 | `docs/studio-builder-2026-10-10.md` + `config/builder/palette.rs` | If you changed a config field or section the builder writes (`compile::OWNED`), added an engine (`palette::engines`), a tool family it should group (`tool_group`) or a wire (`CONNECTIONS`). |
 | `docs/strategy-ranking-automation-2026-10-08.md` | If you changed the ranker, the coordinator / publisher, the ranking contract shape, `[strategy_ranking]`, cited-run retention, `tengu ranking`, the `strategy_ranking` tool or the `xlab-w2` ranking feeds: keep its as-built tables and SR states current. Never edit a sealed contract (`seal_mismatch`). |
@@ -968,7 +968,7 @@ These are not preferences. They're load-bearing.
   not applicable). Time: `domain/tz.rs` (NY / Paris DST), `domain/calendar.rs`
   (NYSE holidays, weekend window), `ports/clock.rs`.
 - **Tengu Studio (2026-10-09, `docs/studio-2026-10-08.md`, tracker
-  `TENGU_STUDIO_PLAN.md` § 8)** — the server is in the default build
+  `docs/plans/TENGU_STUDIO_PLAN.md` § 8)** — the server is in the default build
   (feature `studio`, default since 2026-10-09; a `--no-default-features`
   build without it fails naming the flag; `tengu studio graph` and `tengu
   trace` work in every build). Loopback only;
@@ -1140,7 +1140,7 @@ State 2026-10-13 (`main` = #39–#54: xlab-w2 retention, strategy ranking, SOE O
 | Seal proxy (#50) + Privy signer (#51) | operator | deploy the `tengu-seal` Worker (`npx wrangler deploy`), `CLIENTS` + provider secrets + `SESSION_KEY`, `[keys] strip` (`docs/cloudflare-secrets-setup.html`); then a Privy Solana wallet → `[solana] privy_wallet_id` + the write tools' scopes; the first live send = a separate go (real money) |
 | Studio | — | ST-90 passed 2026-10-09; Review #3 answered (builder built, #52); builder gaps: decision-loop / feed / `[[mcp_servers]]` cards, import a hand-written sandbox (`docs/SESSION_HANDOFF.md` 2026-10-10) |
 | Engine parity | — | live legs `xlab_rank` · `sources` · `soe` not run; the 11 live `codex_*` legs not run; live `local` legs (the operator's PC); `agentic_memory` live; Privy / Solana `send` |
-| Trading | — | `TENGU_ROADMAP.md` P0–P11 done (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1 kept; forward rule W evidence every weekend (M3 tally 2 / 12); P12 / P13 + trading Operator Review #2 not reached; W2 research in `xlab-w2`, history first (`docs/xlab-2026-10-01.md` § 12) |
+| Trading | — | `docs/plans/TENGU_ROADMAP.md` P0–P11 done (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1 kept; forward rule W evidence every weekend (M3 tally 2 / 12); P12 / P13 + trading Operator Review #2 not reached; W2 research in `xlab-w2`, history first (`docs/xlab-2026-10-01.md` § 12) |
 
 As of 2026-05-14, the
 agentic-memory migration (Open Brain Postgres + pgvector behind

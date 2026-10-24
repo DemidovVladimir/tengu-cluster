@@ -1,5 +1,5 @@
 # Tengu Cluster — "control-loop-lab" sandbox (2026-10-08): the safe reference run
-# of the control loop (TENGU_STUDIO_PLAN.md ST-02). One loop, one tick, one probe:
+# of the control loop (docs/plans/TENGU_STUDIO_PLAN.md ST-02). One loop, one tick, one probe:
 #
 #   [feeds.tick]  every 20 s ──► [decision_loops.demo] ──► Jev (~typesafe/jev-latest)
 #   tengu decide  (scenario) ──┘        picks hold · write_marker · read_probe

@@ -393,13 +393,13 @@ Restart=on-failure
 | `docs/xmarket-build-plan-2026-09-30.md` · `docs/xmarket-feasibility-2026-09-30.md` | Waves, gates, engine matrix · edge evidence after costs |
 | `docs/xmarket-risk-paper-2026-09-30.md` | `[risk]` gate, paper ledger, exits, weekend fade, halts, `tengu risk` |
 | `docs/xlab-2026-10-01.md` | xlab: `market.db`, spec DSL, backtest engine, Jev gate arm, tools, results |
-| `TENGU_HANDOFF.md` · `TENGU_ROADMAP.md` | Operator intent: W1 → W2 → evolution, gated phases, operator reviews |
+| `docs/plans/TENGU_HANDOFF.md` · `docs/plans/TENGU_ROADMAP.md` | Operator intent: W1 → W2 → evolution, gated phases, operator reviews |
 | `docs/lineage-2026-10-06.md` | `lineage/` registry, `tengu evidence` (vault, grade, regrade), `tengu lineage`, `[generation]` binding |
 | `docs/w1-review-2026-10-06.md` · `docs/p{6,7,8,9,10}-*-2026-10-08.md` | Operator Review #1 (verdict APPROVE) · Phases 6–11 reports (no W2 candidate built; W1 kept) |
 | `docs/forward-evidence-runbook-2026-10-08.md` | Rule W forward weekend #2: start, stop, snapshot, grade, regrade |
 | `docs/strategy-ranking-automation-2026-10-08.md` | Scheduled strategy ranking: contracts, ranker, publisher, `tengu ranking`, xlab-w2 feeds |
 | `docs/soe-2026-10-08.md` · `docs/source-evidence-2026-10-08.md` | Software Opportunity Engine contract, `tengu soe`, the weekly cycle, replay, grades, the Review #2 packet · the source layer (SEC EDGAR, EU TED, as-of view, `tengu sources`) |
-| `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` · `TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-90; ST-50 = the builder) |
+| `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` · `docs/plans/TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-90; ST-50 = the builder) |
 | `docs/studio-builder-2026-10-10.md` · `docs/studio-editor-design-2026-10-08.md` | Studio builder (`tengu sandbox new`, `--allow-edit`: cards → TOML, wires, secret stores, Finalise) · its design (ST-40; built as the builder after the operator's 2026-10-10 request) |
 | `docs/a2a-2026-10-10.md` | A2A: the `a2a` tool, `tengu a2a serve`, `[a2a]`, interop, `sandboxes/a2a-lab` |
 | `docs/sealed-keys-2026-10-09.md` · `docs/cloudflare-secrets-setup.html` · `docs/sealed-check-2026-10-09.md` | Seal proxy: Worker, routes, clients, sessions, `[keys]`, `tengu keys` · the operator's step-by-step setup (deploy, secrets, `[keys]`) · the `sealed-check` proof runbook |

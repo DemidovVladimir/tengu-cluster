@@ -1,5 +1,5 @@
 //! Orchestration in the execution trace (`domain/trace.rs`,
-//! `TENGU_STUDIO_PLAN.md` § 5): the bridge that writes one `ExecutionEvent`
+//! `docs/plans/TENGU_STUDIO_PLAN.md` § 5): the bridge that writes one `ExecutionEvent`
 //! per `OrchestratorEvent`, synchronously, when the event is sent
 //! (`EventBus::send`) — in send order, before any subscriber sees it. A
 //! surface that records hands `bootstrap::orchestrator::build_orchestrator`

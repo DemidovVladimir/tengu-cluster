@@ -1,4 +1,4 @@
-//! Studio control rules — Play / Stop / send-event (`TENGU_STUDIO_PLAN.md`
+//! Studio control rules — Play / Stop / send-event (`docs/plans/TENGU_STUDIO_PLAN.md`
 //! § 6, ST-30): which action is allowed now, and why not, from what this
 //! Studio process owns ([`Phase`]) and what the heartbeat shows
 //! ([`Seen`]). Pure; the IO — starting the runtime (`tengu run`'s

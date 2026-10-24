@@ -1,5 +1,5 @@
 //! Studio inspector — the validated config behind one graph node
-//! (`TENGU_STUDIO_PLAN.md` § 4 "Inspector": "selected node's validated
+//! (`docs/plans/TENGU_STUDIO_PLAN.md` § 4 "Inspector": "selected node's validated
 //! config"). Read from the parsed `Config` structs after `Config::load`
 //! (defaults filled in, `[default_scopes]` folded, an execution map applied
 //! by `ExecutionMap::apply`) — never from the TOML text, so a comment or a

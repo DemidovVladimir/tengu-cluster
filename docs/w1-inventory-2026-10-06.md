@@ -1,6 +1,6 @@
 # W1 — inventory, gap analysis, verification, known defects (2026-10-06)
 
-`TENGU_ROADMAP.md` Phase 1 (G1). W1 is defined from the code, not from intent. Review package: [`w1-review-2026-10-06.md`](w1-review-2026-10-06.md) · design: [`lineage-2026-10-06.md`](lineage-2026-10-06.md).
+`docs/plans/TENGU_ROADMAP.md` Phase 1 (G1). W1 is defined from the code, not from intent. Review package: [`w1-review-2026-10-06.md`](w1-review-2026-10-06.md) · design: [`lineage-2026-10-06.md`](lineage-2026-10-06.md).
 
 ## 1. What W1 is (as run vs as merged)
 

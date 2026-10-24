@@ -1,4 +1,4 @@
-//! Execution-trace ports (`domain/trace.rs`, `TENGU_STUDIO_PLAN.md` § 5).
+//! Execution-trace ports (`domain/trace.rs`, `docs/plans/TENGU_STUDIO_PLAN.md` § 5).
 //! Impl: `adapters::outbound::trace_store` (JSONL per run under
 //! `<TENGU_HOME>/logs/trace/<sandbox>/`), `adapters::outbound::noop::NoopTrace`.
 //!

@@ -1370,7 +1370,7 @@ const SUBSYSTEMS = [
       ["web/studio/", "index.html, studio.css, studio.js — embedded with include_str!; draws only"],
       ["adapters/inbound/cli/studio.rs", "tengu studio --sandbox <s> [--port --bind --allow-control --allow-edit --open] (--allow-edit: the builder at /builder) · tengu studio graph [--map] (every build)"],
     ],
-    deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The ST-40 editor design is built as the Studio builder (see that card; --allow-edit). Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
+    deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The ST-40 editor design is built as the Studio builder (see that card; --allow-edit). Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, docs/plans/TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
   },
   {
     key: "builder", title: "Studio builder (2026-10-10)",
