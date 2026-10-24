@@ -9,6 +9,14 @@ license = "MIT"
 name = "tengu"
 path = "src/main.rs"
 
+# One workspace: one Cargo.lock, one target/. `crates/tengu-seal` (the seal
+# proxy formats) is a member; the Cloudflare Worker builds for wasm32 with
+# its own lockfile, so it stays out.
+[workspace]
+members = ["crates/tengu-seal"]
+exclude = ["cloudflare/seal-worker"]
+resolver = "2"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"

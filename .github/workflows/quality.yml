@@ -44,12 +44,9 @@ jobs:
         run: cargo test --no-default-features --features telegram --bin tengu studio
 
       # Sealed keys (docs/sealed-keys-2026-10-09.md): the shared formats crate
-      # is a path dependency, not a workspace member, so `--workspace` skips
-      # its own tests; the Worker ships for wasm32, its reply-body glue tests
-      # run on the host.
-      - name: Sealed-keys formats (crates/tengu-seal)
-        run: cargo test --manifest-path crates/tengu-seal/Cargo.toml
-
+      # `crates/tengu-seal` is a workspace member (its tests run in `Tests`
+      # above); the Worker ships for wasm32 outside the workspace, its
+      # reply-body glue tests run on the host.
       - name: Seal Worker (wasm32 fmt + clippy, host tests)
         run: |
           rustup target add wasm32-unknown-unknown
