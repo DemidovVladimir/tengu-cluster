@@ -24,6 +24,7 @@ sources = [
 [pages.big-picture]
 sources = [
   "src/main.rs",
+  "src/lib.rs",
   "src/adapters/inbound/cli/mod.rs",
   "src/adapters/inbound/cli/run_agent.rs",
   "src/adapters/inbound/tui/mod.rs",
@@ -33,6 +34,7 @@ sources = [
   "src/bootstrap/orchestrator.rs",
   "src/bootstrap/sandbox.rs",
   "src/config/mod.rs",
+  "src/config/load.rs",
   "sandboxes/lping/config.toml",
 ]
 
@@ -45,13 +47,12 @@ sources = [
   "src/application/orchestrator/replan.rs",
   "src/application/orchestrator/events.rs",
   "src/application/orchestrator/trace.rs",
-  "src/application/orchestrator/wiring.rs",
   "src/application/orchestrator/mod.rs",
   "src/bootstrap/orchestrator.rs",
   "src/bootstrap/a2a.rs",
   "src/ports/orchestration.rs",
   "src/domain/plan.rs",
-  "src/config/mod.rs",
+  "src/config/agent.rs",
   "skills/orchestrator/",
 ]
 
@@ -65,8 +66,9 @@ sources = [
   "src/ports/orchestration.rs",
   "src/bootstrap/tools.rs",
   "src/application/chat/tool_loop.rs",
+  "src/application/chat/tool_loop_tests.rs",
   "src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs",
-  "src/config/mod.rs",
+  "src/config/agent.rs",
   "tests/run_agent_ipc.rs",
 ]
 
@@ -76,9 +78,11 @@ sources = [
   "src/application/tools/",
   "src/domain/message.rs",
   "src/domain/token.rs",
+  "src/domain/untrusted.rs",
   "src/domain/session.rs",
   "src/domain/usage.rs",
-  "src/config/mod.rs",
+  "src/config/agent.rs",
+  "src/config/memory.rs",
 ]
 
 [pages.engines]
@@ -107,6 +111,9 @@ sources = [
 [pages.sandboxes]
 sources = [
   "src/config/mod.rs",
+  "src/config/agent.rs",
+  "src/config/load.rs",
+  "src/config/tests.rs",
   "src/config/paths.rs",
   "src/config/sections.rs",
   "src/config/hardening.rs",
@@ -139,6 +146,7 @@ sources = [
 sources = [
   "src/application/skills/mod.rs",
   "src/application/skills/registry.rs",
+  "src/domain/skill.rs",
   "src/ports/skill_source.rs",
   "src/adapters/outbound/tools/skill/",
   "src/adapters/outbound/tools/view_skill/",
@@ -155,7 +163,7 @@ sources = [
 sources = [
   "src/application/skills/lifecycle/",
   "src/adapters/outbound/tools/skill_lifecycle/",
-  "src/adapters/inbound/eval.rs",
+  "src/adapters/inbound/eval/",
   "src/adapters/inbound/evolve.rs",
   "src/adapters/inbound/cli/skill.rs",
   "src/config/skill_lifecycle.rs",
@@ -164,8 +172,10 @@ sources = [
 [pages.channels]
 sources = [
   "src/adapters/inbound/tui/",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
+  "src/config/channels.rs",
   "src/adapters/inbound/webhooks.rs",
+  "src/adapters/inbound/run.rs",
   "src/adapters/inbound/channel.rs",
   "src/adapters/inbound/activity.rs",
   "src/ports/tool_activity.rs",
@@ -180,6 +190,7 @@ sources = [
   "src/ports/a2a.rs",
   "src/application/a2a/",
   "src/bootstrap/a2a.rs",
+  "src/bootstrap/turn.rs",
   "src/adapters/outbound/a2a/",
   "src/adapters/outbound/tools/a2a/",
   "src/adapters/inbound/a2a.rs",
@@ -198,9 +209,9 @@ sources = [
   "src/application/orchestrator/planner.rs",
   "src/bootstrap/orchestrator.rs",
   "src/adapters/inbound/mcp_bridge.rs",
-  "src/adapters/inbound/webhooks.rs",
+  "src/bootstrap/one_shot.rs",
   "src/adapters/inbound/cli/run_agent.rs",
-  "src/config/mod.rs",
+  "src/config/memory.rs",
 ]
 
 [pages.local-memory]
@@ -221,8 +232,10 @@ sources = [
 sources = [
   "src/domain/scope.rs",
   "src/config/hardening.rs",
+  "src/config/readers.rs",
   "src/adapters/outbound/tools/args.rs",
-  "src/config/mod.rs",
+  "src/config/load.rs",
+  "src/config/agent.rs",
   "src/bootstrap/tools.rs",
   "src/adapters/outbound/tools/workspace/",
   "src/adapters/inbound/mcp_bridge.rs",
@@ -239,7 +252,7 @@ sources = [
   "src/adapters/outbound/subprocess_runner.rs",
   "src/adapters/outbound/engines/claude_code.rs",
   "src/adapters/inbound/cli/doctor.rs",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "deploy/tor/",
   "docker-compose.tor.yml",
   "Makefile",
@@ -248,12 +261,14 @@ sources = [
 [pages.secrets]
 sources = [
   "src/adapters/outbound/secrets.rs",
+  "src/adapters/outbound/fs_atomic.rs",
   "src/domain/secrets.rs",
+  "src/domain/base58.rs",
   "src/adapters/inbound/cli/mod.rs",
   "src/adapters/outbound/tools/http/request.rs",
   "src/adapters/inbound/mcp_bridge.rs",
   "src/adapters/inbound/tui/mod.rs",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "src/bootstrap/decision.rs",
 ]
 
@@ -264,7 +279,7 @@ sources = [
   "src/adapters/outbound/keys/agent.rs",
   "src/adapters/inbound/cli/keys.rs",
   "src/bootstrap/sandbox.rs",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "src/adapters/outbound/solana/rpc.rs",
   "src/adapters/outbound/solana/privy.rs",
   "src/config/solana.rs",
@@ -291,6 +306,7 @@ sources = [
 [pages.lineage]
 sources = [
   "src/domain/lineage/",
+  "src/domain/canonical.rs",
   "src/ports/lineage.rs",
   "src/application/lineage/",
   "src/adapters/outbound/lineage/",
@@ -309,6 +325,7 @@ sources = [
   "src/domain/backtest/ranking.rs",
   "src/config/strategy_ranking.rs",
   "src/application/backtest/mod.rs",
+  "src/application/backtest/tests.rs",
   "src/application/ranking/",
   "src/adapters/inbound/cli/ranking.rs",
   "src/adapters/outbound/tools/xlab/rank.rs",
@@ -330,6 +347,7 @@ sources = [
   "src/ports/decision.rs",
   "src/adapters/outbound/decisions.rs",
   "src/bootstrap/decision.rs",
+  "src/bootstrap/one_shot.rs",
   "src/adapters/inbound/cli/decide.rs",
   "skills/execution-map/",
   "sandboxes/lping/config.toml",
@@ -347,6 +365,7 @@ sources = [
   "src/ports/history.rs",
   "src/adapters/inbound/cli/history.rs",
   "src/application/chat/tool_loop.rs",
+  "src/application/chat/tool_loop_tests.rs",
   "src/domain/token.rs",
 ]
 
@@ -357,19 +376,24 @@ sources = [
   "src/bootstrap/runtime.rs",
   "src/config/runtime.rs",
   "src/config/feeds.rs",
+  "src/config/feeds_tests.rs",
   "src/config/rate_limits.rs",
   "src/adapters/outbound/runtime_store.rs",
+  "src/adapters/outbound/sqlite.rs",
   "src/adapters/outbound/rate_limit.rs",
   "src/adapters/outbound/clock.rs",
   "src/domain/runtime.rs",
   "src/domain/backoff.rs",
   "src/domain/calendar.rs",
   "src/domain/tz.rs",
+  "src/domain/time.rs",
   "src/domain/schedule.rs",
+  "src/domain/schedule_tests.rs",
   "src/ports/runtime.rs",
   "src/ports/clock.rs",
   "src/adapters/outbound/http_class.rs",
   "src/config/xmarket.rs",
+  "src/config/xmarket_tests.rs",
 ]
 
 [pages.metrics]
@@ -393,8 +417,10 @@ sources = [
   "src/application/orchestrator/trace.rs",
   "src/bootstrap/runtime.rs",
   "src/application/runtime/feeds.rs",
+  "src/application/runtime/feeds_tests.rs",
   "src/application/runtime/loops.rs",
   "src/application/decision_loop/mod.rs",
+  "src/application/decision_loop/tests.rs",
   "src/adapters/inbound/cli/decide.rs",
   "src/adapters/inbound/webhooks.rs",
   "src/adapters/outbound/subprocess_runner.rs",
@@ -449,6 +475,7 @@ sources = [
   "src/adapters/outbound/tools/solana/",
   "src/adapters/outbound/solana/",
   "src/domain/solana.rs",
+  "src/domain/base58.rs",
   "src/domain/solana_tx.rs",
   "src/domain/solana_write.rs",
   "src/domain/lp/",
@@ -473,6 +500,7 @@ sources = [
   "src/adapters/outbound/hyperliquid/",
   "src/config/risk.rs",
   "src/config/xmarket.rs",
+  "src/config/xmarket_tests.rs",
   "src/adapters/inbound/cli/risk.rs",
   "src/ports/paper.rs",
   "src/ports/book.rs",
@@ -483,6 +511,7 @@ sources = [
 [pages.history]
 sources = [
   "src/domain/marketdata.rs",
+  "src/domain/time.rs",
   "src/domain/marketdata_decode.rs",
   "src/domain/marketdata_stats.rs",
   "src/domain/sec.rs",
@@ -492,6 +521,7 @@ sources = [
   "src/adapters/outbound/backfill/",
   "src/adapters/inbound/cli/history.rs",
   "src/adapters/outbound/tools/xlab/history.rs",
+  "src/adapters/outbound/tools/xlab/history_tests.rs",
 ]
 
 [pages.backtest]
@@ -516,6 +546,7 @@ sources = [
   "src/adapters/outbound/tools/soe/",
   "src/bootstrap/soe.rs",
   "src/config/soe.rs",
+  "src/config/soe_tests.rs",
   "src/adapters/inbound/cli/soe.rs",
   "src/adapters/inbound/cli/soe/",
   "tests/soe_cli.rs",

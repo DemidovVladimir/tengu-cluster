@@ -36,8 +36,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::outbound::bridge_env::{
-    TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_GRANT_WORKSPACE_ENV, TENGU_BRIDGE_MCP_SERVERS_ENV,
-    TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV, TENGU_BRIDGE_TRANSCRIPT_FILE_ENV,
+    TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_GRANT_WORKSPACE_ENV, TENGU_BRIDGE_JOURNAL_ENV,
+    TENGU_BRIDGE_MCP_SERVERS_ENV, TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV,
+    TENGU_BRIDGE_TRANSCRIPT_FILE_ENV,
 };
 use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
 use crate::adapters::outbound::memory::embedder::Embedder;
@@ -50,12 +51,10 @@ use crate::ports::memory::VectorStore;
 // The plugin set comes from `outbound::tools::register_catalog`; this file
 // stays focused on stdio JSON-RPC + executor wiring.
 use crate::adapters::inbound::activity::build_tool_activity_text;
-use crate::adapters::outbound::shell::LocalShellExecutor;
-use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
+use crate::application::tools::registry::PluginToolExecutor;
 use crate::domain::message::{Message, Role, ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
-use crate::ports::tool::PluginCtx;
 use crate::ports::tool_activity::ToolActivityPort;
 
 // ---------------------------------------------------------------------------
@@ -163,6 +162,9 @@ struct BridgeSetup {
     /// `TENGU_BRIDGE_SUMMARY_FILE`: where `compress_and_store` writes the
     /// step's summary (`StepSummary`); `None` = refused with the reason.
     summary_file: Option<PathBuf>,
+    /// `TENGU_BRIDGE_JOURNAL`: a recorded step's journal — every call's
+    /// `tool.*` events go there (`trace_store::JournalSink`); `None` = none.
+    journal: Option<PathBuf>,
     /// `TENGU_BRIDGE_TRANSCRIPT_FILE`: the run's conversation, read per call
     /// (`call_conversation`); `None` = none.
     transcript_file: Option<PathBuf>,
@@ -187,6 +189,9 @@ impl BridgeSetup {
             grant_workspace: std::env::var(TENGU_BRIDGE_GRANT_WORKSPACE_ENV)
                 .is_ok_and(|v| v == "1"),
             summary_file: std::env::var_os(TENGU_BRIDGE_SUMMARY_FILE_ENV)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+            journal: std::env::var_os(TENGU_BRIDGE_JOURNAL_ENV)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             transcript_file: std::env::var_os(TENGU_BRIDGE_TRANSCRIPT_FILE_ENV)
@@ -286,7 +291,11 @@ async fn serve_mcp_stdio(
     // Inherited vault values + master password; the bridge never prompts.
     let secrets = Arc::new(process_secret_registry(None));
     let executor: Arc<dyn ToolExecutor> = Arc::new(StepSummary {
-        inner: sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets),
+        inner: journaled(
+            &setup,
+            sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets),
+            &secrets,
+        ),
         file: setup.summary_file.clone(),
     });
     let listed = bridge_tools(&setup)?;
@@ -360,11 +369,35 @@ async fn serve_mcp_stdio(
     Ok(())
 }
 
-/// Text and typed observations come back redacted, as in-process.
+/// Text and typed observations come back redacted, as in-process; each
+/// call's egress records name its call id (`egress::AttributedExecutor`).
 fn sanitized(executor: PluginToolExecutor, secrets: &Arc<SecretRegistry>) -> Arc<dyn ToolExecutor> {
-    Arc::new(SanitizedToolExecutor::new(
-        Arc::new(executor),
-        Arc::clone(secrets),
+    Arc::new(
+        crate::adapters::outbound::egress::AttributedExecutor::call_ids(Arc::new(
+            SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(secrets)),
+        )),
+    )
+}
+
+/// A recorded step's bridge (`TENGU_BRIDGE_JOURNAL`): each call's `tool.*`
+/// events go to the step's journal, as the step's own executor's do
+/// (`cli/run_agent.rs`); node `tool:<TENGU_BRIDGE_AGENT>/<tool>`.
+fn journaled(
+    setup: &BridgeSetup,
+    executor: Arc<dyn ToolExecutor>,
+    secrets: &Arc<SecretRegistry>,
+) -> Arc<dyn ToolExecutor> {
+    let Some(path) = &setup.journal else {
+        return executor;
+    };
+    Arc::new(crate::application::trace_exec::TracedExecutor::new(
+        executor,
+        Arc::new(crate::adapters::outbound::trace_store::JournalSink::new(
+            path.clone(),
+            Arc::clone(secrets),
+        )),
+        setup.agent.as_deref().unwrap_or("main"),
+        None,
     ))
 }
 
@@ -589,7 +622,14 @@ async fn handle_tools_call(
 
     match executor.execute(&call, &conversation).await {
         Ok(result) => {
-            let truncated = truncate_mcp_result(&result, max_result_chars);
+            // The loops' sink: the same cut, outside text fenced.
+            let truncated = crate::application::chat::tool_loop::tool_result_content(
+                &call.name,
+                &result,
+                None,
+                None,
+                max_result_chars,
+            );
             info!(
                 tool = %call.name,
                 elapsed_ms = started_at.elapsed().as_millis(),
@@ -615,6 +655,14 @@ async fn handle_tools_call(
                 error = %text,
                 "MCP tool call failed"
             );
+            // As the loops feed an error back: the same cut and fence.
+            let text = crate::application::chat::tool_loop::tool_result_content(
+                &call.name,
+                &text,
+                None,
+                None,
+                max_result_chars,
+            );
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({
@@ -636,22 +684,9 @@ async fn handle_tools_call(
 /// response while preventing schema-introspection blowup.
 const MAX_MCP_RESULT_CHARS: usize = 50_000;
 
-fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
-    match crate::domain::token::truncate_at_boundary(result, max_chars) {
-        None => result.to_string(),
-        Some((prefix, end)) => format!(
-            "{}\n\n[truncated — showing {} of {} chars]",
-            prefix,
-            end,
-            result.len()
-        ),
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Tool executor construction — mirrors `crate::bootstrap::tools::build_tool_executor`
-// but is tailored for the bridge (skills from `agent_skill_registry`, no
-// cancel flag, no channel-specific activity port).
+// Tool executor inputs — the assembly is `bootstrap::tools::assemble_executor`
+// (skills from `agent_skill_registry`, no cancel flag, no channel activity).
 // ---------------------------------------------------------------------------
 
 /// Parse `TENGU_BRIDGE_SCOPES`. Unset → empty map (every tool permissive).
@@ -837,54 +872,25 @@ fn bridge_tools(setup: &BridgeSetup) -> Result<Vec<ToolDef>> {
     ))
 }
 
+/// The bridge's executor: [`crate::bootstrap::tools::assemble_executor`]
+/// for its agent (`bridge_agent_config`), its requested tools, its shell
+/// skills, memory and `[[mcp_servers]]` — the assembly in-process executors
+/// use.
 async fn build_bridge_executor(
     setup: &BridgeSetup,
     secret_registry: &Arc<SecretRegistry>,
 ) -> Result<PluginToolExecutor> {
     let workspace = setup.workspace.as_path();
-    let allowed_names: HashSet<String> = bridge_tools(setup)?.into_iter().map(|t| t.name).collect();
+    let tools = bridge_tools(setup)?;
+    let allowed_names: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
-
     let agent_config = bridge_agent_config(setup, &allowed_names)?;
-
-    let shell: Arc<dyn crate::ports::shell::ShellExecutionPort> =
-        Arc::new(LocalShellExecutor::new());
-
-    let http_client = crate::adapters::outbound::egress::policy()
-        .tool_client(std::time::Duration::from_secs(60))?;
-
-    let memory_manager_handle = bridge_memory(setup, &allowed_names).await;
+    let memory = bridge_memory(setup, &allowed_names).await;
     let memory_config = setup
         .config
         .as_ref()
         .map(|c| c.memory.clone())
         .unwrap_or_default();
-
-    let plugin_ctx = PluginCtx {
-        workspace,
-        config: &agent_config,
-        http: http_client.clone(),
-        shell: Arc::clone(&shell),
-        memory_manager: memory_manager_handle
-            .clone()
-            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
-        secret_registry: Arc::clone(secret_registry),
-    };
-
-    let mut registry = ToolRegistry::new();
-
-    // Same catalog as the in-process executor (`build_tool_executor`).
-    crate::adapters::outbound::tools::register_catalog(
-        &mut registry,
-        &plugin_ctx,
-        &allowed_names,
-        &allowed_list,
-        crate::adapters::outbound::tools::CatalogOpts {
-            cancel: None,
-            memory_config: Some(&memory_config),
-        },
-    )
-    .await;
 
     // Shell skills: loaded as `run-agent` loads them (`agent_skill_registry`
     // — none when the agent runs no shell), kept to the requested names like
@@ -901,56 +907,25 @@ async fn build_bridge_executor(
         &skill_agent,
         memory_config.enabled,
     );
-    let skill_plugin = crate::adapters::outbound::tools::skill::SkillPlugin::from_registry(&skills);
-    if let Err(e) = registry
-        .register_plugin(&skill_plugin, &plugin_ctx, &allowed_list)
-        .await
-    {
-        warn!(error = %e, "bridge: skill plugin failed — shell skills unavailable");
-    }
 
-    // `McpPlugin` only for the `[[mcp_servers]]` the Claude Code engine
-    // passed in; a standalone bridge registered in someone's own Claude Code
-    // gets none, so their MCP manifest isn't re-advertised.
-
-    // External MCP servers whose `{server}__{tool}` names were requested —
-    // proxied here so the calls go through this process's egress policy.
-    if !setup.mcp_servers.is_empty() {
-        let plugin =
-            crate::adapters::outbound::mcp_client::McpPlugin::new(setup.mcp_servers.clone());
-        if let Err(e) = registry
-            .register_plugin(&plugin, &plugin_ctx, &allowed_list)
-            .await
-        {
-            warn!(error = %e, "bridge: mcp plugin failed — external MCP tools unavailable");
-        }
-    }
-
-    // Per-tool scopes — ENFORCED, resolved exactly like
-    // `crate::bootstrap::tools::build_tool_executor`: the agent's configured
-    // entry (see `bridge_agent_config`), else `permissive_scope` — minus the
-    // shell when the agent has `no_shell_fallback` (signing sandbox).
-    let scopes = crate::bootstrap::tools::resolve_tool_scopes(
+    crate::bootstrap::tools::assemble_executor(crate::bootstrap::tools::ExecutorInputs {
         workspace,
-        &agent_config.scopes,
-        registry.tool_names(),
-        agent_config.no_shell_fallback,
-    );
-
-    Ok(PluginToolExecutor {
-        registry,
-        workspace: workspace.to_path_buf(),
-        shell: Arc::clone(&shell),
-        http: http_client,
-        memory_manager: memory_manager_handle
-            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
-        secret_registry: Arc::clone(secret_registry),
+        tools: &tools,
+        agent: &agent_config,
+        skills: &skills,
+        memory,
+        memory_config: Some(&memory_config),
+        secrets: secret_registry,
         activity: Arc::new(BridgeActivity),
-        scopes,
-        // Borrowed into every `ToolCtx.agent_config`: the same block the
-        // in-process executor hands its tools.
-        agent_config: Some(agent_config),
+        cancel: None,
+        // Only the servers the CLI engine passed in (`TENGU_BRIDGE_MCP_SERVERS`;
+        // a standalone bridge in someone's own Claude Code gets none), kept
+        // to the requested `{server}__{tool}` names, proxied here so the
+        // calls go through this process's egress policy.
+        mcp_servers: &setup.mcp_servers,
+        mcp_allow: &allowed_list,
     })
+    .await
 }
 
 #[cfg(test)]
@@ -995,6 +970,7 @@ net_hosts = ["api.hyperliquid.xyz"]
             agent: agent.map(str::to_string),
             grant_workspace: false,
             summary_file: None,
+            journal: None,
             transcript_file: None,
             env_scopes: HashMap::new(),
             mcp_servers: Vec::new(),
@@ -1099,6 +1075,53 @@ net_hosts = ["api.hyperliquid.xyz"]
         s.grant_workspace = true;
         let exec = build_bridge_executor(&s, &no_secrets()).await.unwrap();
         assert_eq!(exec.scopes["http_request"].fs_roots, [ws.path()]);
+    }
+
+    /// One assembly (`bootstrap::tools::assemble_executor`): the bridge and
+    /// an in-process executor for the same agent and tools register the same
+    /// tools under the same scopes.
+    #[tokio::test]
+    async fn bridge_and_in_process_executors_agree() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, SANDBOX).unwrap();
+        let ws = TempDir::new().unwrap();
+        let cfg = Config::load(&file).unwrap();
+        let s = setup(
+            ws.path(),
+            &["http_request", "read_file"],
+            Some(cfg.clone()),
+            Some("bridged"),
+        );
+        let bridge = build_bridge_executor(&s, &no_secrets()).await.unwrap();
+        let skills = crate::application::skills::registry::SkillRegistry::new(Vec::new());
+        let inproc = crate::bootstrap::tools::build_tool_executor(
+            ws.path(),
+            &s.tools,
+            &skills,
+            &None,
+            &no_secrets(),
+            Arc::new(BridgeActivity),
+            None,
+            Some(&cfg.memory),
+            &cfg.agents["bridged"],
+            &[],
+        )
+        .unwrap()
+        .raw;
+        let mut names = bridge.registry.tool_names();
+        names.sort();
+        let mut want = inproc.registry.tool_names();
+        want.sort();
+        assert_eq!(names, want);
+        assert_eq!(names, ["http_request", "read_file"]);
+        for n in &names {
+            assert_eq!(
+                format!("{:?}", bridge.scopes[n]),
+                format!("{:?}", inproc.scopes[n]),
+                "{n}"
+            );
+        }
     }
 
     /// Review #14: a bridge over a sandbox bound to W1 registers no tool

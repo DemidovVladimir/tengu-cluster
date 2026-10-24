@@ -58,7 +58,7 @@ Concrete scenario driving every batch below:
 | Capability | Status | Code |
 |---|---|---|
 | `skill_distill` LLM tool (the create-skill metaskill) | Shipped | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
-| `tengu eval <skill>` | Shipped | `src/adapters/inbound/eval.rs::run` |
+| `tengu eval <skill>` | Shipped | `src/adapters/inbound/eval/mod.rs::run` |
 | `tengu skill evolve <skill>` (bounded rewrite→rescore) | Shipped | `src/adapters/inbound/evolve.rs` (driver) · `src/application/skills/lifecycle/evolve.rs` (proposal / selection logic) |
 | `tengu skill metrics <skill>` | Shipped | `src/adapters/inbound/cli/skill.rs` (`SkillAction::Metrics`) |
 | `tengu skill accept-proposal` | Placeholder | `src/adapters/inbound/cli/skill.rs` (`SkillAction::AcceptProposal`) |
@@ -66,7 +66,7 @@ Concrete scenario driving every batch below:
 | Rolling `metrics.json` + `metrics/history.jsonl` + per-run reports | Shipped | `src/application/skills/lifecycle/storage.rs` |
 | Approval gate (diff + delta + y/n/d/o) | Shipped | `src/application/skills/lifecycle/approval_gate.rs` |
 | Scratch git-worktree with stale-sweep | Shipped | `src/application/skills/lifecycle/scratch_worktree.rs` |
-| Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_summaries` (planner registry) |
+| Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_names` (planner registry) |
 | Planner registry regenerated on every planner turn (no reindex step) | Shipped | `shared_files::ensure_planner_registry` |
 | Cache-discipline invariant (`loaded_in_current_conversation: false`) | Shipped | `distill.rs:226` |
 | `[skill_lifecycle]` config block | Sample only | commented sample in `config.example.toml` (no sandbox ships one) |
@@ -76,7 +76,7 @@ Concrete scenario driving every batch below:
 | `evals/config.toml` seeded by `skill_distill` | Shipped (G3) | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
 | Threat scanner on install / doctor | Shipped | `src/application/skills/lifecycle/scanner.rs` |
 | In-chat lifecycle verbs → single `learning-agent` with `view_skill` / `manage_skill` | Shipped (planner text + tools); no shipped sandbox defines `[agents.learning-agent]` — add one before use | `skills/orchestrator/SKILL.md` "Lifecycle verbs" · `src/adapters/outbound/tools/{view_skill,manage_skill}/` |
-| Per-learner sidecar state (A1) | Module landed, not wired (nothing loads or saves it) | `src/application/skills/lifecycle/learner_state.rs` |
+| Per-learner sidecar state (A1) | Not built: the unwired module was deleted 2026-10-24 (audit R4) | — |
 | `editable_by_learner` frontmatter flag (A3) | Shipped (absent = editable; only `false` refuses) — checked by `manage_skill`, `apply_improver_proposal`, `tengu skill evolve` | `skill_lifecycle/evolve.rs::is_editable_by_learner` |
 | Frontmatter load gate (`requires_bins` / `requires_env` / `os`) | Shipped 2026-10-08: an agent does not load a skill missing a prerequisite; the planner registry still lists it | `src/application/skills/registry.rs::SkillGate` |
 
@@ -93,11 +93,11 @@ Concrete scenario driving every batch below:
 | G5 | No description-triggering eval — **closed** (`description_trigger`) | Hardest-to-debug skill failure | D2 | Batch 4 |
 | G6 | No human qualitative review | Subjective skills can't be gated | D2 | Batch 5 |
 | G7 | No variance in `MetricRollup` (only pass_rate) — **closed** (`stddev/min/max`) | Hides flaky metrics | D2 | Batch 6 |
-| G8 | Conditional skill activation not enforced at planner-selection — **partly closed** 2026-10-08: the agent-side loader skips a skill missing a prereq (`SkillGate`); `scan_skill_summaries` (planner registry) does not | Skill chosen, then fails on prereq | D2 | Batch 7 |
+| G8 | Conditional skill activation not enforced at planner-selection — **partly closed** 2026-10-08: the agent-side loader skips a skill missing a prereq (`SkillGate`); `scan_skill_names` (planner registry) does not | Skill chosen, then fails on prereq | D2 | Batch 7 |
 | G9 | No in-chat trigger phrase for `skill_distill` ("create skill from our dialog") — **closed** (`learning-agent` + `manage_skill`) | Tool exists but only fires by LLM discretion | D1 (SKILL.md only) | Batch 8 |
 | G10 | No in-chat trigger for evaluate-current-dialog ("evaluate") — **closed** | CLI-only — operator must drop to terminal mid-flow | D2 | Batch 8 |
 | G11 | No reflective eval — `tengu eval` requires a pre-existing `evals/prompts.yaml`, can't use the current dialog — **closed** (`dialog_replay`) | Forces user to pre-author fixtures | D2 | Batch 8 |
-| G12 | No per-user / per-learner skill state — **module only** (`learner_state.rs` landed; no caller loads or saves it) | Two learners using `german-teacher` overwrite each other's progress | D2 (sidecar) or D3 (clones) | Batch 9 |
+| G12 | No per-user / per-learner skill state — **not built** (the unwired `learner_state.rs` was deleted 2026-10-24, audit R4) | Two learners using `german-teacher` overwrite each other's progress | D2 (sidecar) or D3 (clones) | Batch 9 |
 | G13 | No single-verb `adjust yourself` (combines evaluate + fix + resource enrichment) — **closed** | User has to chain "evaluate" → "fix it" manually | D1 (planner SKILL.md) | Batch 9 |
 | G14 | No resource enrichment — improver can't add YouTube links / book refs to a skill — **closed** (`learning-agent` calls `http_request` + `manage_skill(add_resource)`) | Learning skills go stale on resources | D2 | Batch 9 |
 | G15 | No teacher / learner role distinction — **closed** (`editable_by_learner`) | Anyone can edit the skill in any sandbox | D1 (frontmatter flag) | Batch 9 |
@@ -266,7 +266,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 
 | # | Action | File / shape |
 |---|---|---|
-| 27 | **Sidecar state writer/reader** (per A1). Schema: `{learner_id, topics_covered: [...], topics_weak: [...], mastery_scores: {topic: 0..1}, last_session_ts}`. Module: `skill_lifecycle/learner_state.rs`. Atomic write via temp + rename, same as `distill.rs:218`. | `skills/<name>/state/<learner>.json` |
+| 27 | **Sidecar state writer/reader** (per A1). Schema: `{learner_id, topics_covered: [...], topics_weak: [...], mastery_scores: {topic: 0..1}, last_session_ts}`. Module: none yet (an unwired draft was deleted 2026-10-24, audit R4). Atomic write via temp + rename, same as `distill.rs:218`. | `skills/<name>/state/<learner>.json` |
 | 28 | **`resource-finder` agent** (per A2). New `[agents.resource-finder]` block with `tools = ["http_request"]`. Identity: "Given a topic + learner gap description, find 2–5 high-quality web resources, return JSON `[{url, title, why_relevant, length}]`". Superseded — `learning-agent` calls `http_request` itself. | `[agents.learning-agent]` |
 | 29 | **Frontmatter flags** (per A3). Extend SKILL.md schema with `editable_by_learner: bool` (default `false`). `skill_lifecycle/evolve.rs` checks the flag; refuses to apply diffs from learner-mode chats unless set. | `skills/skill-creator/SKILL.md` doc + `skill_lifecycle/metrics.rs` parser |
 | 30 | **`adjust yourself` planner block.** Extend `skills/orchestrator/SKILL.md` with the trigger. Plan shape: 3 sequential steps — `skill-evaluator` (DialogReplay + load state) → `resource-finder` (only if eval reports gaps) → `skill-improver-inline` (proposal updates SKILL.md + state JSON + cites new resources). One approval gate at the end. | `skills/orchestrator/SKILL.md` |
@@ -327,7 +327,7 @@ SKL-14 second learner against same skill: state/<learner-2>.json is independent 
 Any change to `skill_lifecycle/`:
 
 ```
-cargo test --bin tengu skill_lifecycle::
+cargo test --lib skill_lifecycle::
 tengu eval skill-creator
 tengu eval orchestration-e2e
 ```
@@ -362,16 +362,15 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 | Metric kinds | `src/application/skills/lifecycle/metric_kinds/{shell_check,llm_judge,tool_assertion,script,dialog_replay,description_trigger}.rs` |
 | Rolling storage + retention | `src/application/skills/lifecycle/storage.rs` |
 | Fixture YAML + extraction | `src/application/skills/lifecycle/fixtures.rs` |
-| Eval runner | `src/adapters/inbound/eval.rs` |
+| Eval runner | `src/adapters/inbound/eval/` (CLI, rows) + `src/application/skills/lifecycle/eval.rs` (rows, judge, report) |
 | Evolve driver | `src/application/skills/lifecycle/evolve.rs` |
 | Approval gate | `src/application/skills/lifecycle/approval_gate.rs` |
 | Scratch worktree | `src/application/skills/lifecycle/scratch_worktree.rs` |
 | CLI dispatch | `src/adapters/inbound/cli/mod.rs` + `cli/skill.rs` (`Commands::Eval`, `Commands::Skill { SkillAction::Evolve \| Metrics \| AcceptProposal \| Remove \| List \| Doctor \| Export \| Install \| Seed }`) |
 | Threat scanner | `src/application/skills/lifecycle/scanner.rs` |
 | Audit log (`skills/.audit.jsonl`) | `src/application/skills/lifecycle/audit.rs` |
-| Per-learner sidecar state | `src/application/skills/lifecycle/learner_state.rs` |
 | In-chat read / write tools | `src/adapters/outbound/tools/view_skill/mod.rs` · `src/adapters/outbound/tools/manage_skill/mod.rs` |
-| Skill scan for the planner registry | `src/application/orchestrator/shared_files.rs::scan_skill_summaries` |
+| Skill scan for the planner registry | `src/application/orchestrator/shared_files.rs::scan_skill_names` |
 | In-process three-tier loader (`skill_packages`) | `src/application/skills/registry.rs::skill_directories` |
 | Cowork reference | `/var/folders/.../skills/skill-creator/{SKILL.md,scripts/,agents/,eval-viewer/}` |
 | Hermes reference | `/Users/vladimirdemidov/development/hermes-agent/{hermes_cli,tools}/skills_hub.py` + `tools/skills_guard.py` |

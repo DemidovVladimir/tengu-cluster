@@ -109,7 +109,11 @@ fn bridge_proxies_external_mcp_server_tools() {
     assert_eq!(names, ["fake__echo"], "tools/list: {listed}");
 
     let called = bridge.call(3, "fake__echo", json!({}));
-    assert_eq!(called["content"][0]["text"], "pong", "tools/call: {called}");
+    // An MCP result is outside text: fenced (`domain::untrusted`).
+    assert_eq!(
+        called["content"][0]["text"], "<untrusted origin=\"mcp:fake\">\npong\n</untrusted>",
+        "tools/call: {called}"
+    );
 }
 
 #[test]

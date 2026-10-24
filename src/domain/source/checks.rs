@@ -24,8 +24,8 @@ use super::testkit::{
     copy_of, correction_of, edited, gone, reparsed, retext, worlds, Src, World, D, H,
 };
 use crate::domain::canonical::canonical_json;
-use crate::domain::marketdata::fmt_time;
 use crate::domain::source::record::WithdrawnHow;
+use crate::domain::time::fmt_time;
 
 const MODES: [AsOfMode; 2] = [AsOfMode::Captured, AsOfMode::Knowable];
 const FLOOD_HOURS: i64 = 48;
@@ -262,7 +262,7 @@ fn flood(w: &World, t: i64, kinds: &[Flood]) -> Vec<SourceRecord> {
                     n.parsed_ms = at;
                     n.valid_from_ms = at;
                     n.valid_until_ms = n.valid_until_ms.map(|u| u.max(at + D));
-                    n.snapshots = vec![crate::domain::canonical::sha256_hex(&format!("flood {k}"))];
+                    n.snapshots = vec![crate::domain::canonical::sha256_hex(format!("flood {k}"))];
                     n.supersedes = None;
                     n.with_identity()
                 }

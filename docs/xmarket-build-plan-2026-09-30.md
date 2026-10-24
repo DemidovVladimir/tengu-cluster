@@ -31,7 +31,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Step | Command / action |
 |---|---|
 | 1 | `git switch -c feature/xmarket` from `main`, then commit the uncommitted planning docs as the first commit (`CLAUDE.md`, `AGENTS.md`, `docs/SESSION_HANDOFF.md`, `docs/tools.md`, `docs/mcp-bridge.md`, `docs/engine-backends.md`, `docs/egress-2026-09-16.md`, `docs/xmarket-*.md`) — explicit paths, never `git add -A` (done: `47fc090de426205df91425df789849466e962399`) |
-| 2 | Baseline: `cargo check --all-features`; `cargo test --test layering_lint --test scope_lint --test code_map`; one scoped unit run (`cargo test --bin tengu decision_loop`). Record failures that pre-exist — they are not yours to hide |
+| 2 | Baseline: `cargo check --all-features`; `cargo test --test layering_lint --test scope_lint --test code_map`; one scoped unit run (`cargo test --lib decision_loop`). Record failures that pre-exist — they are not yours to hide |
 | 3 | Engines ready: `OPENROUTER_API_KEY` in `.env`; Ollama with `gemma4:latest` on the operator's Windows PC (operator rule 2026-09-30: never on this Mac); `claude --version` works and is logged in (subscription). `cargo build --release --features claude_code,webhooks` |
 | 4 | Leave the throwaway weekend sampler running (`~/.tengu/state/xmarket/research/weekend-2026-10-02/`, pid in `sampler.pid`) — it is the fallback for the weekend data |
 
@@ -44,7 +44,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Parallelism | Workflows with `isolation: "worktree"` for items that touch disjoint files. Shared files — `src/adapters/outbound/tools/mod.rs` (catalog), `src/domain/tools.rs`, `src/config/mod.rs`, `docs/code-map.{md,html}`, the tracker — are edited only by the coordinator when merging. Merge one worktree at a time and run the item gate after each merge |
 | Order | Follow the waves below; inside a wave follow the tracker's M-table order unless the "After:" lines in the gaps doc allow parallel work |
 | Loop | For long waves run `/loop` (self-paced): each iteration takes the next ☐ item of the current wave, implements it, runs the item gate, commits, ticks. The loop stops at a wave gate for the full validation |
-| Tests | Scoped runs only, ≤ 30 s each (`cargo test --bin tengu <filter>`); `cargo check --all-features` and the lints at wave gates; no network in unit tests (replay fixtures committed as JSON, produced outside the repo) |
+| Tests | Scoped runs only, ≤ 30 s each (`cargo test --lib <filter>`); `cargo check --all-features` and the lints at wave gates; no network in unit tests (replay fixtures committed as JSON, produced outside the repo) |
 | Subagent prompts | Name the item id, the gaps-doc entry, the files it owns, the tests to run; forbid `git add -A`, pushes, and edits to shared files |
 | When stuck | Fix forward. If an item's design in the gaps doc is wrong, correct the doc in the same commit and note it in the tracker. Ask the operator only for the inputs in § Operator inputs |
 | Context | Keep the tracker, `docs/SESSION_HANDOFF.md` and memory current after every wave, so a new session can resume from docs alone |

@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::record::{SourceClass, SourceRecord};
-use crate::domain::marketdata::fmt_time;
+use crate::domain::time::fmt_time;
 
 /// Distinct customer-demand events that make demand: one post is not
 /// demand (PRD §5.1).

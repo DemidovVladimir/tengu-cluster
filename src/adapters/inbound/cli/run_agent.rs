@@ -13,6 +13,7 @@ use crate::config::Config;
 
 #[cfg(feature = "postgres_memory")]
 async fn try_persist_agentic_step_summary(
+    sandbox: &str,
     session_id: &str,
     step_id: &str,
     summary: &str,
@@ -39,6 +40,7 @@ async fn try_persist_agentic_step_summary(
         Err(_) => None,
     };
     crate::adapters::outbound::tools::agentic_memory::write_step_summary_with_embedding(
+        sandbox,
         session_id,
         step_id,
         summary,
@@ -47,7 +49,7 @@ async fn try_persist_agentic_step_summary(
     .await
 }
 
-/// `tengu run-agent` handler — Phase 5b (real LLM + multi-turn tool loop).
+/// `tengu run-agent` handler: one plan step, an LLM with a multi-turn tool loop.
 ///
 /// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
@@ -63,21 +65,27 @@ async fn try_persist_agentic_step_summary(
 ///    grants the workspace and writes `compress_and_store` into a summary file).
 /// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪
 ///    {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools` plus a
-///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`).
-/// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
-///    dispatch each → append assistant + tool messages → repeat. Results
-///    enter as in-process chat feeds them (`tool_loop::tool_result_content`:
-///    `limits.max_tool_result_chars`, local models fitted to the window),
-///    older rounds compacted to line 1 from turn 1 on. Stop on:
+///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`)
+///    — on a Claude Code / Codex step only the list (`bridged_step_tools`:
+///    its bridge builds the executor it calls), unless `[[mcp_servers]]`
+///    tools must be discovered by connecting.
+/// 7. Runs in-process chat's tool loop (`tool_loop::collect_engine_response`)
+///    with the step's `StepHooks` and call ids
+///    `step:<session>:<step>:<loop nonce>:<round>:<i>:<provider id>`.
+///    Results are capped and older rounds compacted as in chat. Stop on:
 ///    - empty tool_calls (model done; a Claude Code turn ends here — its
 ///      bridged `compress_and_store` summary is read from the summary file,
 ///      and the engine ends the CLI run right after that call)
-///    - `compress_and_store` invoked (capture summary, exit clean)
-///    - the agent's `limits.max_tool_rounds` exceeded (Ok when the model wrote
-///      any text — it becomes the summary — else Failed)
+///    - `compress_and_store` invoked (the hook captures the summary; the
+///      loop ends after that round)
+///    - `limits.max_tool_rounds` reached: one last call with no tools, so
+///      the model answers (Ok when it wrote any text — the last non-empty
+///      text becomes the summary — else Failed)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
 ///    per-turn `metrics` and the tool activity `tools` (every call and its
-///    outcome, bridged Claude Code calls included).
+///    outcome, bridged Claude Code calls included). The step's journal
+///    (`AgentIpcInput.journal`) already holds its tool events and metrics,
+///    written as they happened: the parent reads them however this ends.
 pub(super) async fn run_agent_subprocess() -> Result<()> {
     use crate::domain::message::{Message, Role};
     use crate::ports::engine::EngineContext;
@@ -106,13 +114,19 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         "run-agent received"
     );
 
-    // Phase 7.6 Bug B — expose session_id via env so plugins (notably
+    // Expose session_id via env so plugins (notably
     // `agentic_memory` `capture`) can stamp it on their writes without needing it
     // threaded through ToolCtx. Set BEFORE building the tool executor so any
     // plugin construction that reads it sees the right value.
     std::env::set_var("TENGU_SESSION_ID", &input.session_id);
+    // The parent's recording: this step's (and its bridge's) egress records
+    // name it (`egress::run_id`).
+    if let Some(t) = &input.trace {
+        std::env::set_var(crate::adapters::outbound::egress::RUN_ID_ENV, &t.run_id);
+    }
+    crate::bootstrap::trace::name_turn(&tracing::Span::current(), Some(&input.session_id));
 
-    // ----- Resolve parent config (Phase 7.2 sandbox inheritance) -----
+    // ----- Resolve parent config (sandbox inheritance) -----
     //
     // The child runs on the SAME config as the parent: `sandbox_config`
     // names the sandbox (`sandboxes/<name>/config.toml`), otherwise the
@@ -152,7 +166,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
     // ----- Resolve the agent: `[agents.<name>]` of that config -----
     //
-    // Phase 6.7 (C→B B-half): when `input.compose` is set, the parent has
+    // When `input.compose` is set, the parent has
     // composed a transient agent. Take the BASE block
     // `[agents.<compose.base_agent>]` (not `[agents.<input.agent_name>]`,
     // which may be a synthetic label for events/logs), then override the
@@ -233,13 +247,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         crate::adapters::outbound::soe::runner::skill_sha256(&spec, &workspace),
     );
 
-    // IPC `model` overrides the agent block's `model` when non-empty (the
-    // orchestrator can swap models per-step in the future).
-    let model = if input.model.is_empty() {
-        spec.model.clone()
-    } else {
-        input.model.clone()
-    };
+    let model = spec.model.clone();
 
     // ----- Compose system prompt: base + identity + skill bodies + suffix -----
     let mut system_prompt = String::from(BASE_AGENT_TEMPLATE);
@@ -259,25 +267,24 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             }
         }
     }
-    // Plan block: the parent's per-session `plan_state` IPC field is the
-    // source of truth; the global `TENGU_PLAN.md` is only a fallback for old
-    // parents that don't send it (it is overwritten by every session).
-    let plan_state = match input.plan_state.as_deref() {
-        Some(rendered) => crate::application::orchestrator::shared_files::plan_state_block(
-            rendered,
-            "IPC `plan_state`",
-        ),
-        None => crate::application::orchestrator::shared_files::read_plan_state_block(
-            &std::env::current_dir()?,
-        ),
-    };
+    // Plan block: the plan this step belongs to (`plan_state`; none for an
+    // SOE stage).
+    let plan_state = input
+        .plan_state
+        .as_deref()
+        .map(crate::application::orchestrator::shared_files::plan_state_block)
+        .unwrap_or_default();
     if !plan_state.is_empty() {
         system_prompt.push_str("\n\n---\n\n");
         system_prompt.push_str(&plan_state);
     }
     system_prompt.push_str(MANDATORY_SUFFIX);
 
-    // ----- Build engine (Phase 7.3 — honour the agent's engine) -----
+    // The step's journal when the parent records this step: tool events go
+    // there (from here and from a CLI engine's bridge).
+    let traced_journal = input.trace.as_ref().and(input.journal.clone());
+
+    // ----- Build engine (the agent's own `engine`) -----
     let mut agent_cfg_for_engine = crate::bootstrap::tools::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
@@ -300,6 +307,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             grant_workspace: true,
             summary_file: summary_file.as_ref().map(|f| f.path().to_path_buf()),
             config_file: None,
+            journal: traced_journal.clone(),
         },
     )
     .with_context(|| {
@@ -314,15 +322,8 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         model = %model,
         "subprocess engine built"
     );
-    let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
-    // Every result enters capped and older rounds are compacted to line 1,
-    // as `collect_engine_response` does in-process (`tool_loop` module
-    // table): `limits.max_tool_result_chars`, and for local models
-    // (`Engine::tool_result_char_cap`) the window fit.
-    let engine_result_cap = engine.tool_result_char_cap();
-    let max_tool_result_chars = spec.limits.max_tool_result_chars as usize;
 
-    // ----- Build tool stack (Phase 5b) -----
+    // ----- Build tool stack -----
     // The parent's vault values (inherited, never prompts): tool output is
     // redacted like in the parent and in a Claude Code bridge.
     let secret_registry = std::sync::Arc::new(
@@ -330,58 +331,66 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     );
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
-    // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
-    // the MemoryPlugin can register persistent_store / memory_ingest as
-    // callable handlers (not just advertised tool defs). Without this,
-    // MCP-routed Claude Code calls to those tools fail with
-    // "Tool 'X' is not available to this agent" even though the tool def is
-    // in the advertised list.
-    // The store sits in the agent's own workspace, else at `[memory]
-    // store_path` (as in-process chat and the bridge): never in a step's
-    // temp dir, which goes when the step ends.
-    let memory_manager = if parent_config.memory.enabled {
-        Some(
-            crate::bootstrap::memory::build_memory_manager_async(
-                &parent_config.memory,
-                configured_workspace.then_some(workspace.as_path()),
-            )
-            .await,
-        )
+    // A Claude Code / Codex step calls its tools in its own MCP bridge,
+    // which builds the executor (and memory manager) it runs them on: this
+    // process only needs the tool list — unless `[[mcp_servers]]` tools
+    // must be discovered by connecting (`bridged_step_tools`).
+    let bridged_tools = if crate::adapters::outbound::engines::bridges_tools(&spec.engine) {
+        crate::bootstrap::tools::bridged_step_tools(&spec, &parent_config, &workspace)
     } else {
         None
     };
-
-    let (tools, executor) = crate::bootstrap::tools::build_subprocess_tool_executor(
-        &spec,
-        &parent_config,
-        &workspace,
-        &secret_registry,
-        activity,
-        memory_manager.clone(),
-    );
+    let (tools, stack) = match bridged_tools {
+        Some(tools) => (tools, None),
+        None => {
+            // A real MemoryManager from the parent config, so the
+            // MemoryPlugin registers persistent_store / memory_ingest as
+            // callable handlers, not just advertised tool defs. The store
+            // sits in the agent's own workspace, else at `[memory]
+            // store_path` (as in-process chat and the bridge): never in a
+            // step's temp dir, which goes when the step ends.
+            let memory_manager = if parent_config.memory.enabled {
+                Some(
+                    crate::bootstrap::memory::build_memory_manager_async(
+                        &parent_config.memory,
+                        configured_workspace.then_some(workspace.as_path()),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+            crate::bootstrap::tools::build_subprocess_tool_executor(
+                &spec,
+                &parent_config,
+                &workspace,
+                &secret_registry,
+                activity,
+                memory_manager,
+            )
+        }
+    };
     // The parent records this step (`AgentIpcInput.trace`): every tool call
-    // here becomes `tool.*` drafts it writes into its run, under the step's
-    // `step.started` (`trace_exec::DraftBuffer`; outside the redaction, as a
-    // loop's `TracedExecutor`). A Claude Code step's calls run in its bridge
-    // process and are not recorded.
-    let step_trace = input.trace.as_ref().map(|t| {
-        Arc::new(crate::application::trace_exec::DraftBuffer::new(
-            t.parent_event_id.clone(),
-            input.session_id.clone(),
-            Arc::clone(&secret_registry),
-        ))
-    });
-    let executor: Option<Arc<dyn crate::ports::engine::ToolExecutor>> = executor.map(|e| {
-        let sanitized: Arc<dyn crate::ports::engine::ToolExecutor> = Arc::new(
-            crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-                Arc::new(e),
-                Arc::clone(&secret_registry),
-            ),
-        );
+    // here goes into the step's journal as `tool.*` drafts, which the parent
+    // writes into its run under the step's `step.started` on any exit
+    // (`trace_store::JournalSink`; outside the redaction, as a loop's
+    // `TracedExecutor`). A Claude Code / Codex step's calls run in its
+    // bridge, which writes the same journal (`StepOpts::journal`).
+    let step_trace: Option<Arc<dyn crate::ports::trace::TraceSink>> =
+        traced_journal
+            .as_ref()
+            .map(|path| -> Arc<dyn crate::ports::trace::TraceSink> {
+                Arc::new(crate::adapters::outbound::trace_store::JournalSink::new(
+                    path.clone(),
+                    Arc::clone(&secret_registry),
+                ))
+            });
+    let executor: Option<Arc<dyn crate::ports::engine::ToolExecutor>> = stack.map(|stack| {
+        let sanitized = stack.executor;
         match &step_trace {
-            Some(buf) => Arc::new(crate::application::trace_exec::TracedExecutor::new(
+            Some(sink) => Arc::new(crate::application::trace_exec::TracedExecutor::new(
                 sanitized,
-                buf.clone(),
+                sink.clone(),
                 &input.agent_name,
                 None,
             )),
@@ -404,7 +413,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     );
 
     // ----- Build messages + context -----
-    let mut messages = vec![
+    let messages = vec![
         Message {
             role: Role::System,
             content: system_prompt.clone(),
@@ -418,7 +427,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             tool_calls: None,
         },
     ];
-    // Phase 7.4 — when running on Claude Code engine, expose tengu's plugin
+    // On the Claude Code engine, expose tengu's plugin
     // tools to the CLI via its MCP bridge. Without this the Claude CLI only
     // has its built-in tools (Read/Write/Edit/Bash) and treats tengu tools
     // (http_request, compress_and_store, persistent_store, etc.) as unknown
@@ -445,174 +454,46 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         mcp_servers: parent_config.mcp_servers.clone(),
     };
 
-    // ----- Multi-turn loop (Phase 5b) -----
-    let mut final_text = String::new();
-    let mut summary: Option<String> = None;
-    let mut compress_called = false;
-    // Per-turn metrics records — shipped back to the parent in the IPC
-    // output so they can be re-emitted on the parent's metrics bus.
-    let mut subagent_metrics: Vec<crate::domain::metrics::MetricsRecord> = Vec::new();
-    // Tool activity in call order (IPC `tools`): calls dispatched below and
-    // the ones a Claude Code engine ran through its bridge.
-    let mut tool_runs: Vec<crate::domain::message::ToolRun> = Vec::new();
-
-    for turn in 0..input.max_turns {
-        // Compute the prompt size BEFORE the engine call so the metric
-        // record reflects what we sent. UTF-8-aware char count + byte len.
-        let prompt_chars: u32 = messages
-            .iter()
-            .map(|m| m.content.chars().count() as u32)
-            .sum();
-        let prompt_bytes: u32 = messages.iter().map(|m| m.content.len() as u32).sum();
-        let turn_started = std::time::Instant::now();
-
-        let drained = crate::application::chat::tool_loop::run_single_engine_turn(
-            engine.as_ref(),
-            &messages,
-            &tools,
-            &context,
-            None,
-            stream_event_timeout_secs,
-        )
-        .await
-        .context("engine turn failed")?;
-        tool_runs.extend(drained.engine_runs);
-        let (text, tool_calls, input_delta, output_delta) = (
-            drained.text,
-            drained.tool_calls,
-            drained.input_tokens,
-            drained.output_tokens,
-        );
-
-        // Record one metric per engine turn. `input_delta`/`output_delta`
-        // come from `StreamEvent::Usage` frames (OpenRouter + Claude Code
-        // both supply them); they're 0 when the engine doesn't return usage.
-        let rec = crate::domain::metrics::MetricsRecord {
-            ts_unix: crate::domain::metrics::now_unix(),
-            session_id: input.session_id.clone(),
-            kind: crate::domain::metrics::MetricsKind::Subagent,
-            agent: input.agent_name.clone(),
-            model: model.clone(),
-            prompt_tokens: input_delta,
-            completion_tokens: output_delta,
-            total_tokens: input_delta.saturating_add(output_delta),
-            prompt_chars,
-            prompt_bytes,
-            response_chars: text.chars().count() as u32,
-            latency_ms: turn_started.elapsed().as_millis() as u64,
-            layers: Vec::new(),
-            step_id: Some(input.step_id.clone()),
-        };
-        // Emit into the subprocess's own tracing log too (the parent forwards
-        // stderr — Phase 7.5) so the user sees the same line whether they
-        // grep the parent log or a future subprocess log file.
-        crate::application::metrics::record(rec.clone());
-        subagent_metrics.push(rec);
-
-        // If no tool calls, the model produced its final answer. Save the
-        // text and exit the loop.
-        if tool_calls.is_empty() {
-            final_text = text;
-            break;
-        }
-
-        // Append the assistant message carrying the tool_calls so the next
-        // engine turn sees the full call/result history.
-        let compact_cutoff = messages.len();
-        messages.push(Message {
-            role: Role::Assistant,
-            content: text.clone(),
-            tool_call_id: None,
-            tool_calls: Some(tool_calls.clone()),
-        });
-        if !text.is_empty() {
-            final_text = text;
-        }
-
-        // Dispatch each tool call.
-        for call in &tool_calls {
-            let (result, observation, ok) = if call.name == "compress_and_store" {
-                // Out-of-band handling: capture the summary here; with
-                // `postgres_memory` it is persisted to Postgres `agentic_memory`.
-                let extracted_summary = call
-                    .arguments
-                    .get("summary")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                summary = Some(extracted_summary.clone());
-                compress_called = true;
-                #[cfg(feature = "postgres_memory")]
-                {
-                    let _ = try_persist_agentic_step_summary(
-                        &input.session_id,
-                        &input.step_id,
-                        &extracted_summary,
-                    )
-                    .await;
-                }
-                ("stored".to_string(), None, true)
-            } else if let Some(ref exec) = executor {
-                match exec.execute_typed(call, &messages).await {
-                    Ok(out) => (out.text, out.observation, true),
-                    Err(e) => {
-                        // The error is redacted by `SanitizedToolExecutor`;
-                        // in the step's log with the model's arguments so a
-                        // failed call is diagnosable (the parent forwards
-                        // stderr).
-                        let args = call.arguments.to_string();
-                        let args = crate::domain::token::truncate_at_boundary(&args, 300)
-                            .map_or(args.as_str(), |(prefix, _)| prefix);
-                        tracing::warn!(tool = %call.name, error = %e, arguments = %args, "subagent tool call failed");
-                        (format!("tool error: {}", e), None, false)
-                    }
-                }
-            } else {
-                (
-                    format!("tool '{}' is not available in this subprocess", call.name),
-                    None,
-                    false,
-                )
-            };
-            tool_runs.push(crate::domain::message::ToolRun {
-                name: call.name.clone(),
-                ok,
-            });
-            let content = crate::application::chat::tool_loop::tool_result_content(
-                &result,
-                observation.as_ref(),
-                engine_result_cap,
-                max_tool_result_chars,
-            );
-
-            messages.push(Message {
-                role: Role::Tool,
-                content,
-                tool_call_id: Some(call.id.clone()),
-                tool_calls: None,
-            });
-        }
-        if turn >= 1 {
-            crate::application::chat::tool_loop::compact_older_tool_results(
-                &mut messages[..compact_cutoff],
-                spec.limits.compact_result_limit as usize,
-            );
-        }
-
-        if compress_called {
-            tracing::info!(
-                turn,
-                "compress_and_store invoked; exiting subagent loop cleanly"
-            );
-            break;
-        }
-
-        if turn + 1 >= input.max_turns {
-            tracing::warn!(
-                turn,
-                max_turns = input.max_turns,
-                "subagent loop hit max_turns without compress_and_store"
-            );
+    // ----- The tool loop: in-process chat's, with the step's hooks -----
+    // `compress_and_store` is answered here and ends the loop after its
+    // round; every engine turn leaves a `Subagent` metrics record. At the
+    // round cap the engine gets one last call with no tools.
+    let hooks = StepHooks::new(&input, &model);
+    let opts = crate::application::chat::tool_loop::LoopOpts {
+        max_tool_rounds: input.max_turns,
+        call_ids: format!("step:{}:{}", input.session_id, input.step_id),
+        hooks: Some(&hooks),
+        ..crate::application::chat::tool_loop::LoopOpts::from_limits(&spec.limits)
+    };
+    // Open Brain rows are stamped with (and recalled by) the owning sandbox.
+    #[cfg(feature = "postgres_memory")]
+    let memory_sandbox = parent_config.sandbox_owner();
+    let resp = crate::application::chat::tool_loop::collect_engine_response(
+        engine.as_ref(),
+        &messages,
+        &tools,
+        &context,
+        executor.as_deref(),
+        &opts,
+    )
+    .await
+    .context("engine turn failed")?;
+    // Tool activity in call order (IPC `tools`): calls run here and the ones
+    // a Claude Code engine ran through its bridge.
+    let tool_runs = resp.tool_runs;
+    let (final_text, mut summary, subagent_metrics) = hooks.finish();
+    let mut compress_called = summary.is_some();
+    if compress_called {
+        tracing::info!("compress_and_store invoked; exiting subagent loop cleanly");
+        #[cfg(feature = "postgres_memory")]
+        if let Some(text) = &summary {
+            let _ = try_persist_agentic_step_summary(
+                &memory_sandbox,
+                &input.session_id,
+                &input.step_id,
+                text,
+            )
+            .await;
         }
     }
 
@@ -629,14 +510,19 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             compress_called = true;
             #[cfg(feature = "postgres_memory")]
             {
-                let _ = try_persist_agentic_step_summary(&input.session_id, &input.step_id, &text)
-                    .await;
+                let _ = try_persist_agentic_step_summary(
+                    &memory_sandbox,
+                    &input.session_id,
+                    &input.step_id,
+                    &text,
+                )
+                .await;
             }
             summary = Some(text);
         }
     }
     // If the model never called compress_and_store, treat the final
-    // assistant text as the summary (graceful degradation, same as Phase 5a).
+    // assistant text as the summary (graceful degradation).
     let summary = summary.unwrap_or_else(|| final_text.clone());
 
     // Backstop the durable write when the subagent finished WITHOUT calling
@@ -646,7 +532,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // unchanged — recall is best-effort, not a barrier to step completion.
     #[cfg(feature = "postgres_memory")]
     if !compress_called && !summary.trim().is_empty() {
-        match try_persist_agentic_step_summary(&input.session_id, &input.step_id, &summary).await {
+        match try_persist_agentic_step_summary(
+            &memory_sandbox,
+            &input.session_id,
+            &input.step_id,
+            &summary,
+        )
+        .await
+        {
             Ok(id) => tracing::info!(
                 entry_id = %id,
                 session_id = %input.session_id,
@@ -667,7 +560,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // plan's answer (`step_output`).
     let output = step_output(&final_text, &summary, compress_called);
 
-    // Phase 5c — middle-ground protocol enforcement.
+    // Middle-ground protocol enforcement.
     // Pass:    compress_and_store called              → Ok (the canonical good path)
     // Pass:    no compress_and_store but text produced → Ok (model answered usefully)
     // Fail:    no compress_and_store AND no text       → Failed (DagExecutor retries)
@@ -687,7 +580,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             summary,
             metrics: subagent_metrics,
             tools: tool_runs,
-            trace: step_trace.as_ref().map(|b| b.take()).unwrap_or_default(),
         }
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
@@ -700,7 +592,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             output,
             metrics: subagent_metrics,
             tools: tool_runs,
-            trace: step_trace.as_ref().map(|b| b.take()).unwrap_or_default(),
         }
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
@@ -708,6 +599,92 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // The temp workspace of a step without one goes now, not earlier.
     drop(step_dir);
     Ok(())
+}
+
+/// A step's seams in the shared tool loop (`tool_loop::LoopHooks`): its
+/// `compress_and_store` summary, the last text the model wrote, and one
+/// `Subagent` metrics record per engine turn (shipped back over IPC, and
+/// appended to the step's journal as it happens: an engine error or the
+/// timeout kill leaves no IPC reply).
+struct StepHooks {
+    session_id: String,
+    step_id: String,
+    agent: String,
+    model: String,
+    summary: std::sync::Mutex<Option<String>>,
+    last_text: std::sync::Mutex<String>,
+    metrics: std::sync::Mutex<Vec<crate::domain::metrics::MetricsRecord>>,
+    /// `AgentIpcInput.journal`.
+    journal: Option<std::path::PathBuf>,
+}
+
+impl StepHooks {
+    fn new(
+        input: &crate::adapters::outbound::subprocess_runner::AgentIpcInput,
+        model: &str,
+    ) -> Self {
+        Self {
+            session_id: input.session_id.clone(),
+            step_id: input.step_id.clone(),
+            agent: input.agent_name.clone(),
+            model: model.to_string(),
+            summary: Default::default(),
+            last_text: Default::default(),
+            metrics: Default::default(),
+            journal: input.journal.clone(),
+        }
+    }
+
+    /// (last non-empty text, `compress_and_store` summary, metrics).
+    fn finish(
+        self,
+    ) -> (
+        String,
+        Option<String>,
+        Vec<crate::domain::metrics::MetricsRecord>,
+    ) {
+        (
+            self.last_text.into_inner().unwrap_or_default(),
+            self.summary.into_inner().unwrap_or_default(),
+            self.metrics.into_inner().unwrap_or_default(),
+        )
+    }
+}
+
+impl crate::application::chat::tool_loop::LoopHooks for StepHooks {
+    fn intercept(&self, call: &crate::domain::message::ToolCall) -> Option<String> {
+        (call.name == "compress_and_store").then(|| {
+            let text = call
+                .arguments
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            *self.summary.lock().unwrap() = Some(text);
+            "stored".to_string()
+        })
+    }
+
+    fn on_turn(&self, turn: &crate::application::chat::tool_loop::TurnStats<'_>) {
+        let rec = crate::domain::metrics::MetricsRecord {
+            step_id: Some(self.step_id.clone()),
+            ..turn.record(
+                crate::domain::metrics::MetricsKind::Subagent,
+                &self.session_id,
+                &self.agent,
+                &self.model,
+            )
+        };
+        // In the step's own log too (the parent forwards stderr).
+        crate::application::metrics::record(rec.clone());
+        if let Some(path) = &self.journal {
+            crate::adapters::outbound::trace_store::append_journal_metrics(path, &rec);
+        }
+        self.metrics.lock().unwrap().push(rec);
+        if !turn.text.is_empty() {
+            *self.last_text.lock().unwrap() = turn.text.to_string();
+        }
+    }
 }
 
 /// The summary a Claude Code step's bridge wrote for `compress_and_store`
@@ -757,9 +734,9 @@ const BASE_AGENT_TEMPLATE: &str = "You are a focused subagent run as a single-sh
 Read the user's goal, do exactly what is asked, and respond concisely with the result. \
 Do not ask follow-up questions — make reasonable assumptions and answer the user directly.";
 
-/// Mandatory suffix appended to every subagent system prompt — Phase 5b
-/// version. Tells the model to call `compress_and_store(summary)` as its
-/// final action; the harness captures the summary (persisted to Postgres
+/// Mandatory suffix appended to every subagent system prompt. Tells the
+/// model to call `compress_and_store(summary)` as its final action; the
+/// harness captures the summary (persisted to Postgres
 /// `agentic_memory` with `postgres_memory`) and exits the loop on that call.
 const MANDATORY_SUFFIX: &str = "\n\n---\n\n\
 When you have completed your task, your FINAL action MUST be to call the \
@@ -790,26 +767,19 @@ fn load_skill_body_three_tier(name: &str, workspace: &std::path::Path) -> Option
                 continue;
             }
         };
-        // Strip frontmatter `---<yaml>---` if present.
-        if content.starts_with("---") {
-            let after_first = &content[3..];
-            if let Some(end) = after_first.find("\n---") {
-                let mut body_start = end + 4;
-                let bytes = after_first.as_bytes();
-                if body_start < bytes.len() && bytes[body_start] == b'\n' {
-                    body_start += 1;
-                }
-                return Some(after_first[body_start..].trim_start().to_string());
-            }
-        }
-        return Some(content);
+        // The body after the `---` frontmatter, if any.
+        return Some(
+            crate::domain::skill::skill_body(&content)
+                .trim_start()
+                .to_string(),
+        );
     }
     None
 }
 
 /// The agent's own name, `role` and `[agents.<a>.identity] instructions`,
-/// as a chat turn shows them (`skills::registry::build_system_prompt`) — a
-/// plan step used to run without them. Empty when none is set.
+/// as a chat turn shows them (`skills::registry::build_system_prompt`).
+/// Empty when none is set.
 fn identity_block(spec: &crate::config::AgentConfig) -> String {
     let mut parts = Vec::new();
     if let Some(name) = spec

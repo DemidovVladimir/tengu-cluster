@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use super::SkillAction;
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::Config;
+use crate::domain::scope::shell_quote;
 
 // Memory inspection: Open Brain (Postgres `agentic_memory`) is the only durable
 // memory backend. Inspect it with SQL against `TENGU_MEMORY_DATABASE_URL` or
@@ -18,58 +19,37 @@ use crate::config::Config;
 
 use crate::application::skills::lifecycle::{audit, scanner};
 
-/// Resolve a skill directory for the given tier. `project` -> `<ws>/skills/<name>`,
-/// `workspace` -> `<ws>/.tengu/skills/<name>`, `managed` -> `~/.tengu/skills/<name>`.
+/// Resolve a skill directory for the given tier (`config::paths::skill_tiers`):
+/// `project` -> `<ws>/skills/<name>`, `workspace` -> `<ws>/.tengu/skills/<name>`,
+/// `managed` -> `<TENGU_HOME>/skills/<name>`.
 fn skill_dir_for_tier(workspace: &Path, tier: &str, name: &str) -> Result<PathBuf> {
-    match tier {
-        "project" => Ok(workspace.join("skills").join(name)),
-        "workspace" => Ok(workspace.join(".tengu").join("skills").join(name)),
-        "managed" => {
-            let home = dirs_next::home_dir()
-                .context("could not resolve home directory for managed tier")?;
-            Ok(home.join(".tengu").join("skills").join(name))
-        }
-        other => anyhow::bail!(
+    match crate::config::paths::skill_tier_root(workspace, tier) {
+        Some(root) => Ok(root.join(name)),
+        None => anyhow::bail!(
             "invalid --tier '{}' (expected: project | workspace | managed)",
-            other
+            tier
         ),
     }
 }
 
-/// Walk all three tiers and collect (tier_label, skill_dir) pairs.
+/// Walk all three tiers (project, workspace, managed) and collect
+/// (tier_label, skill_dir) pairs.
 fn enumerate_all_tiers(workspace: &Path) -> Vec<(&'static str, PathBuf)> {
     let mut out = Vec::new();
-    let project = workspace.join("skills");
-    if project.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(&project) {
-            for e in rd.flatten() {
-                if e.path().join("SKILL.md").is_file() {
-                    out.push(("project", e.path()));
-                }
-            }
-        }
-    }
-    let ws = workspace.join(".tengu").join("skills");
-    if ws.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(&ws) {
-            for e in rd.flatten() {
-                if e.path().join("SKILL.md").is_file() {
-                    out.push(("workspace", e.path()));
-                }
-            }
-        }
-    }
-    if let Some(home) = dirs_next::home_dir() {
-        let managed = home.join(".tengu").join("skills");
-        if managed.is_dir() {
-            if let Ok(rd) = std::fs::read_dir(&managed) {
-                for e in rd.flatten() {
-                    if e.path().join("SKILL.md").is_file() {
-                        out.push(("managed", e.path()));
-                    }
-                }
-            }
-        }
+    for (tier, dir) in crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .rev()
+    {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut found: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join("SKILL.md").is_file())
+            .collect();
+        found.sort();
+        out.extend(found.into_iter().map(|p| (tier, p)));
     }
     out
 }
@@ -91,13 +71,8 @@ struct SkillFrontmatterLite {
 
 fn read_frontmatter_lite(skill_md: &Path) -> Option<SkillFrontmatterLite> {
     let content = std::fs::read_to_string(skill_md).ok()?;
-    if !content.starts_with("---") {
-        return None;
-    }
-    let rest = &content[3..];
-    let end = rest.find("\n---")?;
-    let yaml_text = rest[..end].trim_start_matches('\n');
-    serde_yaml::from_str::<SkillFrontmatterLite>(yaml_text).ok()
+    let fm = crate::domain::skill::split_frontmatter(&content).ok()?;
+    serde_yaml::from_str::<SkillFrontmatterLite>(fm.yaml).ok()
 }
 
 /// True if the frontmatter declares any `Script` or `ShellCheck` metric kinds.
@@ -622,11 +597,6 @@ async fn skill_export(name: &str, out: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn shell_quote(s: &str) -> String {
-    // Conservative single-quote escaping good enough for path args.
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// `tengu skill install` — quarantine -> extract -> symlink-aware validate ->
 /// scan -> atomic move -> audit.
 async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Result<()> {
@@ -788,8 +758,7 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
 
     // Step 8: audit. sha256 over SKILL.md content.
     let skill_md_bytes = std::fs::read(install_dir.join("SKILL.md")).unwrap_or_default();
-    use sha2::{Digest, Sha256};
-    let sha = format!("{:x}", Sha256::digest(&skill_md_bytes));
+    let sha = crate::domain::canonical::sha256_hex(&skill_md_bytes);
     let entry = audit::AuditEntry {
         ts: chrono::Utc::now().to_rfc3339(),
         op: "install".to_string(),

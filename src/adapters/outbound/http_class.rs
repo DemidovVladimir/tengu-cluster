@@ -16,13 +16,38 @@
 //! Messages never carry a secret: URLs render through [`display_url`] or a
 //! [`Scrubber`]; bodies are quoted as ≤ 160-char snippets. Venue overrides
 //! (HL `500 null` ⇒ `NotApplicable`) live with the venue client.
+//!
+//! [`GatedHttp`] is the one request pipeline of the outbound API clients
+//! (HL info, SEC EDGAR, GeckoTerminal, TED, Solana RPC, `fetch_json` /
+//! `post_json`, the Privy signer):
+//!
+//! | Step | Rule |
+//! |---|---|
+//! | Gate | `egress::policy().check_url` + `scope.check_net_host` on the request's own URL; a denial is `Fatal` (scrubbed), nothing is sent |
+//! | Budget | optional [`Budget`]: the weight is acquired before sending (`Priority::Read`, ≤ `max_wait`, else `RateLimited`), the client's extra weight charged after the reply, a 429 drains the bucket (`Limiters::penalize`); `config = None` = unlimited |
+//! | Seal session | a request to the seal proxy without an `Authorization` header gets `Bearer <session>` (`keys::auth_header_for`; other hosts never see it) |
+//! | Reply | status, `Retry-After`, headers, body ([`RawReply`]) go to the client's decoder; a transport / read error is [`reqwest_error`] |
+//! | Audit | one egress record per request: the client's fields (`tool`, `path` …) + `host`, `ms`, `verdict` (`allowed` / `error` / `denied` before sending), `status`, `class` + `reason` on an error, `weight` when budgeted |
+//!
+//! [`Retry`] retries one request of a backfill / source fetch
+//! (`domain::backoff::next_delay`, `Retry-After` respected); a client that
+//! must not wait (HL info, RPC tools) has none here.
 
 use std::fmt;
+use std::future::Future;
+use std::time::{Duration, Instant};
 
+use anyhow::Result;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
-use serde_json::Value;
+use serde_json::{json, Value};
 
+use crate::adapters::outbound::rate_limit::{jitter01, Limiters, Priority};
+use crate::adapters::outbound::{egress, keys};
+use crate::config::rate_limits::RateLimitConfig;
+use crate::domain::backoff::{next_delay, BackoffPolicy, Delay};
 use crate::domain::observation::{ErrorClass, ReadError};
+use crate::domain::scope::ToolScope;
 
 /// Max chars of a response body quoted in an error message.
 const BODY_SNIPPET: usize = 160;
@@ -315,6 +340,301 @@ pub(crate) fn http_status_error(
     e
 }
 
+/// One reply as read, before its client decodes it.
+pub(crate) struct RawReply {
+    pub status: u16,
+    pub retry_after_ms: Option<u64>,
+    pub headers: reqwest::header::HeaderMap,
+    pub body: String,
+}
+
+impl RawReply {
+    pub(crate) fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The reply when 2xx, else its [`http_status_error`].
+    pub(crate) fn success(self, host: &str, scrub: &Scrubber) -> Result<Self, HttpError> {
+        if self.is_success() {
+            Ok(self)
+        } else {
+            Err(http_status_error(
+                self.status,
+                self.retry_after_ms,
+                &self.body,
+                host,
+                scrub,
+            ))
+        }
+    }
+
+    /// The reply's `Content-Type`, when readable.
+    pub(crate) fn content_type(&self) -> Option<&str> {
+        self.headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok())
+    }
+}
+
+/// The `[rate_limits.<name>]` budget one request is charged against.
+pub(crate) struct Budget<'a> {
+    pub limiters: &'static Limiters,
+    pub name: &'a str,
+    /// `None` = unlimited.
+    pub config: Option<&'a RateLimitConfig>,
+    pub weight: u32,
+    /// Longest wait for budget before the request fails `RateLimited`.
+    pub max_wait: Duration,
+}
+
+/// One request through the shared pipeline (module table: Step).
+pub(crate) struct GatedHttp<'a> {
+    scope: &'a ToolScope,
+    scrub: &'a Scrubber,
+    audit: Value,
+    budget: Option<Budget<'a>>,
+    #[cfg(test)]
+    tap: Option<&'a std::sync::Mutex<Vec<Value>>>,
+}
+
+impl<'a> GatedHttp<'a> {
+    /// `audit` = the client's own fields of the egress record (`tool`, …).
+    pub(crate) fn new(scope: &'a ToolScope, scrub: &'a Scrubber, audit: Value) -> Self {
+        Self {
+            scope,
+            scrub,
+            audit,
+            budget: None,
+            #[cfg(test)]
+            tap: None,
+        }
+    }
+
+    pub(crate) fn budget(mut self, budget: Budget<'a>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// Tests: every audit record is also pushed here.
+    #[cfg(test)]
+    pub(crate) fn tap(mut self, tap: Option<&'a std::sync::Mutex<Vec<Value>>>) -> Self {
+        self.tap = tap;
+        self
+    }
+
+    /// Send `req`; `decode` turns the reply (any status) into the result.
+    pub(crate) async fn send<T>(
+        self,
+        req: reqwest::RequestBuilder,
+        decode: impl FnOnce(RawReply) -> Result<T, HttpError>,
+    ) -> Result<T, HttpError> {
+        self.send_weighted(req, decode, |_| 0).await
+    }
+
+    /// [`Self::send`], charging `extra(&result)` more weight after the reply.
+    pub(crate) async fn send_weighted<T>(
+        mut self,
+        req: reqwest::RequestBuilder,
+        decode: impl FnOnce(RawReply) -> Result<T, HttpError>,
+        extra: impl FnOnce(&T) -> u32,
+    ) -> Result<T, HttpError> {
+        let (client, req) = req.build_split();
+        let mut req = match req {
+            Ok(r) => r,
+            Err(e) => {
+                let err = HttpError::new(
+                    ErrorClass::Fatal,
+                    self.scrub
+                        .scrub(&format!("request not built: {}", e.without_url())),
+                );
+                self.audit(Err(&err), None, 0);
+                return Err(err);
+            }
+        };
+        let host = req.url().host_str().unwrap_or("").to_string();
+        self.audit["host"] = host.clone().into();
+        let weight = self.budget.as_ref().map_or(0, |b| b.weight);
+
+        let gate = egress::policy()
+            .check_url(req.url())
+            .and_then(|_| self.scope.check_net_host(&host));
+        if let Err(e) = gate {
+            let err = HttpError::new(ErrorClass::Fatal, self.scrub.scrub(&format!("{e:#}")));
+            self.audit(Err(&err), None, weight);
+            return Err(err);
+        }
+        if let Some(b) = &self.budget {
+            if let Err(err) = b
+                .limiters
+                .acquire(b.name, b.config, b.weight, Priority::Read, b.max_wait)
+                .await
+            {
+                self.audit(Err(&err), None, weight);
+                return Err(err);
+            }
+        }
+        let session = keys::auth_header_for(req.url().as_str());
+        add_session(&mut req, session);
+
+        let started = Instant::now();
+        let result = match client.execute(req).await {
+            Err(e) => Err(reqwest_error(e, &host, self.scrub)),
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let retry_after_ms = retry_after_ms(resp.headers());
+                let headers = resp.headers().clone();
+                match resp.text().await {
+                    Err(e) => Err(reqwest_error(e, &host, self.scrub)),
+                    Ok(body) => decode(RawReply {
+                        status,
+                        retry_after_ms,
+                        headers,
+                        body,
+                    })
+                    .map(|v| (status, v)),
+                }
+            }
+        };
+        let ms = Some(started.elapsed().as_millis() as u64);
+        match result {
+            Ok((status, v)) => {
+                let extra = extra(&v);
+                if let Some(b) = &self.budget {
+                    b.limiters.charge(b.name, b.config, extra);
+                }
+                self.audit(Ok(status), ms, weight + extra);
+                Ok(v)
+            }
+            Err(err) => {
+                if let Some(b) = self.budget.as_ref() {
+                    if err.class == ErrorClass::RateLimited {
+                        b.limiters.penalize(b.name, b.config, err.retry_after_ms);
+                    }
+                }
+                self.audit(Err(&err), ms, weight);
+                Err(err)
+            }
+        }
+    }
+
+    fn audit(&mut self, outcome: Result<u16, &HttpError>, ms: Option<u64>, weight: u32) {
+        let event = audit_record(
+            std::mem::take(&mut self.audit),
+            outcome,
+            ms,
+            self.budget.as_ref().map(|_| weight),
+        );
+        #[cfg(test)]
+        if let Some(tap) = self.tap {
+            tap.lock().unwrap().push(event.clone());
+        }
+        egress::policy().audit(event);
+    }
+}
+
+/// The egress record of one request (module table: Audit).
+pub(crate) fn audit_record(
+    mut event: Value,
+    outcome: Result<u16, &HttpError>,
+    ms: Option<u64>,
+    weight: Option<u32>,
+) -> Value {
+    event["ms"] = json!(ms);
+    if let Some(w) = weight {
+        event["weight"] = w.into();
+    }
+    match outcome {
+        Ok(status) => {
+            event["verdict"] = "allowed".into();
+            event["status"] = status.into();
+        }
+        Err(e) => {
+            event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
+            event["class"] = e.class.as_str().into();
+            event["reason"] = e.message.clone().into();
+            if let Some(s) = e.http_status {
+                event["status"] = s.into();
+            }
+        }
+    }
+    event
+}
+
+/// `Authorization: <session>` on a seal-proxy request that has none.
+fn add_session(req: &mut reqwest::Request, session: Option<String>) {
+    let Some(value) = session.and_then(|s| reqwest::header::HeaderValue::from_str(&s).ok()) else {
+        return;
+    };
+    req.headers_mut().entry(AUTHORIZATION).or_insert(value);
+}
+
+/// Retry of one backfill / source request (module doc).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Retry {
+    pub policy: BackoffPolicy,
+    /// A `Park` (quota, a long `Retry-After`) up to this long is waited out;
+    /// longer fails the request.
+    pub max_park_ms: u64,
+}
+
+impl Retry {
+    /// Operator backfills: 5 retries, 1 s … 60 s full jitter, parks ≤ 5 min.
+    pub(crate) const BACKFILL: Retry = Retry {
+        policy: BackoffPolicy {
+            base_ms: 2_000,
+            cap_ms: 60_000,
+            min_ms: 1_000,
+            max_attempts: 5,
+            quota_park_ms: 3_600_000,
+        },
+        max_park_ms: 300_000,
+    };
+
+    /// A tool call's backfill (`market_history` `fetch`): a model waits for
+    /// it — 2 retries, 250 ms … 5 s, parks ≤ 10 s.
+    pub(crate) const TOOL: Retry = Retry {
+        policy: BackoffPolicy {
+            base_ms: 500,
+            cap_ms: 5_000,
+            min_ms: 250,
+            max_attempts: 2,
+            quota_park_ms: 3_600_000,
+        },
+        max_park_ms: 10_000,
+    };
+
+    /// `call` until it succeeds or `next_delay` stops (the error is then
+    /// returned). `what` labels the log line.
+    pub(crate) async fn run<T, F, Fut>(&self, what: &str, mut call: F) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        let mut attempt = 0u32;
+        loop {
+            let err = match call().await {
+                Ok(v) => return Ok(v),
+                Err(e) => e,
+            };
+            attempt += 1;
+            let r = read_error(what, &err);
+            let wait =
+                match next_delay(r.class, attempt, r.retry_after_ms, &self.policy, jitter01()) {
+                    Delay::Retry(ms) => ms,
+                    Delay::Park(ms) if ms <= self.max_park_ms => ms,
+                    Delay::Park(_) | Delay::Stop => return Err(err),
+                };
+            tracing::warn!(
+                what,
+                class = r.class.as_str(),
+                attempt,
+                wait_ms = wait,
+                error = %r.message,
+                "request failed; retrying"
+            );
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
+    }
+}
+
 /// Local HTTP server + client for outbound tests (no network).
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -323,7 +643,21 @@ pub(crate) mod test_support {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    use super::Retry;
+    use crate::domain::backoff::BackoffPolicy;
     use crate::domain::scope::ToolScope;
+
+    /// No real waits: 1 – 10 ms between attempts.
+    pub(crate) const FAST: Retry = Retry {
+        policy: BackoffPolicy {
+            base_ms: 1,
+            cap_ms: 10,
+            min_ms: 1,
+            max_attempts: 3,
+            quota_park_ms: 10,
+        },
+        max_park_ms: 10,
+    };
 
     pub(crate) struct Canned {
         pub status: u16,
@@ -449,6 +783,175 @@ mod tests {
             HeaderValue::from_static("Wed, 30 Sep 2026 13:39:41 GMT"),
         );
         assert_eq!(retry_after_ms(&h), None);
+    }
+
+    #[tokio::test]
+    async fn retry_retries_transient_and_stops_on_fatal() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let got = test_support::FAST
+            .run("t", || {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if n < 2 {
+                        Err(HttpError::new(ErrorClass::Transient, "502").into())
+                    } else {
+                        Ok(n)
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(got, 2);
+
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let e = test_support::FAST
+            .run("t", || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Err::<(), _>(HttpError::new(ErrorClass::Fatal, "404").into()) }
+            })
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("404"));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "no retry"
+        );
+
+        // Retries run out: the last error is returned.
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        assert!(test_support::FAST
+            .run("t", || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Err::<(), _>(HttpError::new(ErrorClass::Timeout, "slow").into()) }
+            })
+            .await
+            .is_err());
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            4,
+            "1 + 3 retries"
+        );
+
+        // A Retry-After beyond the park limit is not waited out.
+        let mut slow = HttpError::new(ErrorClass::RateLimited, "429");
+        slow.retry_after_ms = Some(60_000);
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        assert!(test_support::FAST
+            .run("t", || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let e = slow.clone();
+                async move { Err::<(), _>(e.into()) }
+            })
+            .await
+            .is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// One pipeline: a scope denial sends nothing; a 2xx is decoded and
+    /// charged its weight + extra; a non-2xx is classified; one audit
+    /// record each.
+    #[tokio::test]
+    async fn gated_http_gates_budgets_and_audits() {
+        use test_support::{canned, local_scope, serve, test_client};
+        let (base, seen) = serve(vec![canned(200, "[1,2,3]"), canned(503, "busy")]).await;
+        let url = Url::parse(&format!("{base}/x")).unwrap();
+        let scrub = Scrubber::for_api(&url);
+        let tap = std::sync::Mutex::new(Vec::new());
+        let limiters: &'static Limiters = Box::leak(Box::new(Limiters::default()));
+        let cfg = RateLimitConfig {
+            per_minute: 600,
+            burst: None,
+            exec_reserve: 0,
+        };
+        let budget = || Budget {
+            limiters,
+            name: "t",
+            config: Some(&cfg),
+            weight: 2,
+            max_wait: Duration::ZERO,
+        };
+        let fields = json!({"tool": "t", "path": "/x"});
+
+        let other = ToolScope {
+            net_hosts: vec!["other.host".into()],
+            ..Default::default()
+        };
+        let e = GatedHttp::new(&other, &scrub, fields.clone())
+            .budget(budget())
+            .tap(Some(&tap))
+            .send(test_client().get(url.clone()), |r| Ok(r.body))
+            .await
+            .unwrap_err();
+        assert_eq!(e.class, ErrorClass::Fatal);
+
+        let scope = local_scope();
+        let n = GatedHttp::new(&scope, &scrub, fields.clone())
+            .budget(budget())
+            .tap(Some(&tap))
+            .send_weighted(
+                test_client().get(url.clone()),
+                |r| {
+                    serde_json::from_str::<Vec<u32>>(&r.body)
+                        .map_err(|e| HttpError::new(ErrorClass::Decode, e.to_string()))
+                },
+                |v| v.len() as u32,
+            )
+            .await
+            .unwrap();
+        assert_eq!(n, vec![1, 2, 3]);
+
+        let e = GatedHttp::new(&scope, &scrub, fields)
+            .budget(budget())
+            .tap(Some(&tap))
+            .send(test_client().get(url.clone()), |r| {
+                r.success("127.0.0.1", &scrub).map(|r| r.body)
+            })
+            .await
+            .unwrap_err();
+        assert_eq!((e.class, e.http_status), (ErrorClass::Transient, Some(503)));
+        assert_eq!(seen.lock().unwrap().len(), 2, "the denial sent nothing");
+
+        let ev = tap.lock().unwrap();
+        assert_eq!(ev.len(), 3);
+        for e in ev.iter() {
+            assert_eq!((&e["tool"], &e["path"]), (&json!("t"), &json!("/x")));
+            assert_eq!(e["host"], "127.0.0.1");
+        }
+        assert_eq!(
+            (&ev[0]["verdict"], &ev[0]["class"]),
+            (&json!("denied"), &json!("fatal"))
+        );
+        assert!(ev[0]["ms"].is_null());
+        assert_eq!(
+            (&ev[1]["verdict"], &ev[1]["status"]),
+            (&json!("allowed"), &json!(200))
+        );
+        assert_eq!(ev[1]["weight"], 5, "2 + 3 items");
+        assert_eq!(
+            (&ev[2]["verdict"], &ev[2]["status"]),
+            (&json!("error"), &json!(503))
+        );
+        assert_eq!(ev[2]["class"], "transient");
+        assert!(ev[2]["ms"].is_u64());
+    }
+
+    /// The seal session goes on a request that has no `Authorization` yet.
+    #[test]
+    fn the_session_never_replaces_a_header() {
+        let c = test_support::test_client();
+        let mut r = c.get("http://127.0.0.1/x").build().unwrap();
+        add_session(&mut r, None);
+        assert!(r.headers().get(AUTHORIZATION).is_none());
+        add_session(&mut r, Some("Bearer s1".into()));
+        assert_eq!(r.headers()[AUTHORIZATION], "Bearer s1");
+        let mut r = c
+            .get("http://127.0.0.1/x")
+            .header(AUTHORIZATION, "Bearer own")
+            .build()
+            .unwrap();
+        add_session(&mut r, Some("Bearer s1".into()));
+        assert_eq!(r.headers()[AUTHORIZATION], "Bearer own");
     }
 
     #[test]

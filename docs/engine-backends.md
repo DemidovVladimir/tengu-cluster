@@ -5,8 +5,8 @@ Tengu supports four engine backends (`openrouter`, `local`, `claude_code`, `code
 ## OpenRouter (`engine = "openrouter"`)
 
 **Transport:** HTTP JSON to OpenRouter API
-**Feature flag:** none — always built (the `openrouter` cargo feature is an empty marker, on by default)
-**File:** `src/adapters/outbound/engines/openrouter.rs` (`build_engine` in `engines/mod.rs`)
+**Feature flag:** none — always built (the `openrouter` cargo feature is a no-op, kept for old build commands)
+**File:** `src/adapters/outbound/engines/openrouter.rs` (`build_engine` in `engines/mod.rs`); the wire layer it shares with `local` is `engines/openai_compat.rs`
 
 The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.).
 
@@ -33,7 +33,7 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 
 **Transport:** HTTP JSON to a locally hosted OpenAI-compatible server (`POST /v1/chat/completions`, OpenAI `tools`)
 **Feature flag:** none (always built)
-**File:** `src/adapters/outbound/engines/local.rs` (`LocalEngine`)
+**File:** `src/adapters/outbound/engines/local.rs` (`LocalEngine`; wire layer `engines/openai_compat.rs`, as OpenRouter — an upstream `error` object or an `error` finish is an error event, never text)
 
 | Server | Start | `base_url` | Key |
 |---|---|---|---|
@@ -59,7 +59,7 @@ api_key_env = "UNSLOTH_API_KEY" # unset/empty env → no Authorization header
 |---|---|
 | Network | Direct connection (`no_proxy`), not part of `[egress]` — works with Tor on or down. Keep `base_url` on this host / LAN |
 | Tool calling | model/server dependent — needs a tool-capable chat template (llama.cpp: `--jinja`) |
-| Planner role | OK (plain chat completions, tools stripped like OpenRouter) — small models may emit bad plan JSON: it is parsed once, never retried (`planner.rs::parse_verdict`: prose becomes a direct reply, an empty reply fails the turn) |
+| Planner role | OK (plain chat completions; `PlannerLlm::call` sends no tools, like OpenRouter) — small models may emit bad plan JSON: it is parsed once, never retried (`planner.rs::parse_verdict`: prose becomes a direct reply, an empty reply fails the turn) |
 | `unsloth start <agent>` | Not used — that launches *external* agent CLIs (Claude Code, Codex, Hermes…) against Unsloth. Tengu talks to the server directly |
 | Verified | 2026-09-23: `run-agent` step on Ollama `gemma4:latest`, Tor-default policy with Tor down → `compress_and_store` called, `status=ok` |
 
@@ -106,13 +106,13 @@ Live check: § Engine matrix below — the local legs run against the operator's
 ## Claude Code (`engine = "claude_code"`)
 
 **Transport:** `claude` CLI subprocess, `-p --output-format stream-json` (NDJSON on stdout)
-**Feature flag:** `claude_code` (opt-in: `cargo build --features claude_code`)
+**Feature flag:** none — always built (the `claude_code` cargo feature is a no-op, kept for old build commands)
 **File:** `src/adapters/outbound/engines/claude_code.rs`
 
 Runs agents through the local Claude Code CLI. Uses the operator's Claude subscription instead of API tokens (`ANTHROPIC_API_KEY` is removed from the child env). A parent Claude Code session's env is removed too (`claude_code.rs::parent_session_env`: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, every `CLAUDE_CODE_*` but auth / provider), so a nested `claude` — tengu run from inside Claude Code — starts like one from the operator's terminal.
 
 ### How it works
-1. `Engine::run()` formats the conversation into one prompt and spawns `claude -p --output-format stream-json --verbose --dangerously-skip-permissions --no-session-persistence --strict-mcp-config [--model <bare slug>] --system-prompt <sp> --tools <profile list>` with `current_dir` = workspace (args: `claude_code.rs::cli_args`); the system prompt rides on `--system-prompt` only — a system message equal to it is left out of the stdin prompt (`format_prompt`); profile `none` adds `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (§ Safety Policy). A `run-agent` step builds it with `engines::build_step_engine` (`StepOpts`): its bridge grants the workspace (`TENGU_BRIDGE_GRANT_WORKSPACE`) and serves `compress_and_store` into the step's summary file (`TENGU_BRIDGE_SUMMARY_FILE`, the step's IPC summary) — [[mcp-bridge]] § Dispatch. A step always has a workspace, so the bridge always starts: the agent's, else a `tengu-step-*` temp dir for that step, removed after it (`bootstrap::tools::workspace_or_temp`; the executor uses the same dir, the memory store then sits at `[memory] store_path`; a webhook or `tengu tool turn` one-shot likewise, per turn). `tengu eval` sets `StepOpts.config_file` instead: the bridge loads the expanded eval config (`TENGU_CONFIG`) and runs tools as that eval agent
+1. `Engine::run()` formats the conversation into one prompt (`cli_run::format_prompt`: one `<turn role="…">` block per message, `turn` tags stripped from the bodies so none forges a turn) and spawns `claude -p --output-format stream-json --verbose --dangerously-skip-permissions --no-session-persistence --strict-mcp-config [--model <bare slug>] --system-prompt <sp> --tools <profile list>` with `current_dir` = workspace (args: `claude_code.rs::cli_args`); the system prompt rides on `--system-prompt` only — a system message equal to it is left out of the stdin prompt (`format_prompt`); profile `none` adds `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (§ Safety Policy). A `run-agent` step builds it with `engines::build_step_engine` (`StepOpts`): its bridge grants the workspace (`TENGU_BRIDGE_GRANT_WORKSPACE`) and serves `compress_and_store` into the step's summary file (`TENGU_BRIDGE_SUMMARY_FILE`, the step's IPC summary) — [[mcp-bridge]] § Dispatch. A step always has a workspace, so the bridge always starts: the agent's, else a `tengu-step-*` temp dir for that step, removed after it (`bootstrap::tools::workspace_or_temp`; the executor uses the same dir, the memory store then sits at `[memory] store_path`; a webhook or `tengu tool turn` one-shot likewise, per turn). `tengu eval` sets `StepOpts.config_file` instead: the bridge loads the expanded eval config (`TENGU_CONFIG`) and runs tools as that eval agent
 2. `[egress]`: with `route_llm_api` (default under Tor) the child gets `HTTPS_PROXY` / `HTTP_PROXY` = HTTP CONNECT form of the proxy (`socks5h://h:p` → `http://h:p`, Arti serves CONNECT on 9050) and `NO_PROXY=localhost,127.0.0.1,::1` (`egress::claude_cli_env`)
 3. Claude CLI loads its own CLAUDE.md and native tools — not under profile `none`, which loads no settings file, hook, plugin, skill, CLAUDE.md / AGENTS.md or auto-memory. MCP: `--strict-mcp-config` on every run — only the `--mcp-config` servers (the tengu bridge); the operator's user / project / plugin MCP servers are never loaded (no bridge ⇒ no MCP server)
 4. Tengu tools (`EngineContext.bridge_tools`) are written to a temp `--mcp-config` that launches `tengu mcp-bridge` ([[mcp-bridge]]); each is allow-listed as `--allowedTools mcp__tengu-tools__<name>`; the sandbox's `[[mcp_servers]]` reach Claude only through the bridge — named in the file, never their config (a `${VAR}` value `Config::load` expanded stays out of it): the bridge takes them from the config it loads
@@ -130,20 +130,23 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 - `supports_tool_use()` = `true` — tools handled internally
 - Each turn spawns a fresh CLI process (~1-2s overhead)
 - Conversation history formatted into the prompt (stateless sessions)
-- Idle timeout between stream events = `[agents.<id>.limits] stream_event_timeout_secs`; `[claude_code] cli_path` locates the binary
+- One run loop for both CLI engines: `cli_run::drive` (each engine keeps its args, env policy and line parser); `[claude_code] cli_path` locates the binary
+- Silence: an empty `ThinkingDelta` every 30 s (`cli_run::KEEPALIVE_SECS`) keeps the caller's clock at 0 during a long bridged tool or thought; no output for `[agents.<id>.limits] stream_event_timeout_secs` kills the CLI (`Claude CLI idle timeout — no output for 120s`)
+- Stderr is drained while the CLI runs: a chatty CLI never stalls on a full pipe. A non-zero exit with no answer is an error carrying stderr's tail (`Claude CLI exited with exit status: 1: Not logged in …`); after an answer it is only a warn
+- A caller that drops the stream (cancel, its own timeout) stops the CLI at once
 - `model` is the bare slug (`claude-sonnet-4-6`), not the OpenRouter form
 - Uses Claude subscription, no per-token cost
-- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner turn gets no bridge tools and no `[[mcp_servers]]` (`bootstrap::orchestrator::run_turn_inner`, test `planner_turn_gets_no_bridge_tools`), so the CLI has no tool and writes plan JSON; another profile keeps its built-ins. Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
+- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner call gets no bridge tools and no `[[mcp_servers]]` (`application/orchestrator/planner.rs::PlannerLlm::call`, test `planner_call_has_no_hands_and_reports_usage`), so the CLI has no tool and writes plan JSON; another profile on the `[orchestrator]` agent fails the load (2026-10-23, `config/readers.rs`). Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
 
 ### Builtin Tools Profiles
 
-Configured via `[agents.<id>.claude_code].builtin_tools_profile` (one of `config::CLAUDE_CODE_PROFILES`, the list the engine's parser and config validation share; default `editor_shell`; read trimmed — `" none"` is `none` — and an unknown value is a load error, never a silent `editor_shell`). Applies to subagents too — `run-agent` builds the child engine from the parent's `[agents.<name>]` block (`bootstrap::tools::subagent_config` → `adapters::outbound::engines::build_step_engine`).
+Configured via `[agents.<id>.claude_code].builtin_tools_profile` (one of `config::CLAUDE_CODE_PROFILES`, the list the engine's parser and config validation share; default `none` since 2026-10-22, was `editor_shell`; read trimmed — `" none"` is `none` — and an unknown value is a load error, never a silent `editor_shell`). Applies to subagents too — `run-agent` builds the child engine from the parent's `[agents.<name>]` block (`bootstrap::tools::subagent_config` → `adapters::outbound::engines::build_step_engine`).
 
 | Profile | Claude Native Tools (`--tools`) |
 |---------|-------------------|
 | `none` | (none) |
 | `read_only` | Read, Glob, Grep |
-| `research` | Read, Glob, Grep, WebSearch — the search runs at Anthropic on the subscription; no WebFetch (it would fetch from this machine outside tengu egress and scopes): pages go through tengu's `http_request` (scopes, egress, audit). Not allowed in a hardened sandbox (only `none` is) |
+| `research` | WebSearch — the search runs at Anthropic on the subscription; no Read / Glob / Grep (not workspace-bound: a research agent read the xpower state dir with them, 2026-10-19); no WebFetch (it would fetch from this machine outside tengu egress and scopes): pages go through tengu's `http_request` (scopes, egress, audit). Not allowed in a hardened sandbox (only `none` is) |
 | `editor` | Read, Glob, Grep, Edit, Write, MultiEdit |
 | `editor_shell` | Read, Glob, Grep, Edit, Write, MultiEdit, Bash |
 
@@ -157,9 +160,9 @@ The CLI runs with `--dangerously-skip-permissions`; there is no per-call permiss
 |---|---|
 | Builtin tools | `--tools` per profile (above) |
 | MCP servers | `--strict-mcp-config`: the tengu bridge only, never the operator's own |
-| Settings, hooks, plugins, instructions (profile `none`) | `--setting-sources ""` (no user / project / local settings files: their hooks, installed plugins, `env`; no project CLAUDE.md / AGENTS.md discovery), `--disable-slash-commands` (no skills / custom commands), `--settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (no auto-memory, no hook from any source). Probed on CLI 2.1.286 (`system/init`: no hook ran, only built-in plugins, 0 skills, project memory off, bridge `connected`) and live (`claude_code_workspace` leg, subscription OAuth). Rejected: `--safe-mode` (drops the `--mcp-config` bridge too), `--bare` (reads no OAuth / keychain) |
+| Settings, hooks, plugins, instructions (every profile, 2026-10-22; was `none` only) | `--setting-sources ""` (no user / project / local settings files: their hooks, installed plugins, `env`; no project CLAUDE.md / AGENTS.md discovery), `--disable-slash-commands` (no skills / custom commands), `--settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (no auto-memory, no hook from any source). Probed on CLI 2.1.286 (`system/init`: no hook ran, only built-in plugins, 0 skills, project memory off, bridge `connected`) and live (`claude_code_workspace` leg, subscription OAuth). Rejected: `--safe-mode` (drops the `--mcp-config` bridge too), `--bare` (reads no OAuth / keychain) |
 | Tengu tools | `--allowedTools mcp__tengu-tools__<name>` for each bridged tool only |
-| Hardened sandbox (`src/config/hardening.rs`: a `[solana] privy_wallet_id` signer, `[risk]` or `[soe]`, one code path) | load refuses a `claude_code` agent unless `builtin_tools_profile = "none"` (no block = `editor_shell` = refused), any `engine = "codex"` agent, any `[[mcp_servers]]`, any scope granting `shell_bins`, and an fs root / workspace reaching `<TENGU_HOME>/state`, the kill-switch file or the config file (no signer key file exists: Privy signs through the seal proxy); every agent's fallback scope runs no shell (`no_shell_fallback`); a plan step's `compose` only narrows its base agent (`bootstrap::tools::compose_agent`) |
+| Hardened sandbox (`src/config/hardening.rs`: a `[solana] privy_wallet_id` signer, `[risk]` or `[soe]`, one code path) | load refuses a `claude_code` agent unless `builtin_tools_profile = "none"` (no block = `none`, the default), any `engine = "codex"` agent, any `[[mcp_servers]]`, any scope granting `shell_bins`, and an fs root / workspace reaching `<TENGU_HOME>/state`, the kill-switch file or the config file (no signer key file exists: Privy signs through the seal proxy); every agent's fallback scope runs no shell (`no_shell_fallback`); a plan step's `compose` only narrows its base agent (`bootstrap::tools::compose_agent`) |
 | Per-tool scopes | `[default_scopes.*]` / `[agents.<id>.scopes.*]`: the bridge loads the agent's folded scopes from `TENGU_CONFIG` (`TENGU_BRIDGE_SCOPES` only as the fallback when no config / agent resolves) and enforces them (`fs_roots` includes the child workspace, except on a deny-all scope) |
 | Network | CLI API traffic via `HTTPS_PROXY` (advisory); bridge tools via `TENGU_EGRESS` (enforced); builtin Bash dropped under a proxy; WebSearch (`research`) runs at Anthropic, no built-in fetch in any profile |
 
@@ -180,7 +183,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 
 **Transport:** the OpenAI Codex CLI as a subprocess, `codex exec --json` (JSONL events on stdout, the prompt on stdin)
 **Billing:** the operator's ChatGPT subscription (`codex login` → "Logged in using ChatGPT"); the CLI starts from an EMPTY env + the base set (`codex.rs::BASE_ENV`: `PATH`, `HOME`, locale, temp, TLS certs, `CODEX_HOME` / `CODEX_CA_CERTIFICATE`, non-secret `TENGU_*`) + `[agents.<a>.codex] forward_env` (`codex.rs::child_env`), so no API key bills instead, no parent Codex session's vars leak in, and no vault secret, `.env` key, master password or seal-proxy session reaches the built-in shell (it ignores tengu scopes). A bridged tool under codex reads only those names: forward what it needs (e.g. `OPENROUTER_API_KEY` for memory embeddings) — the shell can read them too
-**Feature flag:** `codex` (on by default)
+**Feature flag:** none — always built (the `codex` cargo feature is a no-op, kept for old build commands)
 **File:** `src/adapters/outbound/engines/codex.rs` (shared with Claude Code: `engines/cli_run.rs`, `outbound/bridge_env.rs`)
 
 | Setup | |
@@ -194,7 +197,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 
 | `codex exec` arg | Why |
 |---|---|
-| `--json` | events: `item.started` / `item.completed` (`agent_message` → text, `reasoning` → thinking, `mcp_tool_call` / `command_execution` / `file_change` → `ToolRan`), `turn.completed` (usage), `turn.failed` (error) |
+| `--json` | events: `item.started` / `item.completed` (`agent_message` → text, `reasoning` → thinking, `mcp_tool_call` / `command_execution` / `file_change` → `ToolRan`), `turn.completed` (usage: `input_tokens` already holds `cached_input_tokens`, both passed on), `turn.failed` (error) |
 | `--ignore-user-config` `--ignore-rules` `--ephemeral` `--skip-git-repo-check` | no `~/.codex/config.toml` (your MCP servers, profiles, hooks, notify) and no execpolicy rules; no session files; any workspace — the ChatGPT login still works |
 | `-s <sandbox>` `-c approval_policy="never"` | Codex's own shell / patch tool: read-only (default) or workspace-write, never network, never asks |
 | `-c web_search="<mode>"` (`[agents.<a>.codex] web_search`: `disabled` default, `cached` = OpenAI's index, `live`; `config::CODEX_WEB_SEARCH`) | OpenAI's hosted web search on the ChatGPT subscription: it runs at OpenAI, not from this machine, so it needs no tengu egress; pages the agent must read still come through `http_request` (scopes, egress, audit) |
@@ -207,7 +210,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 | `run-agent` step | `bridge_tools` + workspace grant + the summary file the bridge serves `compress_and_store` into (`engines::bridges_tools`); a stored summary ends the CLI run |
 | `max_tool_rounds` | counts tool calls (MCP + built-in) of the run |
 | planner turn | no bridge, no `[[mcp_servers]]` (2026-10-14, as Claude Code); its built-in shell stays (`-s read-only` by default) |
-| silence | `--json` reports nothing while the model reasons (minutes at high effort), which used to trip `stream_event_timeout_secs` (120 s: "Engine stream timed out — no data for 120s"); now every `KEEPALIVE_SECS` (30) of silence the engine sends an empty `ThinkingDelta` (resets the caller's idle clock) and kills the CLI only after `idle_limit_secs` = max(configured timeout, `REASONING_IDLE_FLOOR_SECS` 900) — "Codex CLI idle timeout — no output for <n>s" |
+| silence | `--json` reports nothing while the model reasons (minutes at high effort), which would trip `stream_event_timeout_secs` (120 s: "Engine stream timed out — no data for 120s"); every `cli_run::KEEPALIVE_SECS` (30) of silence the engine sends an empty `ThinkingDelta` (resets the caller's idle clock) and kills the CLI only after `idle_limit_secs` = max(configured timeout, `REASONING_IDLE_FLOOR_SECS` 900) — "Codex CLI idle timeout — no output for <n>s" |
 | failure | `turn.failed`, or a non-zero exit with no answer → an error naming the CLI's reason (last `error` event, else stderr) |
 | `[egress]` | the CLI's own API traffic gets `HTTPS_PROXY` (HTTP CONNECT on the proxy port) when `route_llm_api`; its shell has no network in either sandbox mode |
 | Hardened sandbox (`[risk]`, `[soe]`, a Solana signer) | refused at load (`config/hardening.rs`): the built-in shell cannot be switched off for good and ignores tengu scopes — use `claude_code` with `builtin_tools_profile = "none"`, `openrouter` or `local` there |
@@ -242,7 +245,7 @@ One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Ev
 
 | Command | Runs |
 |---|---|
-| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (87: 19 sets × 4 targets — gemini, haiku, claude_code, local — plus 11 `codex_*` legs on the open sets: hardened ones refuse `engine = "codex"`); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it one target at a time (a filter such as `openrouter_gemini_`, 19 legs; `codex_`, 11) or smaller chunks to stay under a 10-minute call |
+| `cargo test --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (87: 19 sets × 4 targets — gemini, haiku, claude_code, local — plus 11 `codex_*` legs on the open sets: hardened ones refuse `engine = "codex"`); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it one target at a time (a filter such as `openrouter_gemini_`, 19 legs; `codex_`, 11) or smaller chunks to stay under a 10-minute call |
 | `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace, shell, xlab, xlab_holdout, xlab_rank, sources, soe and a2a sets via `run-agent` — a2a: the card and the remote's answer reach the model whole; xlab: the `market_history` text and both `backtest` texts whole under the 16k cap; xlab_holdout: a stored run's rows, a hidden split and a holdout read, each whole; xlab_rank: the ranking run and `latest`, each whole, rows weakest first; soe: the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent; `risk_status` + `paper_positions` via `tool turn`), fixture checks, the catalog-coverage check |
 | `tengu -c tests/fixtures/engine_matrix/<engine>.toml doctor --engines` | per agent: `list_directory` + `read_file` in a temp workspace → agent · engine · model · ok · tools called · secs; non-zero exit on a failure; on macOS a `local` agent with a loopback `base_url` prints `skipped (local models run on the operator's PC)` and is never contacted |
 
@@ -294,10 +297,10 @@ Local leg — the operator's Windows PC over the LAN:
 To add a new engine backend:
 
 1. Create `src/adapters/outbound/engines/<name>.rs` implementing the `Engine` trait (`src/ports/engine.rs`)
-2. Optional: a feature flag in `Cargo.toml` (as `claude_code`, `codex`)
+2. Optional, for heavy deps only: a feature flag in `Cargo.toml` (no engine has one today: all four are always built)
 3. Declare the module in `src/adapters/outbound/engines/mod.rs`; gate its construction with `#[cfg(feature = …)]` if 2
 4. Add a match arm in `engines/mod.rs` `build_step_engine()` — `build_engine()` delegates to it (the planner uses the `[orchestrator] agent`'s engine; `build_planner_engine()` is dead code)
-5. Add the engine name to `config::ENGINES` in `src/config/mod.rs` (validation reads it)
+5. Add the engine name to `config::ENGINES` in `src/config/agent.rs` (validation reads it)
 6. If the engine manages its own workspace, set `manages_own_workspace() = true` and use `bridge_tools` from `EngineContext`; a CLI that runs its own loop through the bridge also joins `engines::bridges_tools` (run-agent hands it the tools + summary file) and reuses `bridge_env::bridge_env` / `engines/cli_run.rs`
 7. Build its HTTP client with `egress::policy().llm_api_client` (or pass `claude_cli_env()` to a subprocess) — a bare `reqwest::Client` bypasses `[egress]`
 8. Engine matrix: a fixture under `tests/fixtures/engine_matrix/` + its legs in `tests/engine_matrix.rs` (§ Engine matrix); an engine that runs tools itself emits `StreamEvent::ToolRan` per call

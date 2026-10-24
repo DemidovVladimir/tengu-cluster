@@ -227,6 +227,6 @@
     <text x="20" y="78" class="small">— No "/compact" slash command equivalent in the TUI.</text>
     <text x="20" y="98" class="small">— No semantic dedupe of repeated tool calls.</text>
     <text x="20" y="118" class="small">— Subagent step traces are NEVER fed back into the planner's history. The only thing that survives is the <tspan class="mono accent">compress_and_store</tspan> summary in Open Brain memory,</text>
-    <text x="20" y="138" class="small">  and only <tspan class="mono">RagPlanner::replan</tspan> (cross-plan) / <tspan class="mono">plan</tspan> (within-session, opt-in) read it — not the per-turn chat history.</text>
+    <text x="20" y="138" class="small">  and only <tspan class="mono">RegistryPlanner::replan</tspan> (cross-plan) / <tspan class="mono">plan</tspan> (within-session, opt-in) read it — not the per-turn chat history.</text>
   </g>
 </svg>

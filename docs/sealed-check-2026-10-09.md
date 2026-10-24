@@ -26,7 +26,7 @@ R="$HOME/tengu-sealed-check"; export TENGU_HOME="$R/home"         # never ~/.ten
 mkdir -p "$R/home" "$R/ws" && touch "$R/.t0"
 unset OPENROUTER_API_KEY OPENROUTER_BASE_URL TENGU_KEYS_PROXY TENGU_KEYS_SESSION_TOKEN TENGU_KEYS_SESSION_EXP_MS
 export SSH_AUTH_SOCK="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
-cargo build --release --features claude_code && T=target/release/tengu; SC=sandboxes/sealed-check/scenarios   # + `claude` on PATH, logged in
+cargo build --release && T=target/release/tengu; SC=sandboxes/sealed-check/scenarios   # + `claude` on PATH, logged in
 ```
 
 ## Terminal

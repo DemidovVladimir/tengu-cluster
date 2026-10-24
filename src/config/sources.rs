@@ -179,6 +179,7 @@ impl SourcesConfig {
     ) -> Vec<String> {
         let mut out = Vec::new();
         let s = self.state.as_str();
+        // `flows`: an older binary's `tengu prune` deletes `state/flows`.
         let ok = !s.is_empty()
             && s != "."
             && s != ".."

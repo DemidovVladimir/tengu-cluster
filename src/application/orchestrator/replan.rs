@@ -1,12 +1,11 @@
 //! Replan outer loop: on step exhaustion, re-invoke the planner.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
 use crate::application::orchestrator::executor::{DagExecutor, ExecResult, Finished};
 use crate::application::orchestrator::retry::RetryPolicy;
-use crate::domain::plan::Plan;
+use crate::domain::plan::{Plan, StepId};
 use crate::ports::orchestration::WorkerHandle;
 use crate::ports::orchestration::{Planner, PlannerVerdict};
 
@@ -17,18 +16,7 @@ pub async fn drive(
     policy: &RetryPolicy,
     max_replans: u32,
     events: &EventBus,
-    cancel: Arc<AtomicBool>,
 ) -> String {
-    // Respect a cancellation requested before we even begin planning.
-    if cancel.load(Ordering::SeqCst) {
-        let _ = events.send(OrchestratorEvent::PlanCompleted {
-            final_response: "Stopped by user.".into(),
-            cancelled: true,
-            failed: false,
-        });
-        return "Stopped by user.".into();
-    }
-
     let mut plan_opt: Option<Plan> = match planner.plan(user_message).await {
         Ok(PlannerVerdict::Direct { response }) => {
             let _ = events.send(OrchestratorEvent::PlanCompleted {
@@ -50,33 +38,29 @@ pub async fn drive(
         }
     };
 
-    // Per-session active plan: registered in-process so `SubprocessRunner`
-    // (same session_id) forwards it to each child as `AgentIpcInput.plan_state`.
-    // Cleared on every exit path via the guard's `Drop`. `TENGU_PLAN.md` is
-    // still written as a human-readable debug artifact.
-    let mut active_plan = ActivePlanGuard {
-        session_id: planner.session_id(),
-        rendered: None,
-    };
     let mut replans_left = max_replans;
     // Steps that finished in any attempt so far: an identical step in the
     // replanned DAG keeps its output (`DagExecutor::run_reusing`).
     let mut finished = Finished::new();
     loop {
         let plan = plan_opt.as_ref().unwrap().clone();
-        active_plan.register(&plan);
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
-        match DagExecutor::run_reusing(
-            &plan,
-            Arc::clone(&worker),
-            policy,
-            events,
-            Arc::clone(&cancel),
-            &finished,
-        )
-        .await
-        {
+        // A plan that cannot run (unknown agent, unknown dependency, cycle,
+        // no steps) goes straight back to the planner: no step runs, no
+        // retry waits.
+        let result = match plan.validate(worker.known_agents().as_deref()) {
+            Err(e) => ExecResult::NeedsReplan {
+                failed: e.step().cloned().unwrap_or_else(|| StepId::new("<plan>")),
+                error: format!("invalid plan: {e}"),
+                finished: Finished::new(),
+            },
+            Ok(()) => {
+                DagExecutor::run_reusing(&plan, Arc::clone(&worker), policy, events, &finished)
+                    .await
+            }
+        };
+        match result {
             ExecResult::Done { final_output } => {
                 let _ = events.send(OrchestratorEvent::PlanCompleted {
                     final_response: final_output.clone(),
@@ -84,14 +68,6 @@ pub async fn drive(
                     failed: false,
                 });
                 return final_output;
-            }
-            ExecResult::Cancelled => {
-                let _ = events.send(OrchestratorEvent::PlanCompleted {
-                    final_response: "Stopped by user.".into(),
-                    cancelled: true,
-                    failed: false,
-                });
-                return "Stopped by user.".into();
             }
             ExecResult::NeedsReplan {
                 failed,
@@ -142,50 +118,11 @@ pub async fn drive(
     }
 }
 
-/// Owns the per-session active-plan registration for one `drive` call.
-struct ActivePlanGuard {
-    session_id: Option<String>,
-    rendered: Option<String>,
-}
-
-impl ActivePlanGuard {
-    /// Render `plan`, register it for this session (when the planner has
-    /// one), and mirror it into `TENGU_PLAN.md` for humans.
-    fn register(&mut self, plan: &Plan) {
-        use crate::application::orchestrator::shared_files;
-        let rendered = match &self.session_id {
-            Some(sid) => shared_files::set_active_plan(sid, "active", plan),
-            None => shared_files::render_plan_state("active", plan),
-        };
-        let rendered = match rendered {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to render plan state");
-                return;
-            }
-        };
-        if let Ok(root) = std::env::current_dir() {
-            if let Err(e) = shared_files::write_plan_state(&root, &rendered) {
-                tracing::warn!(error = %e, "failed to write shared plan state debug file");
-            }
-        }
-        self.rendered = Some(rendered);
-    }
-}
-
-impl Drop for ActivePlanGuard {
-    fn drop(&mut self) {
-        if let (Some(sid), Some(rendered)) = (&self.session_id, &self.rendered) {
-            crate::application::orchestrator::shared_files::clear_active_plan(sid, rendered);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::application::orchestrator::events::new_bus;
-    use crate::domain::plan::{Step, StepId};
+    use crate::domain::plan::Step;
     use async_trait::async_trait;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -214,7 +151,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for FailOnceWorker {
-        async fn run_step(&self, step: &Step, _: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _: &str, _: &Plan) -> anyhow::Result<String> {
             let mut c = self.calls.lock().unwrap();
             *c += 1;
             // Bad steps always fail; good steps succeed. The counter is
@@ -227,6 +164,76 @@ mod tests {
             }
             Ok(format!("ok-{}", step.id.0))
         }
+    }
+
+    /// Knows one agent `x` and counts the steps it runs.
+    struct KnownAgentsWorker {
+        ran: Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl WorkerHandle for KnownAgentsWorker {
+        async fn run_step(&self, step: &Step, _: &str, _: &Plan) -> anyhow::Result<String> {
+            self.ran.lock().unwrap().push(step.id.0.clone());
+            Ok(format!("ok-{}", step.id.0))
+        }
+        fn known_agents(&self) -> Option<Vec<String>> {
+            Some(vec!["x".into()])
+        }
+    }
+
+    /// A plan naming an unknown agent goes straight back to the planner:
+    /// no step of it runs and no retry backoff is waited (10 s here).
+    #[tokio::test]
+    async fn invalid_plan_replans_before_any_step_runs() {
+        let bus = new_bus();
+        let mut rx = bus.subscribe();
+        let plan = |agent: &str| Plan {
+            steps: vec![
+                Step {
+                    id: StepId::new("first"),
+                    agent: "x".into(),
+                    goal: "g".into(),
+                    depends_on: vec![],
+                    compose: None,
+                },
+                Step {
+                    id: StepId::new("second"),
+                    agent: agent.into(),
+                    goal: "g".into(),
+                    depends_on: vec![StepId::new("first")],
+                    compose: None,
+                },
+            ],
+        };
+        let planner = Arc::new(ScriptedPlanner {
+            verdicts: Mutex::new(vec![
+                PlannerVerdict::Plan {
+                    plan: plan("web_search"),
+                },
+                PlannerVerdict::Plan { plan: plan("x") },
+            ]),
+        });
+        let worker = Arc::new(KnownAgentsWorker {
+            ran: Mutex::new(vec![]),
+        });
+        let policy = RetryPolicy::waiting(3, 10_000);
+        let out = tokio::time::timeout(
+            Duration::from_secs(2),
+            drive(planner, "msg", worker.clone(), &policy, 1, &bus),
+        )
+        .await
+        .expect("no retry wait");
+        assert!(out.contains("ok-second"), "{out}");
+        assert_eq!(*worker.ran.lock().unwrap(), ["first", "second"]);
+        let mut reason = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let OrchestratorEvent::ReplanTriggered { reason: r } = ev {
+                reason = Some(r);
+            }
+        }
+        let reason = reason.expect("a replan");
+        assert!(reason.starts_with("invalid plan: step"), "{reason}");
+        assert!(reason.contains("\"web_search\""), "{reason}");
     }
 
     #[tokio::test]
@@ -259,10 +266,8 @@ mod tests {
         let worker = Arc::new(FailOnceWorker {
             calls: Mutex::new(0),
         });
-        let mut policy = RetryPolicy::new(3);
-        policy.backoff = vec![Duration::from_millis(1); 3];
-        let cancel = Arc::new(AtomicBool::new(false));
-        let out = drive(planner, "msg", worker, &policy, 2, &bus, cancel).await;
+        let policy = RetryPolicy::waiting(3, 1);
+        let out = drive(planner, "msg", worker, &policy, 2, &bus).await;
         assert!(out.contains("ok-good"));
     }
 
@@ -288,36 +293,8 @@ mod tests {
         let worker = Arc::new(FailOnceWorker {
             calls: Mutex::new(0),
         });
-        let mut policy = RetryPolicy::new(3);
-        policy.backoff = vec![Duration::from_millis(1); 3];
-        let cancel = Arc::new(AtomicBool::new(false));
-        let out = drive(planner, "msg", worker, &policy, 2, &bus, cancel).await;
+        let policy = RetryPolicy::waiting(3, 1);
+        let out = drive(planner, "msg", worker, &policy, 2, &bus).await;
         assert!(out.contains("Unable to complete"));
-    }
-
-    #[tokio::test]
-    async fn pre_flagged_cancel_short_circuits_drive() {
-        let bus = new_bus();
-        let planner = Arc::new(ScriptedPlanner {
-            verdicts: Mutex::new(vec![PlannerVerdict::Plan {
-                plan: Plan {
-                    steps: vec![Step {
-                        id: StepId::new("x"),
-                        agent: "x".into(),
-                        goal: "g".into(),
-                        depends_on: vec![],
-                        compose: None,
-                    }],
-                },
-            }]),
-        });
-        let worker = Arc::new(FailOnceWorker {
-            calls: Mutex::new(0),
-        });
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
-        let cancel = Arc::new(AtomicBool::new(true));
-        let out = drive(planner, "msg", worker, &policy, 0, &bus, cancel).await;
-        assert_eq!(out, "Stopped by user.");
     }
 }

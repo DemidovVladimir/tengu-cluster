@@ -23,6 +23,7 @@ use serde_json::Value;
 use super::palette::{connection, kind_spec, FieldType, KindSpec, CONNECTIONS};
 use super::Facts;
 use crate::domain::blueprint::{Blueprint, Issue, Node, Status};
+pub(crate) use crate::domain::runtime::valid_name;
 
 /// Top-level keys the builder writes; any other key of the current file is
 /// kept as it is.
@@ -132,15 +133,6 @@ impl Card<'_> {
     fn id(&self) -> &str {
         &self.node.id
     }
-}
-
-/// Whether `name` is an agent / endpoint / sandbox name:
-/// `[a-z0-9][a-z0-9_-]{0,39}`.
-pub(crate) fn valid_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
-        && name.len() <= 40
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// Whether `name` is an env var name: `[A-Z_][A-Z0-9_]*`, ≤ 128.
@@ -348,7 +340,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
             if !facts.skills.iter().any(|(n, _)| *n == s) {
                 issues.push(
                     Issue::warn(format!(
-                        "no skill '{s}' found on this machine (skills/, ~/.tengu/skills/)"
+                        "no skill '{s}' found on this machine (skills/, <TENGU_HOME>/skills/)"
                     ))
                     .node(c.id())
                     .field("skill"),
@@ -765,10 +757,10 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                     );
                 }
                 // A planner turn gets no tengu tools or bridge
-                // (`bootstrap::orchestrator::run_turn_inner`); what is left is
+                // (`orchestrator::planner::PlannerLlm::call`); what is left is
                 // the CLI's own: Claude Code's built-ins (off with `none`),
                 // Codex's shell (always there).
-                let tools = c.s("claude_tools").unwrap_or_else(|| "read_only".into());
+                let tools = c.s("claude_tools").unwrap_or_else(|| "none".into());
                 if planner == Some(c.id()) && engine == "claude_code" && tools.trim() != "none" {
                     issues.push(
                         Issue::warn(
@@ -1138,7 +1130,7 @@ fn emit(
                 }
             }
             "claude_code" => {
-                let p = s("claude_tools").unwrap_or_else(|| "read_only".into());
+                let p = s("claude_tools").unwrap_or_else(|| "none".into());
                 let _ = writeln!(
                     o,
                     "\n[agents.{name}.claude_code]\nbuiltin_tools_profile = {}",

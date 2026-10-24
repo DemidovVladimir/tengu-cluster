@@ -35,8 +35,6 @@
 # State: ~/.tengu/state/xlab/ (market.db, backtests/<run>/, ledger.db, KILL = halt);
 # workspace ~/xlab-w2-ws (only .tengu/observations.db).
 
-runtime_profile = "auto"
-
 # --- Network: open now, switchable to Tor (every transport through egress.rs) --
 # Tool ceiling = the history hosts; LLM / Jev API traffic is separate (proxy only).
 [egress]

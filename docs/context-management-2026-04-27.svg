@@ -127,8 +127,8 @@
       <text x="28" y="33" text-anchor="middle" class="badge">8</text>
       <text x="52" y="32" class="mech">Memory recall block</text>
       <text x="20" y="56" class="small mono">application/chat/service.rs:352 · MemoryConfig</text>
-      <text x="20" y="76" class="small">chat: top-K hits as one [Relevant memories] msg</text>
-      <text x="20" y="92" class="small mono">max_recall_entries=5 · max_recall_tokens: not enforced</text>
+      <text x="20" y="76" class="small">chat: top-K hits, fenced, head of the user msg</text>
+      <text x="20" y="92" class="small mono">max_recall_entries=5 · max_recall_tokens=600</text>
       <text x="20" y="108" class="small mono">planner: session_recent_n=10 · cross_plan_top_k=5</text>
       <text x="20" y="124" class="tiny">cross_session_msg_top_k=0 (off) · not fenced (#10)</text>
     </g>
@@ -138,24 +138,24 @@
       <rect class="panel2" width="365" height="135"/>
       <circle cx="28" cy="28" r="14" fill="#2DD4BF"/>
       <text x="28" y="33" text-anchor="middle" class="badge">10</text>
-      <text x="52" y="32" class="mech">&lt;memory-context&gt; fencing</text>
-      <text x="20" y="56" class="small mono">fencing.rs::build_memory_context_block</text>
-      <text x="20" y="76" class="small">Wraps text in fence + system note.</text>
-      <text x="20" y="92" class="small">Only caller: injector::for_turn on</text>
-      <text x="20" y="108" class="small">run_orchestrator_turn — no live path.</text>
-      <text x="20" y="124" class="tiny">chat recall (#8) is sent unfenced</text>
+      <text x="52" y="32" class="mech">untrusted fence</text>
+      <text x="20" y="56" class="small mono">domain/untrusted.rs::fence</text>
+      <text x="20" y="76" class="small">Recall (#8), steps, webhooks, web / MCP</text>
+      <text x="20" y="92" class="small">results. Cleaner runs to a fixpoint:</text>
+      <text x="20" y="108" class="small">no fence tag survives inside.</text>
+      <text x="20" y="124" class="tiny">control chars dropped (\n \t kept)</text>
     </g>
 
     <g transform="translate(405,170)">
       <rect class="panel2" width="365" height="135"/>
       <circle cx="28" cy="28" r="14" fill="#2DD4BF"/>
       <text x="28" y="33" text-anchor="middle" class="badge">11</text>
-      <text x="52" y="32" class="mech">grounding nudge / suppress</text>
-      <text x="20" y="56" class="small mono">application/chat/service.rs:255 · :349</text>
+      <text x="52" y="32" class="mech">grounding nudge (chat only)</text>
+      <text x="20" y="56" class="small mono">application/chat/service.rs:250 · :395</text>
       <text x="20" y="76" class="small">Trigger words (whole): last/latest/...</text>
       <text x="20" y="92" class="small">→ inject "verify, do not trust recall"</text>
       <text x="20" y="108" class="small">→ ALSO skip memory recall this turn</text>
-      <text x="20" y="124" class="tiny">planner sets suppress_grounding_nudge=true</text>
+      <text x="20" y="124" class="tiny">planner never sees it (PlannerLlm → engine)</text>
     </g>
 
     <g transform="translate(790,170)">
@@ -231,7 +231,7 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">17</text>
       <text x="52" y="32" class="mech">max_tool_rounds hard stop</text>
-      <text x="20" y="56" class="small mono">tool_loop.rs:93 · config/mod.rs:622</text>
+      <text x="20" y="56" class="small mono">tool_loop.rs:93 · config/agent.rs</text>
       <text x="20" y="76" class="small">Default 70 rounds.</text>
       <text x="20" y="92" class="small">After exhaust: forces tools=[] turn</text>
       <text x="20" y="108" class="small">at L231 to extract closing message.</text>

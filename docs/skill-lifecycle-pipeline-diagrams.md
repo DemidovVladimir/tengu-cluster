@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph SL["Skill Lifecycle (new)"]
         direction TB
-        SLC[application/skills/lifecycle/<br/>metrics · metric_kinds<br/>storage · fixtures<br/>scratch_worktree<br/>evolve · approval_gate<br/>scanner · audit · learner_state]
+        SLC[application/skills/lifecycle/<br/>metrics · metric_kinds<br/>storage · fixtures<br/>scratch_worktree<br/>evolve · approval_gate<br/>scanner · audit]
         Plugin[outbound/tools/skill_lifecycle/<br/><i>SkillDistillTool · ApplyImproverProposalTool</i><br/>outbound/tools/manage_skill · view_skill]
         Eval[adapters/inbound/eval.rs<br/><i>run_skill<br/>EvalJudgeClient</i>]
     end
@@ -554,8 +554,7 @@ workspace/
 │           ├── approval_gate.rs      # render + read_decision
 │           ├── scratch_worktree.rs   # create/remove/sweep_stale_worktrees
 │           ├── scanner.rs            # threat patterns (tengu skill install / doctor)
-│           ├── audit.rs              # skills/.audit.jsonl writer
-│           └── learner_state.rs      # skills/<name>/state/<learner_id>.json (landed, not wired)
+│           └── audit.rs              # skills/.audit.jsonl writer
 │
 ├── skills/
 │   ├── skill-creator/                # canonical dogfood
@@ -805,8 +804,6 @@ Flow (see Section 5):
 `skill_distill` writes `evals/config.toml` alongside the skill: `engine` + `model` mirror the calling agent (`ToolCtx::agent_config`; fallback `openrouter` + `anthropic/claude-sonnet-4-6`), `workspace_tools` is the union of tool names in the extracted fixtures. Shape (edit by hand if the fixtures need more):
 
 ```toml
-runtime_profile = "cloud"
-
 [agents.<skill-name>-agent]
 default = true
 engine = "openrouter"
@@ -844,7 +841,6 @@ max_tokens_per_flow = 50_000
 | `description_trigger` metric | `skill_lifecycle/metric_kinds/description_trigger.rs` | `DescriptionTriggerKind::run` |
 | Threat scanner | `skill_lifecycle/scanner.rs` | `scan_skill`, `render_findings_table` |
 | Audit log | `skill_lifecycle/audit.rs` | `skills/.audit.jsonl` |
-| Per-learner state | `skill_lifecycle/learner_state.rs` | `skills/<name>/state/<learner_id>.json` |
 | In-chat write API | `outbound/tools/manage_skill/mod.rs` | `MANAGE_SKILL_TOOL_NAME`, `do_create / do_edit_body / do_patch / do_add_resource / do_remove_resource / do_delete` |
 | In-chat read API | `outbound/tools/view_skill/mod.rs` | `VIEW_SKILL_TOOL_NAME` (`list / read / read_resource`) |
 | Rolling storage | `skill_lifecycle/storage.rs` | `finalize_run`, `prune_old_run_dirs`, `compute_rollups` |

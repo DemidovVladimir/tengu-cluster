@@ -1,7 +1,9 @@
 //! Canonical JSON — one text per value, whatever the map insertion order —
 //! and its sha256: the identity of a strategy spec (a backtest run's
-//! `spec_sha256`, `application/backtest/`) and of a decisions request (the
-//! decision cache key, `outbound/decision_cache.rs`).
+//! `spec_sha256`, `application/backtest/`), of a decisions request (the
+//! decision cache key, `outbound/decision_cache.rs`) and of a TOML file
+//! ([`toml_digest`]: a loaded config's `source_sha256`, lineage records, the
+//! SOE profile) — comments and layout do not count.
 //!
 //! | Rule | Value |
 //! |---|---|
@@ -9,6 +11,9 @@
 //! | Arrays | order kept |
 //! | Scalars | as `serde_json` prints them (`1`, `1.5`, `"é"`, `null`) |
 //! | Hash | sha256 of the canonical text, 64 lowercase hex chars — never shortened |
+//!
+//! [`hex`] and [`sha256_hex`] are the crate's one hex encoder and one
+//! sha256 digest (file bytes, bodies, tokens, record ids).
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -51,14 +56,35 @@ fn write_canonical(v: &Value, out: &mut String) {
     }
 }
 
-/// sha256 of `text`, 64 lowercase hex chars.
-pub(crate) fn sha256_hex(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+/// `bytes` as lowercase hex, two chars per byte.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+/// sha256 of `data` (text or bytes), 64 lowercase hex chars.
+pub(crate) fn sha256_hex(data: impl AsRef<[u8]>) -> String {
+    hex(&Sha256::digest(data.as_ref()))
 }
 
 /// sha256 hex of `v`'s canonical JSON.
 pub(crate) fn canonical_sha256(v: &Value) -> String {
-    sha256_hex(&canonical_json(v))
+    sha256_hex(canonical_json(v))
+}
+
+/// TOML text → JSON (tables → objects, arrays kept in order).
+pub(crate) fn toml_to_json(text: &str) -> Result<Value, String> {
+    toml::from_str::<Value>(text).map_err(|e| format!("TOML: {e}"))
+}
+
+/// A TOML file's digest: [`canonical_sha256`] of the file parsed TOML → JSON.
+pub(crate) fn toml_digest(text: &str) -> Result<String, String> {
+    toml_to_json(text).map(|v| canonical_sha256(&v))
 }
 
 #[cfg(test)]
@@ -97,5 +123,17 @@ mod tests {
             .bytes()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
         assert_ne!(h, canonical_sha256(&json!({"kind": "daily_window"})));
+        assert_eq!(sha256_hex(b"abc"), sha256_hex("abc"));
+        assert_eq!(hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
+        assert_eq!(hex(&[]), "");
+    }
+
+    #[test]
+    fn a_toml_digest_ignores_comments_and_layout() {
+        let a = "# note\n[x]\nb = 1\na = { c = [1, 2] }\n";
+        let b = "x.a.c = [1, 2]\nx.b = 1\n";
+        assert_eq!(toml_digest(a).unwrap(), toml_digest(b).unwrap());
+        assert_ne!(toml_digest(a).unwrap(), toml_digest("x.b = 2").unwrap());
+        assert!(toml_digest("x = ").unwrap_err().starts_with("TOML: "));
     }
 }

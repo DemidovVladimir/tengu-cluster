@@ -852,7 +852,6 @@ pub(crate) mod tests {
     use crate::adapters::outbound::paper_store::tests::audit_lines;
     use crate::adapters::outbound::paper_store::{SqlitePaperLedger, RISK_LOG_FILE};
     use crate::adapters::outbound::shell::LocalShellExecutor;
-    use crate::adapters::outbound::tools::workspace::test_support::NoopActivity;
     use crate::application::observe::tests::MemStore;
     use crate::config::risk::RiskConfig;
     use crate::config::AgentConfig;
@@ -974,7 +973,6 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         shell: Arc<dyn ShellExecutionPort>,
         http: reqwest::Client,
         secrets: SecretRegistry,
-        activity: NoopActivity,
     }
 
     impl Rig {
@@ -1023,7 +1021,6 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 shell: Arc::new(LocalShellExecutor::new()),
                 http: reqwest::Client::new(),
                 secrets: SecretRegistry::new(),
-                activity: NoopActivity,
             }
         }
 
@@ -1033,9 +1030,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 scope: &self.scope,
                 shell: self.shell.as_ref(),
                 http: &self.http,
-                memory_manager: None,
                 secret_registry: &self.secrets,
-                activity: &self.activity,
                 conversation: crate::ports::tool::ConversationView::empty(),
                 agent_config: Some(&self.agent),
                 call_id,

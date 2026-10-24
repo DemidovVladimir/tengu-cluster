@@ -10,9 +10,6 @@
 //! | totals | latency, prompt / completion tokens (of the stages that reported them), failed stages, `tokens_unknown` (the stages whose tokens are unknown) |
 //! | `cost` | [`Cost`]: `KNOWN` = Σ tokens × the per-million price, each part ceiled (an outflow) · `UNKNOWN` with why — no price configured, or a stage's tokens unknown, is never a cost of 0 |
 
-// Consumers land with the cycle and the review packet.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use super::value::{Currency, Flow, Minor, ValueError};

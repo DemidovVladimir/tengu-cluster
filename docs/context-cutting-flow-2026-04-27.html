@@ -363,7 +363,7 @@
 
 <!-- ============ CONFIG ============ -->
 <div class="panel" id="panel-config">
-  <h2>Tunables — defaults from <code>src/config/mod.rs</code></h2>
+  <h2>Tunables — defaults from <code>src/config/{agent,memory}.rs</code></h2>
   <table class="data-table">
     <thead>
       <tr>
@@ -387,8 +387,8 @@
       <li><strong>No LLM-driven auto-compact pass.</strong> The model never sees an LLM-written summary of its own history. Old turns drop off via the sliding window or fold into <code>maybe_compact_flow</code>'s truncated concatenation (Layer 1, before this loop).</li>
       <li><strong>No <code>/compact</code> slash-command equivalent</strong> in the TUI. The user cannot manually trigger a compaction pass.</li>
       <li><strong>No semantic dedupe</strong> of repeated tool calls. If the model calls <code>http_request</code> with the same URL twice in one turn, both full responses sit in context.</li>
-      <li><strong>No retrieval over prior turns of the current session</strong> for the chat loop. Postgres <code>agentic_memory</code> user messages exist but <code>RagPlanner::cross_session_recall_block</code> is the only consumer (planner-side, opt-in <code>cross_session_msg_top_k</code>).</li>
-      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RagPlanner::replan</code> (cross-plan) / <code>plan</code> (within-session, opt-in <code>within_session_output_top_k</code>) read it — not the per-turn chat history.</li>
+      <li><strong>No retrieval over prior turns of the current session</strong> for the chat loop. Postgres <code>agentic_memory</code> user messages exist but <code>RegistryPlanner::cross_session_recall_block</code> is the only consumer (planner-side, opt-in <code>cross_session_msg_top_k</code>).</li>
+      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RegistryPlanner::replan</code> (cross-plan) / <code>plan</code> (within-session, opt-in <code>within_session_output_top_k</code>) read it — not the per-turn chat history.</li>
       <li><strong>Claude Code engine has no in-loop compaction at all.</strong> That's why <code>max_mcp_result_chars</code> exists as a hard cap on bridge-routed tool results — it's the only context governor on that path.</li>
     </ul>
   </div>
@@ -558,7 +558,7 @@ const MECHS = [
     n: 4, tier: "t4",
     title: "MCP bridge cap",
     where: "adapters/outbound/engines/claude_code.rs sets it (env <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>) · adapters/inbound/mcp_bridge.rs cuts",
-    file: "src/adapters/inbound/mcp_bridge.rs:634",
+    file: "src/adapters/inbound/mcp_bridge.rs",
     body: "Caps tool results returned to the Claude Code CLI through the MCP bridge. Default <strong>50_000 chars / ~12.5K tokens</strong> — knob <code>[agents.&lt;n&gt;.limits] max_mcp_result_chars</code>. Exists because the Claude Code engine has NO per-turn compaction of its own — without this, bridge-routed tools would leak unbounded context into Claude.",
     config: ["max_mcp_result_chars = 50_000", "TENGU_BRIDGE_MAX_RESULT_CHARS env (set by the engine)"],
     code: `<span class="cm">// adapters/outbound/engines/claude_code.rs L995:</span>
@@ -567,8 +567,9 @@ const MECHS = [
 <span class="cm">// Forwarded to the bridge subprocess as env (L223):</span>
 <span class="str">"TENGU_BRIDGE_MAX_RESULT_CHARS"</span>: max_mcp_result_chars.to_string()
 
-<span class="cm">// adapters/inbound/mcp_bridge.rs L634 — the cut, same footer as #3:</span>
-<span class="kw">fn</span> <span class="fn">truncate_mcp_result</span>(result: &amp;<span class="kw">str</span>, max_chars: <span class="kw">usize</span>) -&gt; <span class="kw">String</span>`,
+<span class="cm">// adapters/inbound/mcp_bridge.rs — the loops' sink, same footer as #3,</span>
+<span class="cm">// outside text (web, A2A, MCP, memory) fenced:</span>
+<span class="kw">let</span> truncated = tool_loop::<span class="fn">tool_result_content</span>(&amp;call.name, &amp;result, None, None, max_result_chars);`,
   },
   {
     n: 5, tier: "t5",
@@ -597,16 +598,16 @@ const MECHS = [
 ];
 
 const CONFIG = [
-  ["limits.max_tool_rounds", "70", "config/mod.rs:579", "Hard cap on tool-calling rounds inside collect_engine_response (Claude Code: tool calls)."],
-  ["limits.max_tool_result_chars", "300_000", "config/mod.rs:581", "Per-tool-result char cap (mechanism #3)."],
-  ["limits.compact_result_limit", "200", "config/mod.rs:593", "First-line clip threshold for in-place compaction (mechanism #2); 0 does not disable it."],
-  ["limits.max_mcp_result_chars", "50_000", "config/mod.rs:598", "Bridge-side cap for Claude Code engine (mechanism #4)."],
-  ["limits.context_window", "1_000_000", "config/mod.rs:569", "Model context window — feeds reserved_output_tokens arithmetic; local engines: 1/8 of it caps one tool result."],
-  ["limits.max_tokens_per_flow", "100_000", "config/mod.rs:560", "Flow-level token budget. Caps total_input_budget."],
-  ["limits.stream_event_timeout_secs", "120", "config/mod.rs:583", "Idle-stream timeout — orthogonal to context but lives in the same struct."],
+  ["limits.max_tool_rounds", "70", "config/agent.rs", "Hard cap on tool-calling rounds inside collect_engine_response (Claude Code: tool calls)."],
+  ["limits.max_tool_result_chars", "300_000", "config/agent.rs", "Per-tool-result char cap (mechanism #3)."],
+  ["limits.compact_result_limit", "200", "config/agent.rs", "First-line clip threshold for in-place compaction (mechanism #2); 0 does not disable it."],
+  ["limits.max_mcp_result_chars", "50_000", "config/agent.rs", "Bridge-side cap for Claude Code engine (mechanism #4)."],
+  ["limits.context_window", "1_000_000", "config/agent.rs", "Model context window — feeds reserved_output_tokens arithmetic; local engines: 1/8 of it caps one tool result."],
+  ["limits.max_tokens_per_flow", "100_000", "config/agent.rs", "Flow-level token budget. Caps total_input_budget."],
+  ["limits.stream_event_timeout_secs", "120", "config/agent.rs", "Idle-stream timeout — orthogonal to context but lives in the same struct."],
   ["MAX_HISTORY_MESSAGES", "20 (hardcoded)", "prompt_budget.rs:12", "Hard ceiling on history-window mechanism (#1)."],
-  ["memory.persistent_store_chunk_size", "1000 chars", "config/mod.rs:969", "File chunking — orthogonal to in-turn cutting."],
-  ["memory.persistent_store_chunk_overlap", "200 chars", "config/mod.rs:972", "File chunking — orthogonal to in-turn cutting."],
+  ["memory.persistent_store_chunk_size", "1000 chars", "config/memory.rs", "File chunking — orthogonal to in-turn cutting."],
+  ["memory.persistent_store_chunk_overlap", "200 chars", "config/memory.rs", "File chunking — orthogonal to in-turn cutting."],
 ];
 
 // =====================================================================

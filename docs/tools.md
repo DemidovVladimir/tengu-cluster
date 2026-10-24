@@ -37,7 +37,7 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per always-on 
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (from `ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*(..)` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. `pub(crate) mod <name>;` + one `ToolEntry` in `catalog()`.
 3. Opt-in only: add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (`catalog_tests` fail otherwise).
-4. `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint && cargo test --test bridge_conformance`.
+4. `cargo test --lib -- catalog schema_lint && cargo test --test scope_lint && cargo test --test bridge_conformance`.
 5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` / `"codex"` (through `tengu mcp-bridge`). Keep the input schema in the subset every engine accepts (§ Tool schema subset — the lint covers every catalog row automatically), keep results within a local model's context window, and add:
    - a bridge conformance case — one `case("<tool>", json!({..}))` row in `tests/bridge_conformance.rs::cases()` with its scope TOML, mock replies (fixtures under `tests/fixtures/<area>/`) and expected outcome; `bridge_conformance` fails for a catalog tool without one (`docs/mcp-bridge.md` § Testing);
    - its engine-matrix smoke: the tool in a tool set of `tests/engine_matrix.rs` (`Set::tools`, the scripted `goal`, what the answer must hold; `every_catalog_tool_has_a_live_leg` fails CI for a catalog tool in no set) and in the fixture agents' `tools` + scopes — `tests/fixtures/engine_matrix/*.toml` for a `[risk]` sandbox, `tests/fixtures/engine_matrix/open/*.toml` otherwise (memory, shell, `[[mcp_servers]]`) — then the live legs on every engine (`docs/engine-backends.md` § Engine matrix). An exec tool (private agents only) goes in the xm set: its legs run `tengu tool turn` on the fixtures' private `xm_*` agents instead of `run-agent`.
@@ -46,7 +46,7 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per always-on 
 
 ## Tool schema subset
 
-`cargo test --bin tengu schema_lint` (`tools/schema_lint.rs`) checks every definition an engine can receive — every catalog row (opt-ins, memory, `agentic_memory` under `postgres_memory`), `compress_and_store`, `[[mcp_servers]]` tools (fixture server) and shell-skill tools (fixture SKILL.md) — and lists every violation at once.
+`cargo test --lib schema_lint` (`tools/schema_lint.rs`) checks every definition an engine can receive — every catalog row (opt-ins, memory, `agentic_memory` under `postgres_memory`), `compress_and_store`, `[[mcp_servers]]` tools (fixture server) and shell-skill tools (fixture SKILL.md) — and lists every violation at once.
 
 Real `[[mcp_servers]]` tools are linted at runtime, on every discovery path (`mcp_client::linted_tool`: the executor's `McpPlugin`, the bridge, `enumerate_tools` for the planner registry and the Claude Code bridge list): a violator is dropped with a warn naming the server, the tool and each rule, so one bad external schema cannot break a Gemini or Ollama turn.
 
@@ -103,11 +103,42 @@ net_hosts = ["*"]
 | xlab tools (`market_history`, `backtest`, `strategy_ranking`) | need `[xmarket]` (the warehouse and the run dirs live in its state dir, outside every fs root) and `fs_roots` = the workspace (observation store); a `market_history` `fetch` also needs `net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]` (each request checked, `[egress] allow_hosts` the ceiling) and reads `HL_API_URL` / `GECKO_API_URL` only through `env_reads` (unset = the public hosts); budgets `[rate_limits.hyperliquid]`, `[rate_limits.geckoterminal]` (per process; HL's 1200 / min is per IP — xlab keeps 600, burst 200, for the xmarket runs on the same host). `backtest` needs no host and no env, plus `[backtest]` (costs, universes, strategies); its run dirs are read with `backtest` `run_id` (by id), never with `read_file`. `strategy_ranking` like `backtest` (no host, no env) plus `[strategy_ranking]`. Examples: `sandboxes/xlab/config.toml`, `sandboxes/xlab-w2/config.toml` (`strategy_ranking` on the private `xl_ranker`, feeds), `tests/fixtures/engine_matrix/openrouter.toml` |
 | `source_evidence` | needs `[sources]` (its `sources.db` lives in the sources state dir, outside every fs root — the load refuses it inside one) and `fs_roots` = the workspace (observation store); no host, no env. Example: `sandboxes/soe/config.toml` |
 | SOE tools (`soe_view`, `soe_propose`, `soe_challenge`) | need `[sources]` (the SOE state root is its state dir, outside every fs root) and `fs_roots` = the workspace; the writes need a named stage agent (`TENGU_AGENT_NAME`, set by a `run-agent` step; else `TENGU_BRIDGE_AGENT`) — with `[soe]` the Architect proposes, the Critic challenges. No network, no env. In a `[soe]` sandbox every agent's `tools` lies inside `domain::tools::SOE_ALLOWED` (`docs/configuration.md` § SOE). Example: `sandboxes/soe/config.toml` |
-| Privy crypto tools | a configured scope needs `wallets = ["default"]` (to sign; empty = Privy signing off), `net_hosts = ["api.privy.io"]` (+ the `EVM_RPC_URL` host for receipts), `env_reads = ["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]` (+ `CHAIN_ID`, `EVM_RPC_URL`); `[egress] allow_hosts` applies. No scope = the permissive fallback. Example: `tests/fixtures/engine_matrix/open/openrouter.toml`. Through the seal proxy (`[keys.env] PRIVY_API_URL = "privy"`, `strip` `PRIVY_APP_SECRET`): `env_reads` adds `PRIVY_API_URL`, drops `PRIVY_APP_SECRET`; `net_hosts` = the Worker host (`docs/sealed-keys-2026-10-09.md`) |
+| Privy crypto tools | a configured scope needs `wallets = ["default"]` (to sign; empty = Privy signing off), `net_hosts = ["api.privy.io"]` (+ the `EVM_RPC_URL` host for receipts), `env_reads = ["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]` (+ `CHAIN_ID`, `EVM_RPC_URL`); `[egress] allow_hosts` applies. No scope = the fallback, which reads no env var (the call fails naming `PRIVY_APP_ID`). Example: `tests/fixtures/engine_matrix/open/openrouter.toml`. Through the seal proxy (`[keys.env] PRIVY_API_URL = "privy"`, `strip` `PRIVY_APP_SECRET`): `env_reads` adds `PRIVY_API_URL`, drops `PRIVY_APP_SECRET`; `net_hosts` = the Worker host (`docs/sealed-keys-2026-10-09.md`) |
 | Solana write tools, `mode = "send"` | `[solana] privy_wallet_id` (Privy signs through the seal proxy's `privy` route — `[keys.env] PRIVY_API_URL = "privy"`) + `wallets = ["<full pubkey>"]` in that ONE agent's own scope for the tool (never `[default_scopes]`; the agent has no `description`), its `env_reads` `PRIVY_API_URL` + `PRIVY_APP_ID`, its `net_hosts` the Worker host; signing-sandbox rules in `src/config/solana.rs` + `src/config/hardening.rs`. Without both they only simulate |
 | `[risk]` sandbox (xmarket) | hardened like a signer (`src/config/hardening.rs`: no shell scope, no `[[mcp_servers]]`, `claude_code` only with built-ins off, `<TENGU_HOME>/state` / kill-switch file / config file outside every fs root); `[default_scopes.sign_and_send_transaction]` + `[default_scopes.sign_message]` required without `wallets` (Privy signing off); exec tools (`domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent — rules `src/config/risk.rs`, doc `docs/xmarket-risk-paper-2026-09-30.md`; a plan step's `compose` may only narrow its base agent's `tools` / `skill_packages` (`bootstrap::tools::compose_agent`, a signer sandbox too) |
 | `[soe]` sandbox | hardened like `[risk]` (built-ins off, no shell, no `[[mcp_servers]]`); closed tool world `domain/tools.rs::SOE_ALLOWED`, a non-empty `tools` per agent; deny-all `[default_scopes.<t>]` for `SIDE_EFFECT_TOOLS` (`http_request`, `write_file`, `run_command`, the Privy signing tools) — rules `src/config/soe.rs` |
 | `compress_and_store` | Added to every subagent automatically — never list it. |
+
+## Untrusted input
+
+Text tengu did not write reaches a model fenced: `<untrusted origin="…">` (`domain/untrusted.rs`: control characters dropped, every fence tag stripped to a fixpoint). The fence is a label, not a wall: the right column is what holds.
+
+| Input | Reaches | Label | Enforced in code |
+|---|---|---|---|
+| `http_request` body | the LLM's tool result (in-process loop, `tengu mcp-bridge`) | `origin="http_request"` | scope `net_hosts` + `[egress]` on every hop; the fallback reads no env; reader rule below |
+| `a2a` reply | tool result | `origin="a2a"` | only `[a2a.remotes.*]` hosts (a card naming another host is refused); the credential is host-bound |
+| `[[mcp_servers]]` result | tool result | `origin="mcp:<server>"` | schema lint at discovery; none in a hardened sandbox; reader rule below |
+| `agentic_memory` / `memory_search` result | tool result | `origin="agentic_memory"` / `"memory_search"` | Open Brain rows carry their sandbox; `capture` refuses the kinds the harness writes |
+| Recalled memory (Open Brain lanes, `[Relevant memories]`) | planner / chat prompt | `memory:<kind>` / `memory` | the planner call has no tools, memory or bridge (`PlannerLlm::call`) |
+| A failed step's error | replan prompt | `step-error:<id>` | as above |
+| Webhook body | planner or decision loop | `webhook:<name>` | the endpoint's auth header / HMAC; loops pick from typed menus |
+| Upstream step output | the next step's input | `step:<id>` | only routable agents run; a `compose` adds only scoped tools, narrows only when hardened |
+| Loop escalation args / state | planner prompt | `loop-args:<loop>` / `loop-state:<loop>` | as the planner |
+| A tool's output inside a decision loop | the loop's parser, never an LLM | none (parsed) | typed slots: an unresolved value makes the action illegal |
+| SOE source text | SOE stage agents | `<source-text record="…">` (same stripper) | `[soe]` closed tool world, deny-all side-effect scopes |
+| CLI engine prompt (Claude Code / Codex stdin) | the CLI | `<turn role="…">` tags stripped from every body | — |
+| WebSearch (Claude Code `research`) / Codex `web_search` results | the CLI's model, at the provider | none | reader rule below: that agent holds no side effect |
+| Telegram message | chat | none: it is the user | `allowed_users`, fail closed |
+
+Agent identities no longer say "web pages are untrusted" (prompt-only; the fence labels it now).
+
+| Rule | Where | Kind |
+|---|---|---|
+| A reader holds no side effect. Reader: Claude Code `research`, Codex `web_search` ≠ `disabled`, `http_request` on no scope or to `"*"`, `a2a`, an `[[mcp_servers]]` tool (an empty `tools` holds them all). Side effect: `write_file`, `run_command`, a Privy signing / xmarket exec / Solana write tool on a scope that is not deny-all; an `env_reads` entry on a scope whose `net_hosts` holds `"*"`; Claude Code `editor` / `editor_shell`; Codex `workspace-write` | `config/readers.rs` | load warning (an error later); the flagged shipped agents are pinned in its test |
+| The `[orchestrator]` agent on `claude_code` runs `builtin_tools_profile = "none"` | `config/readers.rs` | load error |
+| `[soe]`: closed tool world, deny-all side-effect scopes | `config/soe.rs` | load error |
+
+Fix a warning: split the agent (a reader that answers, a private actor the planner routes to), or narrow its `tools` / scopes.
 
 ## MCP servers
 
@@ -128,6 +159,6 @@ List them in an agent's `tools` like any other tool (`tools = ["github__create_i
 | In-process OpenRouter agent (TUI, Telegram) | yes | same executor |
 | In-process Claude Code agent (TUI, Telegram) | yes | servers listed once at agent setup and added to the bridge list; bridge proxies them |
 | Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`bootstrap::tools::bridge_inputs`) |
-| Eval / evolve agent, `engine = "claude_code"` | yes | same (`bridge_inputs`); its bridge loads the expanded eval config (`eval.rs::bridge_config_file`); stubbed rows refused (`docs/mcp-bridge.md` § Known Limitations) |
+| Eval / evolve agent, `engine = "claude_code"` | yes | same (`bridge_inputs`); its bridge loads the expanded eval config (`inbound/eval/mod.rs::bridge_config_file`); stubbed rows refused (`docs/mcp-bridge.md` § Known Limitations) |
 
 Names use `__` because model APIs reject `.` in tool names.

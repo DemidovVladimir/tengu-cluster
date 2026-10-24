@@ -1,6 +1,6 @@
 # Orchestration Test Scenarios
 
-First live smoke test of the harness-owned orchestration after PRs #6/#7/#8/#10; updated 2026-09-18 for the current shape (planner = `RagPlanner`, worker = `SubprocessRunner` — one `tengu run-agent` child per step, single sandbox config, Tor-by-default egress). Expect at least one scenario to surface a real bug — the architecture is unit-tested but the planner prompt and integration timings are not.
+First live smoke test of the harness-owned orchestration after PRs #6/#7/#8/#10; updated 2026-09-18 for the current shape (planner = `RegistryPlanner`, worker = `SubprocessRunner` — one `tengu run-agent` child per step, single sandbox config, Tor-by-default egress). Expect at least one scenario to surface a real bug — the architecture is unit-tested but the planner prompt and integration timings are not.
 
 The document is organized as a runbook. Work top-to-bottom on first execution: prerequisites → sanity → sequential → parallel → mixed → edge cases → cleanup. Write down any deviation; every `FAIL` row is a ticket.
 
@@ -59,13 +59,13 @@ tengu chat --sandbox smoke
 You should see (in the first few lines, via `RUST_LOG=tengu=info`):
 
 ```
-orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner
-TUI orchestrator constructed with per-turn snapshot factory
+orchestrator: engine=rag, planner=RegistryPlanner(file-registry), worker=SubprocessRunner
+TUI orchestrator constructed
 DiskVectorStore loaded
 ```
 
 If either is missing, **stop** — the orchestrator won't fire on any scenario below. Likely causes:
-- `[orchestrator]` block missing, `engine` not `"rag"`, or the `agent` name doesn't match one in `[agents.*]`.
+- `[orchestrator]` block missing or `engine` not `"rag"`. (An `agent` name with no `[agents.*]` block, or an engine that does not build, makes `tengu chat` refuse to start — `planner_llm`.)
 - `OPENROUTER_API_KEY` unset (memory fails silently, but orchestrator needs embeddings too).
 - Default agent missing (`default = true` on one `[agents.*]`).
 - `egress: network = "tor" but the proxy is not reachable` warn → `make tor` or `[egress] network = "open"`.
@@ -239,8 +239,8 @@ Force the tier-2 replan path. Validates `max_replans` and context propagation fr
 | **Category** | Cancellation |
 | **Channel** | Telegram |
 | **Procedure** | 1. Send `Research the complete history of the Linux kernel over its entire 30+ years of development.` (a long-running multi-step task). 2. Wait until you see the first `StepStarted` in logs. 3. Send `/stop`. |
-| **Expected log sequence** | `StepStarted …` → `/stop` received → cancel flag set → no further `StepStarted` events fire → `PlanCompleted { cancelled: true }`. |
-| **Pass** | Bot replies `Stopped by user.` within 5s of the `/stop`. In-flight step is allowed to finish its current LLM call (not torn down mid-request). |
+| **Expected log sequence** | `StepStarted …` → `/stop` received → the turn future is dropped → no further `StepStarted` events fire → `orch PlanCompleted cancelled=true`; the step's `run-agent` child is gone from `ps`. |
+| **Pass** | Bot replies `⏹ Stopped.` within 1 s of the `/stop`. The in-flight step is torn down (its child killed). |
 | **Fail markers** | Bot continues dispatching new steps after `/stop`. No `PlanCompleted` event at all. |
 
 ### S-13 — Ctrl-C in TUI
@@ -251,7 +251,7 @@ Force the tier-2 replan path. Validates `max_replans` and context propagation fr
 | **Channel** | TUI |
 | **Procedure** | 1. Type a multi-step prompt. 2. Wait for `StepStarted`. 3. Press Ctrl-C. |
 | **Expected behavior** | TUI quits cleanly. Any in-flight spawned workers are dropped when the runtime shuts down. |
-| **Known gap** | TUI doesn't yet map Ctrl-C → `Orchestrator::cancel()` — it just drops the runtime. This is **acceptable** but flag it if the TUI hangs for >5s after Ctrl-C. |
+| **Known gap** | TUI has no stop key — Ctrl-C quits and drops the runtime. This is **acceptable** but flag it if the TUI hangs for >5s after Ctrl-C. |
 
 ---
 
@@ -312,10 +312,10 @@ The orchestrator can emit a plan with two leaves (two terminal steps; `skills/or
 
 | | |
 |---|---|
-| **Category** | Memory, pre-turn inject |
+| **Category** | Memory, planner recall lane |
 | **Channel** | TUI |
 | **Procedure** | Requires `--features postgres_memory`, `TENGU_MEMORY_DATABASE_URL`, and `[memory] within_session_output_top_k = 3` (default 0 = off). 1. Scenario S-07 (fan-out) — each `tengu run-agent` child writes its step summary to Postgres `agentic_memory` (`compress_and_store` / summary backstop). 2. After S-07, ask: `What was the last thing you researched?` |
-| **Expected behavior** | `RagPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner turn does not inject disk memory — `ChatOrchestratorPortImpl::run_orchestrator_turn_with_system` skips `MemoryInjector`.) |
+| **Expected behavior** | `RegistryPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner never reads disk memory — `PlannerLlm::call` sends one message with no memory.) |
 | **Pass** | Reply references content from S-07 correctly. |
 | **Fail markers** | Reply says "I don't have context about previous conversations" — recall lane off, no Postgres, or `session_id` mismatch between planner and runner. |
 
@@ -353,11 +353,11 @@ tengu eval orchestration-e2e
 
 This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2025`) → `bootstrap::orchestrator::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2059`) → `bootstrap::orchestrator::planner_llm` + `build_orchestrator` (`RegistryPlanner` + `SubprocessRunner`, one per row) → `Orchestrator::handle`. The planner calls its own engine (`PlannerLlm`, no tools); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Row stubs reach neither. `RowObserver` turns orchestrator events into synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec; the row's tokens are its session's `metrics.recorded` records (planner calls + steps). Worker `[agents.*]` blocks need a `description` to be routable.
 
 **Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
 
-- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning — `skills/orchestrator/SKILL.md` (`RagPlanner` loads it; `agents.orchestrator.identity.instructions` is bypassed for the planning turn)
+- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning — `skills/orchestrator/SKILL.md` (`RegistryPlanner` loads it; `agents.orchestrator.identity.instructions` is bypassed for the planning turn)
 - `fail` with rationale like "final text lacks content from step inputs" → step_input threading bug in `executor.rs` OR writer agent not reading its step-inputs (agent prompt issue)
 - `fail` with rationale like "agent ran tools directly instead of emitting a plan" → orchestrator didn't fire at all; check `[orchestrator]` block parses; check `eval_builder::run_row` took the orchestrator branch (the transcript's first system message reads `[orchestrator dispatch — actual prompts per-step; default agent was ...]` — absent means direct path)
 - `error` → harness crash; read logs

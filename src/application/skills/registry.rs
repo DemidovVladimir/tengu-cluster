@@ -475,17 +475,9 @@ fn api_skill_preamble(name: &str) -> String {
 }
 
 fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-
-    let after_first = &trimmed[3..].trim_start_matches(|c: char| c == '-');
-    let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
-
-    let closing = after_first.find("\n---")?;
-    let yaml_block = &after_first[..closing];
-    let body = after_first[closing + 4..].trim_start_matches('-').trim();
+    let fm = crate::domain::skill::split_frontmatter(content).ok()?;
+    let yaml_block = fm.yaml;
+    let body = fm.body.trim();
 
     let mut name = None;
     let mut description = None;
@@ -1131,21 +1123,18 @@ impl SkillCommandRouter {
 // ===========================================================================
 
 /// Where an agent's skills live, highest priority first (a name found in an
-/// earlier directory shadows later ones):
-///   1. managed — `~/.tengu/skills/` (`tengu skill install --tier managed`)
-///   2. workspace dotdir — `<workspace>/.tengu/skills/`
-///   3. project — `<workspace>/skills/`
-///   4. the repo's `skills/` where tengu runs, when it is another dir
+/// earlier directory shadows later ones): the three tiers of
+/// `config::paths::skill_tiers` (managed `<TENGU_HOME>/skills/`, workspace
+/// `<workspace>/.tengu/skills/`, project `<workspace>/skills/`), then the
+/// repo's `skills/` where tengu runs, when it is another dir.
 /// The skill loader, `view_skill`, `skill_resource` and
 /// `apply_improver_proposal` all search this list (the tools used the
 /// process cwd in place of the workspace).
 pub(crate) fn skill_directories(workspace: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = dirs_next::home_dir() {
-        dirs.push(home.join(".tengu/skills"));
-    }
-    dirs.push(workspace.join(".tengu/skills"));
-    dirs.push(workspace.join("skills"));
+    let mut dirs: Vec<PathBuf> = crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .collect();
     if let Ok(cwd) = std::env::current_dir() {
         let global = cwd.join("skills");
         if global != workspace.join("skills") {
@@ -1240,22 +1229,9 @@ impl SkillSourcePort for FileSystemSkillSource {
 const IDENTITY_FILES: [&str; 3] = ["IDENTITY.md", "PROFILE.md", "CONTEXT.md"];
 
 /// Build bounded system prompt from config identity, role, custom instructions,
-/// workspace files, and optional skill context fragments.
-pub(crate) fn build_system_prompt(
-    agent_config: &AgentConfig,
-    advertise_workspace_tools: bool,
-    skill_contexts: &[String],
-) -> String {
-    build_system_prompt_with_tools(agent_config, advertise_workspace_tools, skill_contexts, &[])
-}
-
-/// Build system prompt with dynamic tool listing generated from ToolDef metadata.
-pub(crate) fn build_system_prompt_with_tools(
-    agent_config: &AgentConfig,
-    advertise_workspace_tools: bool,
-    skill_contexts: &[String],
-    tools: &[ToolDef],
-) -> String {
+/// workspace files, and optional skill context fragments. No tool list: the
+/// engine gets the tool definitions themselves.
+pub(crate) fn build_system_prompt(agent_config: &AgentConfig, skill_contexts: &[String]) -> String {
     let budget = &agent_config.prompt_budget;
     let max_file_tokens = budget.max_file_tokens;
     let max_skill_context_tokens = budget.max_skill_context_tokens;
@@ -1330,30 +1306,6 @@ pub(crate) fn build_system_prompt_with_tools(
         }
         total_tokens += chunk_tokens;
         parts.push(truncated);
-    }
-
-    // 6. Workspace tools listing.
-    if advertise_workspace_tools && agent_config.workspace.is_some() && !tools.is_empty() {
-        let mut lines = vec!["# Tools".to_string()];
-        for tool in tools {
-            let params = tool
-                .parameters
-                .get("required")
-                .and_then(|r| r.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            lines.push(format!("- {}({})", tool.name, params));
-        }
-        let tools_note = lines.join("\n");
-        let tools_tokens = estimate_tokens_approx_min1(&tools_note);
-        if total_tokens + tools_tokens <= max_total_tokens + max_total_tokens / 10 {
-            parts.push(tools_note);
-        }
     }
 
     parts.join("\n\n---\n\n")

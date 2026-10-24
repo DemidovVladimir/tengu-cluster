@@ -27,8 +27,8 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | Rust 1.78+ | `Cargo.lock` is v4; Docker image builds on `rust:1.91` |
 | OpenRouter API key | [openrouter.ai](https://openrouter.ai) — planner, subagents, embeddings and the Jev decisions endpoint |
 | Docker + `lyrebird-rs` checkout | The Tor proxy (`make tor`) is a container: Arti + lyrebird-rs built from `../lyrebird-rs` (`LYREBIRD_RS_DIR=<dir or git URL>` to override). Skip only if every config sets `[egress] network = "open"` |
-| Claude Code CLI (optional) | `claude` installed + authenticated; build with `--features claude_code` |
-| Codex CLI (optional) | `codex` installed + `codex login` (ChatGPT subscription) for `engine = "codex"`; feature `codex` is on by default |
+| Claude Code CLI (optional) | `claude` installed + authenticated for `engine = "claude_code"` |
+| Codex CLI (optional) | `codex` installed + `codex login` (ChatGPT subscription) for `engine = "codex"` |
 | Cloudflare account + ssh-agent key (optional) | the seal proxy (`[keys]`): deploy `cloudflare/seal-worker` with `npx wrangler`, keys as its secrets — `docs/cloudflare-secrets-setup.html` |
 | Postgres + pgvector (optional) | Agentic memory; build with `--features postgres_memory` |
 
@@ -38,7 +38,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 git clone https://github.com/DemidovVladimir/tengu-cluster.git
 git clone https://github.com/DemidovVladimir/lyrebird-rs.git         # sibling checkout, built into the Tor proxy image
 cd tengu-cluster
-cargo build                                            # default features: openrouter + telegram + studio + codex + a2a
+cargo build                                            # default features: telegram + studio + a2a + webhooks; every engine is always built
 cargo run -- secret init                               # encrypted vault ~/.tengu/secrets.vault
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
@@ -79,7 +79,7 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | Command | Flags that matter | Does | Feature | Env |
 |---|---|---|---|---|
 | `chat` | `--sandbox` | Interactive TUI; orchestrated when the config has `[orchestrator]`; with `[decision_loops]` it tails `<TENGU_HOME>/logs/decisions.jsonl` as System bubbles | default | `OPENROUTER_API_KEY` |
-| `status` | — (`-c` for another file) | Static snapshot of the base config: runtime profile, agents with engine diagnostics, hub | default | — |
+
 | `doctor` | `--sandbox`, `--tor` (live Tor-exit check), `--live` (the sandbox's `tengu run`: heartbeat ≤ `[runtime] heartbeat_stale_secs`, every required feed live — the healthcheck for a `tengu run` container; the shipped image checks plain `doctor`), `--engines` (one `list_directory` + `read_file` turn per agent on its own engine + model; costs tokens) | Builds every agent's engine, checks the `[egress]` proxy; exits non-zero on any failure | default | `OPENROUTER_API_KEY` (an `openrouter` agent's engine fails to build without it) |
 | `telegram` | `--sandbox` | Telegram bot channel; refuses to start without an allow-list | `telegram` (default) | `TELEGRAM_BOT_TOKEN`, `OPENROUTER_API_KEY` |
 | `webhooks` | `--sandbox` | `[webhooks.endpoints.<n>]` → `POST /webhooks/<n>` (HMAC `X-Tengu-Signature: sha256=<hex>` or a static `auth_header_env` header); 202 + a one-shot orchestrator turn, or `loop = "<name>"` → that decision loop. Takes the leases `tengu run` takes | `webhooks` | `OPENROUTER_API_KEY` (planner / Jev), each endpoint's `secret_env` / `auth_header_env` |
@@ -111,7 +111,7 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | `risk halt` / `risk resume` | `--sandbox`, `[--account]` | Halt new entries / clear a halt — operator at a terminal only (refused in an agent process or with piped stdin); `resume` asks for the account name, refused while the kill-switch file exists | default | `TENGU_RISK_RESUME_SECRET_FILE` (optional 0600 resume secret) |
 | `eval` | `[<skill>...]`, `--sandbox`, `--judge-model` (`anthropic/claude-opus-4-7`), `--concurrency`, `--format table\|json`, `--out`, `--filter`, `--keep-workspace`, `--keep-runs` (10), `--no-persist`, `--max-runs` (10) | Skill evals scored by an LLM judge | default | `OPENROUTER_API_KEY` |
 | `secret` | `init\|set\|remove\|list\|change-password\|path` | Encrypted vault `<TENGU_HOME>/secrets.vault` (default `~/.tengu/`) | default | `TENGU_MASTER_PASSWORD` (optional) |
-| `prune` | `--sandbox`, `--yes`, `--hard` (needs `--sandbox`) | Remove cached / ephemeral state; never `<TENGU_HOME>/state` beyond `state/flows`, config or secrets | default | — |
+| `prune` | `--sandbox`, `--yes`, `--hard` (needs `--sandbox`) | Remove cached / ephemeral state: the shared logs and memory, or with `--sandbox` only that sandbox's traces, workspaces and own memory store; never `<TENGU_HOME>/state`, config or secrets | default | — |
 | `skill` | `evolve [--max-cycles --target-metric --base-branch --sandbox]` · `metrics [--last]` · `accept-proposal` · `remove [--tier --yes]` · `list [--tier]` · `doctor [--sandbox --no-fail]` · `export [--out]` · `install [--tier --strict --yes]` · `seed [--tier --description --learner-facing --yes]` | Skill lifecycle (`docs/skills.md`) | default | `OPENROUTER_API_KEY` (evolve) |
 | `mcp-bridge` | — | MCP stdio server exposing Tengu tools; spawned by the Claude Code and Codex engines | default | set by the engine (`TENGU_BRIDGE_*`) |
 | `agentic-memory-server` | — | Standalone MCP stdio server exposing `agentic_memory` to external agents | `postgres_memory` | `TENGU_MEMORY_DATABASE_URL` (+ `OPENROUTER_API_KEY` for embeddings; without it FTS / text only) |
@@ -130,7 +130,7 @@ Hidden test command `tengu tool` (`src/adapters/inbound/cli/tool.rs`; bridge con
 | Command | Description |
 |---|---|
 | `/help` · `/cost` · `/context` · `/engine` | Info |
-| `/eco` / `/standard` / `/precise` | Lens mode |
+
 | `/reset` · `/purge` | Clear conversation (+ wipe persistent memory) |
 | `/reload` · `/skills` · `/enable <skill>` · `/disable <skill>` | Re-read env + re-scan skills · list · toggle a skill |
 | `/theme` · `/dark` · `/light` | TUI theme |
@@ -173,15 +173,15 @@ Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper-2026-09-30.md`. Plan
 
 | Piece | Where |
 |---|---|
-| Planner agent | `sandboxes/<name>/config.toml` → `[orchestrator] agent = "<planner agent>"`, `engine = "rag"` (historical name; file-registry planner — the only supported value) |
+| Planner agent | `sandboxes/<name>/config.toml` → `[orchestrator] agent = "<planner agent>"` (the planner call runs on that agent's engine + model) |
 | Planner prompt | `skills/orchestrator/SKILL.md`, read from the cwd (inline fallback when missing) |
 | Subagents | Any `[agents.<name>]` block **with a `description`** in the same file (`engine`, `model`, `tools`, `skill_packages`, `example_queries`, `limits.max_tool_rounds`, `limits.step_timeout_secs`, …). Same schema as in-process agents — no separate spec files |
-| Registry | `TENGU_PLANNER_REGISTRY.md` regenerated from those blocks + skills + tools each planner turn; the accepted plan reaches subagents over IPC (`TENGU_PLAN.md` is a debug copy; both gitignored) |
+| Registry | `TENGU_PLANNER_REGISTRY.md` regenerated from those blocks + skills + tools each planner turn; the accepted plan reaches subagents over IPC only (`plan_state`); the registry is gitignored |
 | Done signal | `compress_and_store` is appended implicitly to every subagent — never list it in `tools` |
 
 ```bash
 cargo run -- chat --sandbox lping
-cargo run --features claude_code -- chat --sandbox xlab     # sandbox agents use engine = "claude_code"
+cargo run -- chat --sandbox xlab     # sandbox agents use engine = "claude_code"
 cargo run -- telegram --sandbox storage-test
 ```
 
@@ -189,7 +189,7 @@ Adding an agent = add an `[agents.<name>]` block with a `description` and restar
 
 ### Mixed engines
 
-Planner on OpenRouter, subagents on Claude Code. In the agent block set `engine = "claude_code"` and `model = "claude-sonnet-4-6"` (bare slug); OpenRouter agents use `anthropic/claude-sonnet-4-6`. Per `CLAUDE.md`: **use OpenRouter for the planner agent and Claude Code for subagents** — the Claude Code CLI keeps MCP tool access at engine-construction time, so planner-side tool stripping does not stop it from calling tools instead of emitting plan JSON. Build with `--features claude_code`.
+Planner on OpenRouter, subagents on Claude Code. In the agent block set `engine = "claude_code"` and `model = "claude-sonnet-4-6"` (bare slug); OpenRouter agents use `anthropic/claude-sonnet-4-6`. Per `CLAUDE.md`: **use OpenRouter for the planner agent and Claude Code for subagents** — the Claude Code CLI keeps MCP tool access at engine-construction time, so planner-side tool stripping does not stop it from calling tools instead of emitting plan JSON.
 
 ### Agentic memory (Postgres)
 
@@ -204,8 +204,7 @@ Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embeddin
 ### Webhooks
 
 ```bash
-cargo build --features webhooks
-cargo run --features webhooks -- webhooks --sandbox lping
+cargo run -- webhooks --sandbox lping
 ```
 
 `[webhooks.endpoints.<name>]` blocks bind `/webhooks/<name>` to the planner (`agent` is informational) or a decision loop (`loop = "<name>"`). Operator doc: `docs/webhooks-2026-05-11.md`.
@@ -247,23 +246,21 @@ Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, 
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `openrouter` | on | marker only — no code is gated on it; the OpenRouter engine is always built |
 | `telegram` | on | Telegram bot channel |
-| `claude_code` | off | Claude Code CLI backend |
-| `codex` | on | OpenAI Codex CLI backend (ChatGPT subscription) |
-| `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
-| `webhooks` | off | `tengu webhooks` listener, webhook routes under `tengu run` |
+| `webhooks` | on | `tengu webhooks` listener; webhook routes and decision-loop escalation under `tengu run` |
 | `studio` | on | the `tengu studio` server (loopback, `web/studio/` embedded); a `--no-default-features` build without it refuses `tengu studio --sandbox`, naming the flag; `tengu studio graph` works in every build |
 | `a2a` | on | the `tengu a2a serve` server (`[a2a.server]`); the A2A client (tool `a2a`, `tengu a2a send`) needs no feature |
+| `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
+| `openrouter` · `claude_code` · `codex` | off | no-ops: every engine (`openrouter`, `local`, `claude_code`, `codex`) is always built; kept so old build commands still work |
 
 ```bash
-cargo build --features claude_code,postgres_memory,webhooks
+cargo build --features postgres_memory
 cargo build --all-features
 ```
 
 ## Skills
 
-`skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`). Scan with shadowing (first wins): `~/.tengu/skills/` → `<workspace>/.tengu/skills/` → `<workspace>/skills/` → the cwd's `skills/`. Load per agent with `skill_packages = [...]` (`skills = [...]` is accepted too). Inventory + lifecycle: `docs/skills.md`.
+`skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`). Scan with shadowing (first wins): `<TENGU_HOME>/skills/` → `<workspace>/.tengu/skills/` → `<workspace>/skills/` → the cwd's `skills/`. Load per agent with `skill_packages = [...]` (`skills = [...]` is accepted too). Inventory + lifecycle: `docs/skills.md`.
 
 ## Sandboxes
 
@@ -295,7 +292,7 @@ cargo run -- secret set TELEGRAM_BOT_TOKEN "123456:ABC-..."
 cargo run -- telegram --sandbox storage-test
 ```
 
-`allowed_users` (or `TENGU_TELEGRAM_ALLOWED_USERS`) is required: without it `tengu telegram` refuses to start. `@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`); private agents (no `description`, not `default`) are never reachable from Telegram. `[telegram] tool_approvals` / `approve_only` are not implemented (load warns).
+`allowed_users` (or `TENGU_TELEGRAM_ALLOWED_USERS`) is required: without it `tengu telegram` refuses to start. `@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`); private agents (no `description`, not `default`) are never reachable from Telegram. No tool call waits for an approval (the old `[telegram] tool_approvals` / `approve_only` keys fail the load).
 
 ## Docker
 
@@ -320,9 +317,9 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 | Container command | `tengu telegram` (image `CMD`); `tengu run` is not wired into compose yet |
 | `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) · any `engine = "codex"` agent | Not runnable in the image: it has no Claude Code or Codex CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
-| Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
-| Features | the Cargo default features (`openrouter`, `telegram`, `studio`, `codex`, `a2a`) are always built in (the build stage copies `web/` for the Studio page and `crates/` for the `tengu-seal` path dependency); `TENGU_FEATURES` adds more: `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
-| Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build or the Tor proxy is unreachable — a config with `engine = "claude_code"` agents needs `claude_code` in `TENGU_FEATURES` or the container reports unhealthy |
+| Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only) |
+| Features | the Cargo default features (`telegram`, `studio`, `a2a`, `webhooks`) and every engine are always built in (the build stage copies `web/` for the Studio page and `crates/` for the `tengu-seal` path dependency); `TENGU_FEATURES` (default `telegram`) adds more: `TENGU_FEATURES=postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
+| Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build, a `claude_code` / `codex` agent's CLI is not on `PATH` (the image has neither) or the Tor proxy is unreachable |
 
 VPS one-liner: `curl -fsSL https://raw.githubusercontent.com/DemidovVladimir/tengu-cluster/main/deploy/install.sh | bash` (`TENGU_NETWORK=open` to skip Tor, `TENGU_PROFILE=postgres-memory` for memory; clones lyrebird-rs next to the checkout). Cloud-init: `deploy/cloud-init.yml`.
 
@@ -343,9 +340,9 @@ Restart=on-failure
 
 | Section | Purpose |
 |---|---|
-| `runtime_profile` | `auto` / `cloud` / `desktop` / `minimal` |
+
 | `[agents.<id>]` | engine, model, workspace, `tools` (allow-list), `skill_packages`, `workspace_tools`, `scopes`, limits, identity, `claude_code`, `local`, `codex`; a `description` (+ `example_queries`) makes it planner-routable |
-| `[orchestrator]` | `agent`, `engine = "rag"`, `max_attempts_per_step`, `max_replans`, `route_explicit_agents` |
+| `[orchestrator]` | `agent`, `max_attempts_per_step`, `max_replans`, `route_explicit_agents` (unknown keys fail the load) |
 | `[memory]` | disk vector store, recall knobs, `within_session_output_top_k` |
 | `[telegram]` · `[webhooks]` | channels: allow-list · listener + `[webhooks.endpoints.<n>]` |
 | `[decision_loops.<n>]` | Jev loop: goal, agent, actions, slots, `world`, `requires`, `dry_run`, `act_at` |
@@ -370,7 +367,7 @@ Restart=on-failure
 | `[soe]` | `architect`, `critic`, `max_proposals`, `forecast_max_weeks` (+ optional `token_prices`): the weekly cycle's stage agents and limits; closed world — tools inside `SOE_ALLOWED`, only `kind = "job"` feeds, no loops, `[risk]`, `[xmarket]`, signer, Telegram or webhooks; hardened (`soe`) |
 | `[studio]` | `control` (default `false`): `tengu studio` may Play / Stop / send events; refused in a `[generation]`-bound or hardened sandbox (`control-loop-lab` = `true`) |
 | `[skill_lifecycle]` | `tengu skill evolve` (improver agent, cycles) |
-| `[hub]` | bind / port / auth — config-only (shown by `tengu status`; nothing listens) |
+
 
 ## Documentation
 
@@ -411,10 +408,11 @@ Restart=on-failure
 Hexagonal, single crate. Every file, extension recipe (tools, engines, config, channels) and dependency: **`docs/code-map.md`** (interactive graph: `docs/code-map.html`). Layer rules are enforced by `tests/layering_lint.rs`.
 
 ```
-src/main.rs                 14 lines → adapters::inbound::cli::run
+src/lib.rs                  the `tengu` lib: every module (private) + `run` → adapters::inbound::cli::run
+src/main.rs                 6 lines → tengu::run
 src/domain/                 plain data + pure policy: message, session, plan, scope (ToolScope), secrets, tools, metrics, memory,
-                            observation, decision, schedule, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
-                            canonical (JSON + sha256), evidence (+ _coverage), sec (EDGAR decoders), workflow (Studio graph), trace
+                            observation, decision, schedule, time, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
+                            canonical (JSON + sha256, TOML digest), base58, evidence (+ _coverage), sec (EDGAR decoders), workflow (Studio graph), trace
                             (execution-trace envelope), blueprint (builder canvas); hl/ (ctx, book), lp/ (DLMM, perps, hedge), xm/ (risk
                             gate, ledger, paper, exits, weekend_fade, cost, grade, regrade), backtest/ (spec, kinds, engine, fills, costs,
                             features, gate, stats, report, checks, evaluation, labels, ranking), lineage/ (records, registry + checks,

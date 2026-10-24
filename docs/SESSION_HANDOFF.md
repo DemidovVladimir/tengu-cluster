@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-10-23: audit fixes part 1 — branch `fix/audit-bugs`, PR #59 (open, not merged)
+
+The 2026-10-22 audit (`TENGU_IMPROVEMENTS.md`, tracker at its top with every commit hash). Done: A1–A12, W2, W3 (but `--older-than`), R1 + B7, R2, R3, S1–S16, T1, T2, T4, T5, T7, T9, Y3, Y4, Y10, O6 (ignore half), D3, D5, D6.
+
+| Item | State |
+|---|---|
+| R4 (module-wide `#![allow(dead_code)]`) | in progress, uncommitted in `~/development/tengu-wt-audit`; patch `~/.cache/tengu-xm.noindex/wip/r4-dead-code-wip.patch`; what is left: the tracker R4 row |
+| Next rows | R5–R8, Y1, Y2, Y5, Y6, Y8, Y9, B1–B6, B8–B10, W1, W4, O1–O5, O7–O11, O6 move (`TENGU_{HANDOFF,ROADMAP,STUDIO_PLAN}.md` → `docs/plans/`) |
+| Operator (§ 11) | D1, D2, T3, Y7 (→ T8), T6, D4, S4 narrow-only, S14 empty set, W3 `--older-than` |
+| On merge | `~/.tengu/config.toml`: delete line 1 `runtime_profile` (R2) and line 7 `default_lens` (A9) — else the base config fails to load; xpower's branch: delete `runtime_profile`, review S3 / S10 / S13 / S16 (PR #59 body) |
+| Behaviour | `tengu webhooks` = `tengu run` with no feeds (`kind = "run"` + heartbeat); `tengu status` gone; `[orchestrator]` rejects unknown keys (no `engine`); step retries by error class (fatal / decode: none) |
+
 ## 2026-10-14 (later): every sandbox LLM agent on the subscriptions — branch `fix/subscription-agents-everywhere`, one PR
 
 | Change | Where | Tests / evidence |
@@ -313,7 +325,7 @@ Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kep
 | What | Note |
 |---|---|
 | Removed | the science-pipeline sandbox, its three skills (pipeline orchestrator, science-social posting, paid lab mutations), their env vars in `.env.example`, every code / test / doc mention |
-| Consequence | `[skill_lifecycle]` and the `learning-agent` / `skill-improver` agents have no shipped sandbox (commented sample in `config.example.toml`); `skills/orchestrator/SKILL.md` "Lifecycle verbs" still route to `learning-agent` — define it in a sandbox before using them. Examples now use `lping` (orchestrated, webhooks), `xlab` (claude_code), `storage-test` (Telegram) |
+| Consequence | `[skill_lifecycle]` and the `learning-agent` / `skill-improver` agents have no shipped sandbox (commented sample in `config.example.toml`); the lifecycle-verb rows live in `skills/skill-creator/SKILL.md` (moved out of the planner prompt 2026-10-23, audit T2) — define a `learning-agent` with a description naming them before using them. Examples now use `lping` (orchestrated, webhooks), `xlab` (claude_code), `storage-test` (Telegram) |
 | Not removed | git history (public repo; a rewrite cannot reach PR refs or forks) — the leaked keys of those integrations are revoked |
 
 ---
@@ -436,7 +448,7 @@ Branch `feature/decision-loop` (not merged → merged 2026-09-29 as #18, `ff90d1
 | Open | Detail |
 |---|---|
 | First live send | not done: needs a DEDICATED wallet (never the bot's `F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S` — the lease cannot see the TS bot) + the operator's go; order: close token accounts → ~$1 swap → tiny DLMM open + close → minimum perps order |
-| Human approval | `TelegramConfig.tool_approvals` / `approve_only` are parsed but never read — no approval gate exists |
+| Human approval | none: the never-read `TelegramConfig.tool_approvals` / `approve_only` were removed 2026-10-23 (audit S11; an old key fails the load); a later approval decorator waits for A6 |
 | Token-2022 pools | refused by the DLMM write tools (transfer-hook slices not built) |
 | Privy signer | second `SolanaSigner` impl possible later |
 | Loop write actions | `hedge_watch` has no write actions yet; `lp_watch.open_position` stays `dry_run` + `mode = "simulate"` |

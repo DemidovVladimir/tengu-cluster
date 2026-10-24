@@ -6,7 +6,7 @@
 //! | Piece | Holds |
 //! |---|---|
 //! | records | one `BTreeMap<id, record>` per kind; evidence records are `domain/evidence.rs`'s |
-//! | `digests` | `(kind, id)` → `pins::toml_digest` of the record's file: what `[[sealed]]` rows pin |
+//! | `digests` | `(kind, id)` → `canonical::toml_digest` of the record's file: what `[[sealed]]` rows pin |
 //! | [`Registry::frozen_digest`] | what a `[[frozen]]` row pins: the canonical sha256 of `{"manifest": <the generation file's digest>, "capabilities": {<id>: <its file's digest, null when absent>}}` over the capabilities it lists — a listed capability edited at the same version changes it |
 //! | [`Registry::locator_uses`] | every locator a record names (field path + recorded sha256): what `verify --evidence` resolves |
 //! | [`Registry::cited_runs`] | every backtest run dir a record cites (`run:<state>/<run id>`), by state: run-dir retention never prunes one (lineage D3: a bound generation's scope, an unbound sandbox's `[strategy_ranking]` registry) |
@@ -45,7 +45,7 @@ pub struct Registry {
     pub evidence: BTreeMap<String, EvidenceRecord>,
     pub rankings: BTreeMap<String, RankingContract>,
     pub locks: Locks,
-    /// `pins::toml_digest` of each record's file.
+    /// `canonical::toml_digest` of each record's file.
     pub digests: BTreeMap<RecordKey, String>,
 }
 
@@ -300,11 +300,11 @@ impl Registry {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::domain::canonical::toml_digest;
     use crate::domain::evidence::EvidenceClass;
     use crate::domain::lineage::episode::EpisodeKind;
     use crate::domain::lineage::experiment::{SplitBy, WindowRole};
     use crate::domain::lineage::locks::{Frozen, Sealed};
-    use crate::domain::lineage::pins::toml_digest;
     use crate::domain::lineage::value::{Integrity, UNKNOWN};
     use crate::domain::lineage::Severity;
 

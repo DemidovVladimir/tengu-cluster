@@ -1,4 +1,4 @@
-//! `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live`, the
+//! `tengu doctor` (incl. `--tor` exit check, `--live`, the
 //! running `tengu run`: heartbeat file + `loop/1` / `feed/1` rows
 //! (`bootstrap::runtime::read_live`, shared with Studio) →
 //! `domain::runtime::live_verdict`, and `--engines`, a tool-using smoke turn
@@ -9,13 +9,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::adapters::outbound::engines::{build_engine, build_step_engine, StepOpts};
-use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
+use crate::adapters::outbound::secrets::process_secret_registry;
 use crate::application::chat::tool_loop::collect_engine_response;
 use crate::bootstrap::runtime::{read_live, runtime_state_dir};
 use crate::bootstrap::tools::{
     build_tool_executor, compute_base_tools, grant_workspace_root, subagent_config,
 };
-use crate::config::{AgentClaudeCodeConfig, AgentConfig, Config, RuntimeProfile};
+use crate::config::{AgentClaudeCodeConfig, AgentConfig, Config};
 use crate::domain::engine_smoke::{
     runs_summary, smoke_prompt, smoke_verdict, SMOKE_MAX_ROUNDS, SMOKE_SYSTEM, SMOKE_TOOLS,
     TOKEN_FILE_PREFIX,
@@ -38,36 +38,33 @@ fn format_diagnostics_compact(d: &crate::ports::engine::EngineDiagnostics) -> St
     )
 }
 
-pub(super) fn print_status(config: &Config, profile: RuntimeProfile) {
-    println!();
-    println!("  TENGU CLUSTER — Status");
-    println!("  ─────────────────────────────────────");
-    println!("  Profile:  {:?}", profile);
-    println!("  Agents:   {}", config.agents.len());
-    for (id, ac) in &config.agents {
-        println!(
-            "    - {} ({}/{}){}",
-            id,
-            ac.engine,
-            ac.model,
-            if ac.default { " [default]" } else { "" }
-        );
-        match build_engine(id, ac, config.claude_code.as_ref()) {
-            Ok(engine) => {
-                let diagnostics = engine.diagnostics();
-                println!(
-                    "      diagnostics: {}",
-                    format_diagnostics_compact(&diagnostics)
-                );
-            }
-            Err(err) => {
-                println!("      diagnostics: unavailable ({})", err);
-            }
-        }
+/// Print, per agent, the tools that run on the fallback scope (no
+/// `[default_scopes.<tool>]` / `[agents.<a>.scopes.<tool>]`): the workspace,
+/// any host and any binary but no env var — or nothing at all in a hardened
+/// sandbox, where such a tool is refused on every call. Informational: a
+/// config is allowed to lean on the fallback outside a hardened sandbox.
+fn doctor_fallback_scopes(config: &Config) {
+    let rows: Vec<(&String, bool, Vec<String>)> = config
+        .agents
+        .iter()
+        .map(|(id, ac)| {
+            let tools = crate::bootstrap::tools::fallback_scoped_tools(ac, config.memory.enabled);
+            (id, ac.no_shell_fallback, tools)
+        })
+        .filter(|(_, _, tools)| !tools.is_empty())
+        .collect();
+    if rows.is_empty() {
+        return;
     }
-    println!("  Hub:      {}:{}", config.hub.bind, config.hub.port);
-    println!("  ─────────────────────────────────────");
-    println!();
+    println!("  Tools without a configured scope:");
+    for (id, hardened, tools) in rows {
+        let scope = if hardened {
+            "deny-all (hardened), refused"
+        } else {
+            "workspace + any host + any binary, no env var"
+        };
+        println!("    {id}: {scope}: {}", tools.join(", "));
+    }
 }
 
 /// `tengu doctor` — build every configured agent's engine and print its
@@ -134,6 +131,7 @@ pub(super) async fn run_doctor(
         }
     }
 
+    doctor_fallback_scopes(config);
     doctor_egress(tor_check, &mut failures).await;
     if live {
         doctor_live(config, &mut failures).await;
@@ -417,6 +415,7 @@ async fn smoke_agent(
             grant_workspace: true,
             summary_file: None,
             config_file: None,
+            journal: None,
         },
     )
     .context("build engine")?;
@@ -437,8 +436,8 @@ async fn smoke_agent(
         &cfg,
         &[],
     )
-    .context("tool executor unavailable (egress tool client)")?;
-    let executor = SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(secrets));
+    .context("tool executor unavailable (egress tool client)")?
+    .executor;
 
     let message = |role, content: String| Message {
         role,
@@ -467,14 +466,11 @@ async fn smoke_agent(
             &messages,
             &tools,
             &context,
-            Some(&executor),
-            None,
-            None,
-            None,
-            rounds,
-            limits.max_tool_result_chars,
-            limits.stream_event_timeout_secs,
-            limits.compact_result_limit,
+            Some(executor.as_ref()),
+            &crate::application::chat::tool_loop::LoopOpts {
+                max_tool_rounds: rounds,
+                ..crate::application::chat::tool_loop::LoopOpts::from_limits(limits)
+            },
         ),
     )
     .await

@@ -6,11 +6,11 @@
 //! | Step | Rule |
 //! |---|---|
 //! | build ([`PrivySigner::for_send`]) | `PRIVY_API_URL` and `PRIVY_APP_ID` read through the tool's `env_reads`; `PRIVY_API_URL` must be on the seal proxy with a session (`keys::auth_header_for`) — never Privy directly, never a local app secret |
-//! | each call | `[egress]` `check_url` + the tool's `net_hosts`, one audit record (`tool`, host, path, verdict, status, ms) |
+//! | each call | `http_class::GatedHttp`: `[egress]` `check_url` + the tool's `net_hosts`, one audit record (`tool`, host, path, verdict, status, class, ms); a non-2xx reply is an error with Privy's `error` text |
 //! | request | `POST <proxy>/privy/v1/wallets/<id>/rpc` `{"method":"signTransaction","params":{"transaction":<base64>,"encoding":"base64"}}` — the message with zeroed signature slots |
 //! | reply ([`signed_slot`]) | the message must come back byte for byte; only the wallet's slot is taken, and it must verify (ed25519) for the wallet — else nothing is signed |
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -18,7 +18,8 @@ use base64::Engine as _;
 use ed25519_dalek::{Signature as EdSignature, VerifyingKey};
 use serde_json::{json, Value};
 
-use crate::adapters::outbound::{egress, keys};
+use crate::adapters::outbound::http_class::{classify_http_status, GatedHttp, HttpError, Scrubber};
+use crate::adapters::outbound::keys;
 use crate::domain::scope::ToolScope;
 use crate::domain::solana::{Pubkey, Signature};
 use crate::domain::solana_tx::{MessageView, Transaction};
@@ -108,13 +109,6 @@ impl PrivySigner {
             tool: tool.to_string(),
         }
     }
-
-    fn audit(&self, verdict: &str, status: Option<u16>, reason: Option<String>, ms: Option<u64>) {
-        egress::policy().audit(json!({
-            "tool": self.tool, "host": self.url.host_str(), "path": self.url.path(),
-            "verdict": verdict, "status": status, "reason": reason, "ms": ms,
-        }));
-    }
 }
 
 /// `<base>/v1/wallets/<wallet_id>/rpc`; the id must be a plain path segment.
@@ -183,45 +177,42 @@ impl SolanaSigner for PrivySigner {
 
     async fn sign(&self, message: &[u8]) -> Result<Signature> {
         let host = self.url.host_str().unwrap_or("").to_string();
-        if let Err(e) = egress::policy()
-            .check_url(&self.url)
-            .and_then(|_| self.scope.check_net_host(&host))
-        {
-            self.audit("denied", None, Some(format!("{e:#}")), None);
-            return Err(e);
-        }
-        let body = request_body(message)?;
-        let started = Instant::now();
-        let ms = || Some(started.elapsed().as_millis() as u64);
-        let resp = self
+        let what = format!("privy signTransaction @ {host}");
+        let scrub = Scrubber::for_api(&self.url);
+        let req = self
             .http
             .post(self.url.clone())
             .timeout(TIMEOUT)
             .header(reqwest::header::AUTHORIZATION, &self.auth)
             .header("privy-app-id", &self.app_id)
-            .json(&body)
-            .send()
-            .await;
-        let resp = match resp {
-            Ok(r) => r,
-            Err(e) => {
-                let e = e.without_url();
-                self.audit("error", None, Some(e.to_string()), ms());
-                bail!("privy signTransaction @ {host}: {e}");
+            .json(&request_body(message)?);
+        let text = GatedHttp::new(
+            &self.scope,
+            &scrub,
+            json!({"tool": self.tool, "path": self.url.path()}),
+        )
+        .send(req, |r| {
+            if r.is_success() {
+                return Ok(r.body);
             }
-        };
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        self.audit("allowed", Some(status.as_u16()), None, ms());
-        if !status.is_success() {
-            let why = serde_json::from_str::<Value>(&text)
+            // Privy's own `error` text, else the body's start.
+            let why = serde_json::from_str::<Value>(&r.body)
                 .ok()
                 .and_then(|v| v["error"].as_str().map(str::to_string))
-                .unwrap_or_else(|| text.chars().take(200).collect());
-            bail!("privy signTransaction @ {host}: {status}: {why}");
-        }
-        let reply: Value = serde_json::from_str(&text)
-            .with_context(|| format!("privy signTransaction @ {host}: reply is not JSON"))?;
+                .unwrap_or_else(|| r.body.chars().take(200).collect());
+            let status = reqwest::StatusCode::from_u16(r.status)
+                .map_or_else(|_| r.status.to_string(), |s| s.to_string());
+            let mut e = HttpError::new(
+                classify_http_status(r.status, &r.body),
+                scrub.scrub(&format!("{status}: {why}")),
+            );
+            e.http_status = Some(r.status);
+            Err(e)
+        })
+        .await
+        .map_err(|e| e.prefixed(&what))?;
+        let reply: Value =
+            serde_json::from_str(&text).with_context(|| format!("{what}: reply is not JSON"))?;
         signed_slot(message, &self.wallet, &reply)
     }
 }

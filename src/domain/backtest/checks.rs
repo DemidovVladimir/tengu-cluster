@@ -25,9 +25,8 @@ use crate::domain::backtest::spec::StrategySpec;
 use crate::domain::backtest::testkit::{
     aggregate, et, nyse, random_intraday, random_market, run_params, utc, H,
 };
-use crate::domain::marketdata::{
-    fmt_time, Bar, BarSeries, EventCoverage, Interval, MarketEvent, StockSplit,
-};
+use crate::domain::marketdata::{Bar, BarSeries, EventCoverage, Interval, MarketEvent, StockSplit};
+use crate::domain::time::fmt_time;
 use crate::domain::xm::weekend_fade::{fade_window, golden, replay, FadeRule, Replay};
 
 const IDS: [&str; 3] = [

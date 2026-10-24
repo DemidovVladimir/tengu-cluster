@@ -13,10 +13,6 @@
 //! Also the IO side of `domain::backoff`: [`mono_ms`] (monotonic clock) and
 //! [`jitter01`] (OS randomness).
 
-// Consumers: `outbound/hyperliquid/info.rs` and the feed scheduler
-// (`jitter01`, `bootstrap/runtime.rs`) now; `info-fetch` next.
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -50,6 +46,7 @@ pub(crate) enum Priority {
     /// Reads and polls: leave `exec_reserve` untouched.
     Read,
     /// Order placement / cancels: may use the whole bucket.
+    #[allow(dead_code)] // no order is sent to a venue yet (M3b): order calls use the reserve
     Exec,
 }
 

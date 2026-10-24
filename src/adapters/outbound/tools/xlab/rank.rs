@@ -24,9 +24,10 @@ use chrono::NaiveDate;
 use serde_json::Value;
 use tracing::info;
 
-use super::{defs, object_args, opt_str, XlabShared};
+use super::{defs, XlabShared};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+use crate::adapters::outbound::tools::args::{object_args, opt_str};
 use crate::adapters::outbound::tools::xm::STATE_DIR_MISSING;
 use crate::application::ranking::store::published_ranking;
 use crate::application::ranking::{

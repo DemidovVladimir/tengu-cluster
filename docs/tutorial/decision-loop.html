@@ -368,7 +368,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
     <li><span class="chip guard">risk</span><span><b>refused</b>The tool's <code>[risk]</code> gate said no. History records a failure; a sequence halts.</span></li>
     <li><span class="chip data">log</span><span><b>dry_run</b>A write while <code>dry_run = true</code>: logged, the loop goes on. Steps bound to its output stay illegal.</span></li>
     <li><span class="chip data">end</span><span><b>stopped</b>A terminal action (no <code>tool</code>), such as <code>hold</code> or <code>done</code>.</span></li>
-    <li><span class="chip heart">ask</span><span><b>escalated</b>Below <code>act_at</code>. The planner gets the full state when the surface has one; otherwise the event stops.</span></li>
+    <li><span class="chip heart">ask</span><span><b>escalated</b>Below <code>act_at</code>. The planner gets the proposed args and the full state, each in an <code>&lt;untrusted&gt;</code> fence, when the process has an <code>[orchestrator]</code> (<code>tengu run</code>, Studio, <code>tengu webhooks</code>; any build); otherwise the event stops (<code>tengu decide</code> never escalates). The answer goes to the log and Open Brain, never the trace.</span></li>
     <li><span class="chip bad">no</span><span><b>rejected</b>Missing answer, a label that was not offered, or a value over its cap.</span></li>
     <li><span class="chip bad">err</span><span><b>error</b>The decisions call failed. Audited, then the error propagates.</span></li>
   </ul>
@@ -442,6 +442,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
         <tr><td><code>src/domain/decision.rs</code></td><td>questions, answers, outcomes, verdicts</td></tr>
         <tr><td><code>src/adapters/outbound/decisions.rs</code></td><td>the Jev HTTP client: retry, breaker</td></tr>
         <tr><td><code>src/bootstrap/decision.rs</code></td><td>wiring: live loop, mapped loop, replay loop, backtest gate</td></tr>
+        <tr><td><code>src/bootstrap/one_shot.rs</code></td><td>the escalator: one orchestrator turn per escalated event</td></tr>
         <tr><td><code>src/adapters/inbound/cli/decide.rs</code></td><td><code>tengu decide</code> with <code>--loop</code> / <code>--map</code></td></tr>
         <tr><td><code>skills/execution-map/SKILL.md</code></td><td>what the Architect is taught about maps</td></tr>
       </tbody>
@@ -450,7 +451,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

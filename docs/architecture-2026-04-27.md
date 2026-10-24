@@ -6,7 +6,7 @@
 
 ## TL;DR — the entire system in five sentences
 
-A user message arrives at a channel (TUI / Telegram / webhook). The harness builds an `Orchestrator`, which holds `RagPlanner` (legacy name for the LLM planner) and a `SubprocessRunner` (which executes plan steps as child processes). The planner regenerates and loads root `TENGU_PLANNER_REGISTRY.md` (`[agents.*]` with a `description` · skills · tools) into the planner prompt, then asks an LLM to emit either a direct response or a plan referencing that roster. Each plan step spawns `tengu run-agent` as a subprocess, which re-loads the parent's config (`sandboxes/<name>/config.toml`), takes its `[agents.<name>]` block, receives the accepted plan via `AgentIpcInput.plan_state`, builds a tool executor, and runs an LLM-with-tools loop until the model calls `compress_and_store` (the implicit "I'm done" tool). Every network path — tools, LLM APIs, the Claude Code and Codex CLIs, Telegram, the seal proxy — goes through the `[egress]` policy (`egress.rs`), which is Tor by default. Step output flows back to the executor; on failure the executor calls `RagPlanner::replan`, which uses Open Brain-style Postgres `agentic_memory` cross-plan recall when `postgres_memory` is enabled.
+A user message arrives at a channel (TUI / Telegram / webhook). The harness builds an `Orchestrator`, which holds `RegistryPlanner` (the LLM planner) and a `SubprocessRunner` (which executes plan steps as child processes). The planner regenerates and loads root `TENGU_PLANNER_REGISTRY.md` (`[agents.*]` with a `description` · skills · tools) into the planner prompt, then asks an LLM to emit either a direct response or a plan referencing that roster. Each plan step spawns `tengu run-agent` as a subprocess, which re-loads the parent's config (`sandboxes/<name>/config.toml`), takes its `[agents.<name>]` block, receives the accepted plan via `AgentIpcInput.plan_state`, builds a tool executor, and runs an LLM-with-tools loop until the model calls `compress_and_store` (the implicit "I'm done" tool). Every network path — tools, LLM APIs, the Claude Code and Codex CLIs, Telegram, the seal proxy — goes through the `[egress]` policy (`egress.rs`), which is Tor by default. Step output flows back to the executor; on failure the executor calls `RegistryPlanner::replan`, which uses Open Brain-style Postgres `agentic_memory` cross-plan recall when `postgres_memory` is enabled.
 
 That is the chat turn. Since 2026-09-24 the same binary also runs work with no chat turn at all:
 
@@ -36,46 +36,45 @@ Trace through them in order. Every step has a file you can open.
 
 ### 1. User input → Channel
 
-The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Telegram message (`src/adapters/inbound/telegram.rs`; fails closed without an allow-list); a webhook POST (`src/adapters/inbound/webhooks.rs`, `--features webhooks`) runs a one-shot orchestrator turn with its own `session_id`. All get their wiring from `src/bootstrap/` (tool executor, memory, orchestrator); TUI and Telegram share `src/adapters/inbound/channel.rs` helpers.
+The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Telegram message (`src/adapters/inbound/telegram.rs`; fails closed without an allow-list); a webhook POST (`src/adapters/inbound/webhooks.rs`, feature `webhooks`, default) runs a one-shot orchestrator turn with its own `session_id` (`src/bootstrap/one_shot.rs::run_one_shot`, also every decision-loop escalation). All get their wiring from `src/bootstrap/` (tool executor, memory, orchestrator); TUI and Telegram share `src/adapters/inbound/channel.rs` helpers.
 
 ### 2. Bootstrap → Orchestrator
 
-`src/bootstrap/orchestrator.rs::build_orchestrator(config, chat_factory, memory, session_id)` is the function that wires everything together. It:
-- Constructs `ChatOrchestratorPortImpl` (`application/orchestrator/wiring.rs`) over the channel's `ChatServiceFactory` (`RuntimeChatServiceFactory`) — the LLM-call abstraction the planner uses.
+`src/bootstrap/orchestrator.rs::build_orchestrator(config, llm, session_id, trace)` is the function that wires everything together. It:
+- Takes `llm: PlannerLlm` from `planner_llm(config)` — the `[agents.<[orchestrator] agent>]` engine + agent block (`None` without `[orchestrator]`; an error for a missing block or an engine that does not build). TUI and Telegram build it at startup (refuse to start on error); webhook planner endpoints and loop escalations per turn (warn and skip); eval per orchestrated row; A2A per planner turn.
 - Mints an `EventBus` (so the TUI can subscribe to plan progress events), installs the global metrics sink and bridges it onto the bus.
-- Builds `RagPlanner` (legacy name; planner side) with its ports injected — `ToolDirectory` (`CatalogDirectory`: tool catalog + MCP `tools/list`), `RecallStore` + `Embedding` (only with `postgres_memory`) — and `SubprocessRunner` (worker side). Both receive `config.agents` (the planner renders the registry, the runner fails fast on unknown agents and reads per-step `limits.max_tool_rounds` / `limits.step_timeout_secs`) and the caller's `session_id` (`resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — once per process for chat / Telegram, per row for `tengu eval`; `tengu webhooks` mints `webhook-<name>-<uuid>` per request).
+- Builds `RegistryPlanner` (legacy name; planner side) with its ports injected — `ToolDirectory` (`CatalogDirectory`: tool catalog + MCP `tools/list`), `RecallStore` + `Embedding` (only with `postgres_memory`) — and `SubprocessRunner` (worker side). Both receive `config.agents` (the planner renders the registry, the runner fails fast on unknown agents and reads per-step `limits.max_tool_rounds` / `limits.step_timeout_secs`) and the caller's `session_id` (`resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — once per process for chat / Telegram, per row for `tengu eval`; `tengu webhooks` mints `webhook-<name>-<uuid>` per request).
 - Returns an `Orchestrator` that wraps them.
 
-The default-agent dispatch (no orchestrator at all) is the fallback when `[orchestrator]` is missing from the sandbox config. `engine = "rag"` is the only orchestrator engine (Phase 7.1) — any other value fails config validation; `build_orchestrator` keeps a defensive warn + `None`. The name is historical: file-registry planner + Open Brain memory.
+The default-agent dispatch (no orchestrator at all) is the fallback when `[orchestrator]` is missing from the sandbox config. `[orchestrator]` has no engine key (removed 2026-10-23; unknown keys fail the load): the planner is the file-registry planner + Open Brain memory, its call runs on the `agent`'s engine.
 
-### 3. Planner — `RagPlanner::plan`
+### 3. Planner — `RegistryPlanner::plan`
 
 `src/application/orchestrator/planner.rs`. This is where the doctrine lives ("LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands"). For each user message:
 
 1. **Embed once** — only with a `RecallStore` (`postgres_memory`) and `OPENROUTER_API_KEY`; the vector is reused by every recall lane below.
-2. **Load the planner registry** — regenerate root `TENGU_PLANNER_REGISTRY.md` (`shared_files::ensure_planner_registry`) from the `[agents.*]` blocks that carry a `description` (`routable_agents`, with `example_queries`), skills, and core + MCP tool definitions, then inject it into the planner prompt.
-3. **Emit `RagQueried` event** — registry entries go to the event bus + a tracing line. The TUI debug panel renders these when `TENGU_TUI_RAG_DEBUG=1`.
-4. **Open Brain recall (opt-in)** — if `memory.cross_session_msg_top_k > 0`, retrieve prior user questions from Postgres `agentic_memory` and inject them as a "Cross-session message recall" block. **This happens BEFORE persisting the current message** so the just-written message can never appear in its own recall block.
-5. **Persist the user message** — `persist_user_message` writes keyed by `session_id` to Postgres `agentic_memory` with `postgres_memory`.
-6. **Push to in-memory buffer** — Phase 6.4 lite (`update_and_format_history`): the "Recent user messages this session" block.
-7. **Within-session output recall (opt-in)** — if `memory.within_session_output_top_k > 0`, prior step outputs of this `session_id` (`session_output_recall_block`).
-8. **LLM call with `skills/orchestrator/SKILL.md` as system prompt** — `run_orchestrator_turn_with_system_metered` → `RuntimeChatServiceFactory::run_turn_inner` (`bootstrap/orchestrator.rs`) passes no tools, no tool executor, no memory manager and suppresses the grounding nudge, so the LLM has exactly one job: emit plan JSON in the shape `plan_schema.json` describes. `emit_planner_metrics` records the per-layer breakdown.
-9. **Parse verdict** — `parse_verdict` (4-path cascade: raw JSON, fenced, JSON inside prose, prose → `Direct`) gives `PlannerVerdict::Direct { response }` (return it to user) or `PlannerVerdict::Plan { plan }` (hand to executor). No JSON-schema validator runs in Rust; an empty output ends the turn with `System error: orchestrator initial call failed: …` (`replan.rs::drive`).
+2. **Load the planner registry** — regenerate root `TENGU_PLANNER_REGISTRY.md` (`shared_files::ensure_planner_registry`) from the `[agents.*]` blocks that carry a `description` (`routable_agents`: description, `example_queries`, its own tools and skills), then one names-only line of skills and one of core + MCP tools (for a `compose`; no descriptions, no file paths), and inject it into the planner prompt.
+3. **Open Brain recall (opt-in)** — if `memory.cross_session_msg_top_k > 0`, retrieve prior user questions from Postgres `agentic_memory` and inject them as a "Cross-session message recall" block. **This happens BEFORE persisting the current message** so the just-written message can never appear in its own recall block.
+4. **Persist the user message** — `persist_user_message` writes keyed by `session_id` to Postgres `agentic_memory` with `postgres_memory`.
+5. **Push to in-memory buffer** — Phase 6.4 lite (`update_and_format_history`): the "Recent user messages this session" block.
+6. **Within-session output recall (opt-in)** — if `memory.within_session_output_top_k > 0`, prior step outputs of this `session_id` (`session_output_recall_block`).
+7. **LLM call with `skills/orchestrator/SKILL.md` as system prompt** — `PlannerLlm::call` (`planner.rs`) sends ONE user message to the engine through `collect_engine_response` with no tools, no tool executor, no observer, no memory, no bridge tools and no `[[mcp_servers]]` — there is nothing to strip, so the LLM has exactly one job: emit plan JSON in the shape `plan_schema.json` describes. It returns `(text, TurnTelemetry)`; `emit_planner_metrics` turns that usage into the planner `MetricsRecord` with the per-layer breakdown — the same on every surface.
+8. **Parse verdict** — `parse_verdict` (4-path cascade: raw JSON, fenced, JSON inside prose, prose → `Direct`) gives `PlannerVerdict::Direct { response }` (return it to user) or `PlannerVerdict::Plan { plan }`. No JSON-schema validator runs in Rust, but `replan.rs::drive` runs `Plan::validate` before any step (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles — an invalid plan replans); an empty output ends the turn with `System error: orchestrator initial call failed: …`.
 
 ### 4. Executor — DagExecutor
 
 `src/application/orchestrator/executor.rs`. Standard topological-sort-then-parallel pattern:
 - `Plan::ready_steps` (`domain/plan.rs`) returns every step whose `depends_on` is satisfied.
 - Each ready step is `tokio::spawn`'d on the worker (`SubprocessRunner`).
-- Retries follow `RetryPolicy::new(max_attempts_per_step)` from `retry.rs` (default 3 attempts: at once, then after 1 s, 3 s; 9 s before any later one).
-- On exhaustion, `replan.rs::drive` calls `RagPlanner::replan` with the failed step + error context. With `postgres_memory`, replan also pulls `cross_plan_top_k` hits from Postgres `agentic_memory`.
-- Cancel or an exhausted step aborts every step still in flight (`abort_in_flight`; the dropped `run-agent` child is `kill_on_drop`). A step that never becomes ready (unknown dependency, cycle) is a replan, not an empty reply. Parallel leaves with no join step are joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`).
-- Every accepted plan/replan is rendered once: stored per session (`shared_files::set_active_plan`) so `SubprocessRunner` can pass it as `AgentIpcInput.plan_state`, and written to root `TENGU_PLAN.md` as a human-readable debug artifact (fallback for old parents only).
+- Retries follow `RetryPolicy::new(max_attempts_per_step)` from `retry.rs` (default 3 attempts) and the failure's class (`domain::plan::StepFailure`, else transient) through `domain::backoff::next_delay`: transient / timeout → at once, then after 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode → no retry.
+- On exhaustion, `replan.rs::drive` calls `RegistryPlanner::replan` with the failed step + error context. With `postgres_memory`, replan also pulls `cross_plan_top_k` hits from Postgres `agentic_memory`.
+- Cancel or an exhausted step aborts every step still in flight (`abort_in_flight`; the dropped `run-agent` child is `kill_on_drop`). An unknown dependency or a cycle is caught by `Plan::validate` before the executor runs (a replan); a step that still never becomes ready is a replan too, not an empty reply. Parallel leaves with no join step are joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`).
+- Every step gets the plan it belongs to: `WorkerHandle::run_step(step, inputs, plan)`; `SubprocessRunner` renders it (`shared_files::render_plan_state`) into `AgentIpcInput.plan_state`. No file, no per-session map.
 
 ### 5. Subprocess — `SubprocessRunner::run_step`
 
 `src/adapters/outbound/subprocess_runner.rs`. For each step:
-- Fails fast when `step.agent` (or `compose.base_agent`) names no routable `[agents.<name>]` block (one with a `description`) in the parent config — no spawn; the retry policy still runs its attempts (1 s, 3 s waits) before the replan.
+- Fails fast when `step.agent` (or `compose.base_agent`) names no routable `[agents.<name>]` block (one with a `description`) in the parent config — no spawn, a `fatal` `StepFailure`: no retry, straight to the replan (`replan::drive` already refuses such a plan before any step runs).
 - Builds `AgentIpcInput` JSON from the step (agent name, goal, session_id, step_id, `max_turns` = the agent's `limits.max_tool_rounds`, optional `compose` for C→B fallback, **`sandbox_config`** so the child sees the same scopes as the parent — Phase 7.2, **`plan_state`** — the rendered plan for this session, 2026-09-12). `model` / `tools` / `skills` travel empty — the child reads them from its own `[agents.<name>]`.
 - Spawns `tengu run-agent` as a child process with `TENGU_AGENT_IPC=1` env guard and `TENGU_EGRESS` (the parent's *resolved* `[egress]` policy — the child applies it verbatim, 2026-09-16).
 - Pipes the JSON over stdin; reads the result JSON from stdout; kill on drop. Wall-clock cap per step = `limits.step_timeout_secs` (default 600) via `run_with_timeout`. The child's stderr log goes through the parent's log (`forward_child_log`, target `tengu::run_agent`); a failed step's error carries its last 40 lines.
@@ -86,10 +85,10 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 `src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess` is the entry point of the child process:
 1. Reads stdin, parses `AgentIpcInput`; exports `TENGU_SESSION_ID`.
 2. **Phase 7.2 config resolution — FIRST** — `load_sandbox_or(input.sandbox_config, default config)`: `sandboxes/<name>/config.toml` when the parent ran with `--sandbox`, else the default chain. Scopes/secrets/MCP servers therefore match the parent. Then `egress::install(&parent_config.egress)` — `TENGU_EGRESS` wins over the file, an invalid policy aborts the child — and `keys::install(&parent_config.keys)` (reuses the parent's seal-proxy session, strips `[keys] strip` again).
-3. **Agent resolution** — `parent_config.agents.get(name)` where `name` = `compose.base_agent` if composed, else `input.agent_name`. Unknown name → hard error listing the configured agents. Composed runs overwrite `skill_packages` / `tools` in memory only (`bootstrap::tools::compose_agent`; in a hardened sandbox only narrowing). Exports `TENGU_AGENT_NAME`. The step's workspace (`bootstrap::tools::workspace_or_temp`): the agent's, else a `tengu-step-*` temp dir removed after the step — the executor's and the engine's (a Claude Code / Codex CLI's cwd, its bridge).
-4. **System prompt assembly** — base template + each skill body (via `load_skill_body_three_tier`) + `input.plan_state` (falls back to root `TENGU_PLAN.md`) + mandatory suffix. Per-tool scopes come from the folded `[default_scopes]` plus the child's own workspace in `fs_roots` (`grant_workspace_root`; a deny-all scope stays a deny).
-5. **Tool executor** — `bootstrap::tools::build_subprocess_tool_executor(&AgentConfig, ..)` builds `PluginToolExecutor` from `(base tools ∩ agent.tools) ∪ {compress_and_store} ∪ shell skills (skill_packages) ∪ [[mcp_servers]] tools (∩ tools)` over the plugin registry (`agent_base_tools` + `agent_skill_registry`); `subagent_config` first merges the workspace-tool names in `tools` into `workspace_tools`. Its HTTP client comes from `egress::policy().tool_client` (proxy, redirects off); `http_request` gates hop 0 (egress + scope) inside `execute` and re-checks every redirect hop; `run_command` runs under the `[egress]` shell mode — see §4 K.
-6. **Multi-turn loop** — `run_single_engine_turn` repeatedly until the model calls `compress_and_store` OR `max_turns` (= `limits.max_tool_rounds`) exhausted. Tool results enter as in chat for every engine (`tool_loop::tool_result_content`: `max_tool_result_chars`, local window fit; older rounds compacted to line 1). Out-of-band detection of `compress_and_store` to commit step result. `engine = "claude_code"` and `"codex"` agents (`engines::bridges_tools`) get `EngineContext.bridge_tools` so the CLI sees tengu tools over the MCP bridge; the step's engine (`engines::build_step_engine`) also names the workspace grant and a summary file in the bridge env, so `compress_and_store` through the bridge lands in that file and becomes the step summary — the engine then ends the CLI run after that round.
+3. **Agent resolution** — `parent_config.agents.get(name)` where `name` = `compose.base_agent` if composed, else `input.agent_name`. Unknown name → hard error listing the configured agents. Composed runs overwrite `skill_packages` / `tools` in memory only (`bootstrap::tools::compose_agent`; in a hardened sandbox only narrowing, elsewhere an added tool needs a configured scope). Exports `TENGU_AGENT_NAME`. The step's workspace (`bootstrap::tools::workspace_or_temp`): the agent's, else a `tengu-step-*` temp dir removed after the step — the executor's and the engine's (a Claude Code / Codex CLI's cwd, its bridge).
+4. **System prompt assembly** — base template + each skill body (via `load_skill_body_three_tier`) + `input.plan_state` (none for an SOE stage) + mandatory suffix. Per-tool scopes come from the folded `[default_scopes]` plus the child's own workspace in `fs_roots` (`grant_workspace_root`; a deny-all scope stays a deny).
+5. **Tool executor** — `bootstrap::tools::build_subprocess_tool_executor(&AgentConfig, ..)` builds `PluginToolExecutor` from `(base tools ∩ agent.tools) ∪ {compress_and_store} ∪ shell skills (skill_packages) ∪ [[mcp_servers]] tools (∩ tools)` over the plugin registry (`agent_base_tools` + `agent_skill_registry`); `subagent_config` first merges the workspace-tool names in `tools` into `workspace_tools`. A Claude Code / Codex step builds only the list (`bridged_step_tools`: its MCP bridge builds the executor it calls), unless `[[mcp_servers]]` tools must be discovered by connecting. Its HTTP client comes from `egress::policy().tool_client` (proxy, redirects off); `http_request` gates hop 0 (egress + scope) inside `execute` and re-checks every redirect hop; `run_command` runs under the `[egress]` shell mode — see §4 K.
+6. **Multi-turn loop** — chat's own loop, `tool_loop::collect_engine_response` with the step's `StepHooks` (2026-10-22), until the model answers, calls `compress_and_store` (the hook keeps the summary; the loop ends after that round) or reaches `max_turns` (= `limits.max_tool_rounds`; then one last call with no tools). Tool results enter as in chat for every engine (`tool_loop::tool_result_content`: `max_tool_result_chars`, local window fit; older rounds compacted to line 1). Call ids `step:<session>:<step>:<loop nonce>:<round>:<i>:<provider id>`. `engine = "claude_code"` and `"codex"` agents (`engines::bridges_tools`) get `EngineContext.bridge_tools` so the CLI sees tengu tools over the MCP bridge; the step's engine (`engines::build_step_engine`) also names the workspace grant and a summary file in the bridge env, so `compress_and_store` through the bridge lands in that file and becomes the step summary — the engine then ends the CLI run after that round.
 
 ### 7. `compress_and_store` — durable step summary
 
@@ -104,10 +103,11 @@ Every step that calls an LLM or embedding API emits a `MetricsRecord` via `appli
 | Emitter | Kind | Where |
 |---|---|---|
 | Planner (step 3) | `Planner` — one per plan / replan, with the layer breakdown | `planner.rs::emit_planner_metrics` |
-| Subagent (step 6) | `Subagent` — one per `run_single_engine_turn`, shipped in `AgentIpcOutput.metrics`, re-emitted by `SubprocessRunner::run_step` on the parent's sink (`metrics::forward`: no second log line) | `cli/run_agent.rs` |
+| Subagent (step 6) | `Subagent` — one per engine turn (`StepHooks::on_turn`), shipped in `AgentIpcOutput.metrics` (else read from the step's journal when the child dies), re-emitted by `SubprocessRunner::run_step` on the parent's sink (`metrics::forward`: no second log line) | `cli/run_agent.rs` |
+| In-process agent (chat, Telegram, webhook / A2A agent, `tengu tool turn`) | `Agent` — one per engine turn (`tool_loop.rs::AgentTurnMetrics`) | `application/chat/service.rs`, `bootstrap/turn.rs` |
 | Embedder | `Embedding` — reads `usage.total_tokens` | `outbound/memory/embedder.rs::embed_batch_openrouter` |
 | Wiki compiler | `WikiCompiler` | `tools/agentic_memory/` (`compile_wiki`) |
-| Decision loop | `Decision` — one per successful decisions call (replay: cache hits too) | `application/decision_loop/mod.rs` |
+| Decision loop | `Decision` — one per decisions call (replay: cache hits too) | `application/decision_loop/mod.rs` |
 
 A bridge task (spawned in `build_orchestrator`) subscribes to the global metrics sink and republishes each record as `OrchestratorEvent::MetricsRecorded` on the orchestrator bus, so subscribers (TUI, eval recorder) see one unified event stream.
 
@@ -183,19 +183,16 @@ Paths below are relative to `src/`. §2.1–2.6 serve the chat turn; §2.7–2.1
 
 ### 2.1 Memory — `application/memory/` + ports + outbound stores
 
-Current durable memory is Postgres `agentic_memory` (`adapters/outbound/tools/agentic_memory/`, feature `postgres_memory`) plus Karpathy LLM Wiki Markdown. The layer below serves chat-side memory tools and the builtin provider.
+Current durable memory is Postgres `agentic_memory` (`adapters/outbound/tools/agentic_memory/`, feature `postgres_memory`) plus Karpathy LLM Wiki Markdown. The layer below serves the chat-side memory tools and the in-process chat `[Relevant memories]` recall (`application/chat/service.rs`). The planner neither injects nor writes it. Removed 2026-10-22: `MemoryProvider`, `BuiltinMemoryProvider`, `injector.rs`, `writer.rs`.
 
 | File | What it owns |
 |---|---|
-| `ports/memory.rs` | Traits: `VectorStore`, `MemoryProvider`, `Embedding`, `MemoryService` (what memory tools call), `RecallStore` (planner recall lanes) |
+| `ports/memory.rs` | Traits: `VectorStore`, `Embedding`, `MemoryService` (what memory tools call), `RecallStore` (planner recall lanes) |
 | `domain/memory.rs` | Shared types — `MemoryHit`, `ChunkMetadata`, `RecallHit`, `DEFAULT_EMBEDDING_MODEL` |
-| `application/memory/manager.rs` | `MemoryManager` — provider holder, prefetch_all/sync_all, `impl MemoryService` |
-| `application/memory/injector.rs` | Pre-turn fenced context injection. **Phase 7.1**: only `ChatOrchestratorPortImpl` calls this. |
-| `application/memory/writer.rs` | Post-turn spawned non-blocking memory writes. Same Phase 7.1 note. |
-| `application/memory/fencing.rs` | `<memory-context>` block helpers |
+| `application/memory/manager.rs` | `MemoryManager` — the workspace vector backend (embedder + `DiskVectorStore`) behind `remember`, `memory_ingest`, `memory_search`, `persistent_store`; `impl MemoryService` |
+| `application/memory/fencing.rs` | the recalled-memory block: a note + one `domain/untrusted.rs` fence (chat recall) |
 | `adapters/outbound/memory/disk_vector.rs` | Bincode store — the only `VectorStore` impl |
 | `adapters/outbound/memory/embedder.rs` | OpenRouter `text-embedding-3-small` client (1536d), `impl Embedding` |
-| `adapters/outbound/memory/builtin.rs` | `BuiltinMemoryProvider` — vector `prefetch` (top 5 for the agent) + `sync_turn`; its AGENTS.md / MEMORY.md / identity / daily-log loader runs only from `initialize`, which only tests call |
 | `bootstrap/memory.rs` | Builds the `MemoryManager` for a workspace |
 
 ### 2.2 `[agents.*]` — agents live in the sandbox config
@@ -232,12 +229,12 @@ Edit a block + restart chat → the planner registry file is regenerated on the 
 ### 2.3 `skills/` — prompt fragments + frontmatter
 
 Skill directories, highest priority first (a name found earlier shadows later ones):
-1. `~/.tengu/skills/` (managed)
+1. `<TENGU_HOME>/skills/` (managed)
 2. `<workspace>/.tengu/skills/` (workspace dotdir)
 3. `<workspace>/skills/` (project)
 4. the repo's `skills/` in the cwd, when it is another dir
 
-One list for every reader: `application/skills/registry.rs::skill_directories` — the planner registry (`orchestrator/shared_files.rs::scan_skill_summaries`, frontmatter `name` + `description`, first found wins), `run-agent`'s `load_skill_body_three_tier`, `view_skill`, `skill_resource`, `apply_improver_proposal`.
+One list for every reader: `application/skills/registry.rs::skill_directories` — the planner registry (`orchestrator/shared_files.rs::scan_skill_names`: a skill needs frontmatter `name` + `description`, listed by name only), `run-agent`'s `load_skill_body_three_tier`, `view_skill`, `skill_resource`, `apply_improver_proposal`.
 
 `skills/orchestrator/SKILL.md` is special — used as the planner system prompt (Phase 4c). Its companion `plan_schema.json` is the JSON shape the prompt asks the planner for. `skills/xlab-research/SKILL.md` (2026-10-01) is the xlab Architect's protocol (split first, tune in-sample, one holdout read); `skills/execution-map/SKILL.md` teaches an Architect the execution-map JSON (§2.8).
 
@@ -245,25 +242,25 @@ One list for every reader: `application/skills/registry.rs::skill_directories` �
 
 | File | What it owns |
 |---|---|
-| `mod.rs` | `Orchestrator` (top-level handle: `handle`, `subscribe`, `cancel`) |
-| `planner.rs` | `RagPlanner` legacy type name (only `Planner` impl since 7.1), free fn `parse_verdict`, `cross_session_recall_block`, `session_output_recall_block`, `emit_planner_metrics` |
+| `mod.rs` | `Orchestrator` (top-level handle: `new(planner, worker, policy, max_replans, bus)`, `handle`, `subscribe`) |
+| `planner.rs` | `PlannerLlm` (`{ engine, agent }`; `call` = the planner's one engine call, no hands), `RegistryPlanner` legacy type name (only `Planner` impl since 7.1), free fn `parse_verdict`, `cross_session_recall_block`, `session_output_recall_block`, `emit_planner_metrics` |
 | `domain/plan.rs` | `Plan`, `Step`, `AgentCompose` (C→B B-half), `StepId`, `ready_steps`, `leaves` |
 | `executor.rs` | `DagExecutor` — parallel `ready_steps` with cancel; aborts in-flight steps on cancel / exhaustion; a never-ready step ⇒ replan; parallel leaves joined |
 | `retry.rs` | `RetryPolicy` |
-| `replan.rs` | `drive()` loop — replan-on-exhausted |
-| `events.rs` | `OrchestratorEvent` enum + `EventBus` (PlanCreated, StepStarted, RagQueried legacy event name, **MetricsRecorded**, etc.; `StepFailed.retry_in_ms`, `PlanCompleted.failed`); a traced bus records each event before it broadcasts |
+| `replan.rs` | `drive()` loop — `Plan::validate` each plan, replan-on-invalid / exhausted |
+| `events.rs` | `OrchestratorEvent` enum + `EventBus` (PlanCreated, StepStarted, **MetricsRecorded**, etc.; `StepFailed.retry_in_ms`, `PlanCompleted.failed`); a traced bus records each event before it broadcasts |
 | `trace.rs` | `OrchestratorTrace` + `TraceBridge`: each event → `plan.*` / `step.*` / `metrics.recorded` in the surface's execution trace (chat, telegram, eval, webhook agent endpoints, escalations); a step's cause handed to its `run-agent` child |
-| `wiring.rs` | `ChatOrchestratorPortImpl` (planner-side LLM turn glue). Traits `Planner`, `OrchestratorChatPort`, `WorkerHandle`, `ChatServiceFactory`, `TurnTelemetry` live in `ports/orchestration.rs` |
-| `shared_files.rs` | `routable_agents` + `render_registry` → `TENGU_PLANNER_REGISTRY.md` (`ensure_planner_registry`, tool list from the `ToolDirectory` port), per-session `set_active_plan` / `active_plan` (IPC `plan_state`), `TENGU_PLAN.md` debug artifact, `scan_skill_summaries` |
+| `ports/orchestration.rs` | Traits `Planner`, `WorkerHandle` (`known_agents` for `Plan::validate`), `ChatServiceFactory` (`run_turn` only — `tengu evolve`); `TurnTelemetry`. (`wiring.rs` / `ChatOrchestratorPortImpl` / `OrchestratorChatPort` removed 2026-10-22) |
+| `shared_files.rs` | `routable_agents` + `render_registry` → `TENGU_PLANNER_REGISTRY.md` (`ensure_planner_registry`, tool list from the `ToolDirectory` port), `render_plan_state` / `plan_state_block` (IPC `plan_state`), `scan_skill_names` |
 
 ### 2.5 `domain/metrics.rs` + `application/metrics.rs` — context/token observability (added 2026-04-28)
 
-Process-wide observability layer. Every successful planner call, `run-agent` step turn, embedding, wiki-compiler and Jev decisions call emits a `MetricsRecord` (an in-process chat turn emits none) with token counts, latency, and (for the planner) per-context-layer breakdown. Three surfaces — tracing baseline (`RUST_LOG=tengu=info`), in-process broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorder.
+Process-wide observability layer. Every planner call, `run-agent` step turn, in-process agent turn, embedding, wiki-compiler and Jev decisions call emits a `MetricsRecord` (a failed one too: `ok = false`, 0 tokens) with token counts, latency, and (for the planner) per-context-layer breakdown. Three surfaces — tracing baseline (`RUST_LOG=tengu=info`), in-process broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorder.
 
 | Item | What it is |
 |---|---|
-| `MetricsRecord` | Per-call telemetry: ts, session_id, kind, agent, model, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layer breakdown, optional step_id. Serde-friendly so it crosses the subagent IPC boundary. |
-| `MetricsKind` | `Planner` (one per user turn) / `Subagent` (one per inner-loop turn) / `Embedding` (one per OpenRouter `/embeddings` call) / `WikiCompiler` (`compile_wiki`) / `Decision` (one per successful decisions call). |
+| `MetricsRecord` | Per-call telemetry: ts, session_id, kind, agent, model, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layer breakdown, optional step_id, `ok` (false = the call failed; absent on the wire = true). Built with `MetricsRecord::call` + struct update. Serde-friendly so it crosses the subagent IPC boundary. |
+| `MetricsKind` | `Planner` (one per user turn) / `Subagent` (one per plan-step inner-loop turn) / `Agent` (one per in-process agent turn) / `Embedding` (one per OpenRouter `/embeddings` call) / `WikiCompiler` (`compile_wiki`) / `Decision` (one per decisions call). |
 | `MetricsLayer` | One row in the planner's per-context-layer breakdown. `plan`: `system`, `roster`, `cross_session`, `history`, `session_recall`, `user_message`; `replan`: `system`, `roster`, `cross_session`, `history`, `recall`, `failure`, `user_message`. Approximate — engine-side framing isn't counted. |
 | `install_global_sink` / `record` / `subscribe` (`application/metrics.rs`) | Process-global broadcast sink (`OnceLock<broadcast::Sender>`). `record()` always emits a `tracing::info!` line; bus broadcast is best-effort. |
 | `AggregatorState` | Lightweight in-process rollup: overall + by-agent + by-kind. Used by the TUI. |
@@ -346,7 +343,7 @@ Doc: `docs/typed-observations-2026-09-24.md`.
 | SOE (3) | `soe_view` (`soe_view/1:<run>:<view>`, read-only), `soe_propose` (Architect draft, `<cycle>.pNN`), `soe_challenge` (Critic draft, `<cycle>.cNN`) — writes go through `application::soe::submit` into the open run dir; never a contact, spend or publish | `tools/soe/` (§2.17) |
 | A2A (1) | `a2a` (`list` · `card` · `send` · `get` · `cancel`; only `[a2a.remotes.<name>]`, only their hosts) | `tools/a2a/` · `outbound/a2a/` (§2.20) |
 
-Shared: `outbound/rate_limit.rs` (`[rate_limits.<name>]`, per process), `outbound/http_class.rs` (HTTP → `ErrorClass`, URL scrubber), `domain/backoff.rs`. The hidden `tengu tool list` prints every catalog name (51 in a default build: 14 default + 37 opt-in; `agentic_memory` joins with `postgres_memory`). In a `[generation]`-bound sandbox the executor and the bridge drop a tool the generation refuses (`bootstrap/tools.rs::within_generation`; `Config::load` refuses listing one).
+Shared: `outbound/rate_limit.rs` (`[rate_limits.<name>]`, per process), `outbound/http_class.rs` (HTTP → `ErrorClass`, URL scrubber, `GatedHttp` — gate → budget → seal session → send → audit for every API client, `Retry`), `domain/backoff.rs`. The hidden `tengu tool list` prints every catalog name (51 in a default build: 14 default + 37 opt-in; `agentic_memory` joins with `postgres_memory`). In a `[generation]`-bound sandbox the executor and the bridge drop a tool the generation refuses (`bootstrap/tools.rs::within_generation`; `Config::load` refuses listing one).
 
 ### 2.11 xmarket — risk gate, paper ledger, fill engine, kill switch, exits, weekend fade (2026-09-30 / 2026-10-01)
 
@@ -484,6 +481,7 @@ The trace is what Studio reads; the page draws what Rust computed (graph, colour
 | `ports/trace.rs` | `TraceSink` (one recording, fail-soft) · `TraceReader` (runs, events after a `seq`, follow live) |
 | `adapters/outbound/trace_store.rs` | `JsonlTraceSink` / `JsonlTraceReader`: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, first line `run.opened`, one `write_all` per event; follow = a 250 ms tail into a bounded channel (256) |
 | `application/trace_exec.rs` | `Cause` / `caused_by` (an event's parent) · `TracedExecutor` (`tool.started` → `tool.completed` / `tool.failed`, node `tool:<agent>/<tool>`) |
+| `bootstrap/one_shot.rs` | `run_one_shot`: one orchestrator turn for a planner webhook endpoint or a loop escalation (`orchestrator_escalator`, `tengu run` / Studio / `tengu webhooks`, any build); answer → log + Open Brain, never the trace |
 | `bootstrap/trace.rs` | `open_sink` (a new recording per process; an unwritable dir ⇒ `NoopTrace` + a warn), `reader`, `run_path`. Records: `tengu run` (`runtime.*`, `feed.*`, `loop.*`, steps, tools, webhook requests, plans), `tengu decide` (`trigger.*`, steps, tools), `tengu webhooks` (`trigger.webhook` per request, its loop / plan events, `run.closed`); `open_orchestration` — chat / telegram / eval with `[orchestrator]` (`plan.*`, `step.*`, a step's `run-agent` `tool.*`) |
 | `cli/trace.rs` | `tengu trace runs \| show --run <id> [--after <seq>] [--follow]` — JSON lines; no config, read-only |
 | `domain/workflow.rs` | `WorkflowGraph`: nodes `runtime` · `trigger` · `feed` · `agent` · `loop` · `world` · `jev` · `gate` · `action` · `escalation` · `scope` · `tool` (layer + order computed in Rust); edges `fires` · `reads` · `asks` · `chooses` · `calls` · `binds` · `next` · `guards` · `escalates` · `owns`; `narrowed_out` = dropped by an execution map — pure |
@@ -524,7 +522,7 @@ Doc `docs/a2a-2026-10-10.md`; page `docs/tutorial/a2a.html`; example `sandboxes/
 | `adapters/outbound/a2a/mod.rs` | the client: card → interface → host pin (only the remote's hosts) → JSON-RPC / HTTP+JSON call → `GetTask` polling; egress `peer_client` (proxied, loopback direct) + scope per request; audit `tool = "a2a"` |
 | `adapters/outbound/tools/a2a/` | opt-in tool `a2a`: `list` · `card` · `send` · `get` · `cancel` |
 | `ports/a2a.rs` · `application/a2a/` | `A2aRunner` · `A2aService` (every method; task per message, `max_running`, `run_timeout`, cancel aborts) + `tasks.rs` (in-memory store, context memory, `ListTasks` pages) |
-| `bootstrap/a2a.rs` | cards; `TurnRunner`: planner = one-shot orchestrator turn (session `a2a-<contextId>`), agent = one in-process turn with its tools; answers redacted |
+| `bootstrap/a2a.rs` | cards; `TurnRunner`: planner = one-shot orchestrator turn (session `a2a-<contextId>`), agent = one in-process turn with its tools (`bootstrap/turn.rs::run_once`, shared with `tengu tool turn`); answers redacted |
 | `adapters/inbound/a2a.rs` · `cli/a2a.rs` | `tengu a2a serve` (axum, feature `a2a`, default): cards (v1 / 0.3), JSON-RPC, SSE, bearer auth · `tengu a2a cards\|remotes\|card\|send\|get\|cancel` |
 
 ### 2.21 Seal proxy + Privy Solana signing (2026-10-09 → 2026-10-13)
@@ -548,11 +546,11 @@ No provider key on this machine: keys are secrets of the `tengu-seal` Cloudflare
 
 | Store | What it holds | Written by | Read by | TTL? |
 |---|---|---|---|---|
-| `TENGU_PLANNER_REGISTRY.md` | `[agents.*]` blocks with a `description` + skills + core & MCP tool defs | `shared_files::ensure_planner_registry` before planner calls | `RagPlanner::plan/replan` prompt context | NO |
-| `TENGU_PLAN.md` | current accepted plan/replan (debug artifact; IPC `plan_state` is the source of truth) | `replan.rs::drive` | humans; old-parent fallback in `run_agent_subprocess` | overwritten |
+| `TENGU_PLANNER_REGISTRY.md` | `[agents.*]` blocks with a `description` + skill names + core & MCP tool names | `shared_files::ensure_planner_registry` before planner calls | `RegistryPlanner::plan/replan` prompt context | NO |
+
 | Postgres `agentic_memory` | Open Brain live memory: user messages + step outputs + source chunks | planner + `run-agent` + `agentic_memory` tool when `postgres_memory` is enabled | planner recall + agents via tool | none yet |
 | `.tengu/agentic-memory/wiki/` | Karpathy LLM Wiki compiled Markdown | `agentic_memory compile_wiki` | agents, humans, future MCP surface | Git/history |
-| Disk bincode vector store (`adapters/outbound/memory/disk_vector.rs`: `<workspace>/memory/vectors.bin`, else `[memory] store_path`, default `~/.tengu/memory/`) | chat-side `memory_ingest` / `memory_search` / `persistent_store` entries | `MemoryPlugin` tools | same tools + `BuiltinMemoryProvider` | none (per-id `delete`, `clear_all` via `/purge`; no sweep) |
+| Disk bincode vector store (`adapters/outbound/memory/disk_vector.rs`: `<workspace>/memory/vectors.bin`, else `[memory] store_path`, default `<TENGU_HOME>/memory/`) | chat-side `memory_ingest` / `memory_search` / `persistent_store` entries | `MemoryPlugin` tools | same tools + chat `[Relevant memories]` recall | none (per-id `delete`, `clear_all` via `/purge`; no sweep) |
 | `<workspace>/.tengu/observations.db` | typed rows `<schema>:<subject>` (`acct/1`, `mkt_ctx/1`, `hl_book/1`, `paper_positions/1`, `loop/1`, `feed/1`, …) | typed tools via `observe()`, feeds, `HealthBoard` | the same tools (cache hits), loop `world`, `doctor --live` | per-row `ttl_ms`; purged after 7 days |
 | `<state dir>/history/<YYYYMMDD>.db` | recorded observation history (`[recorder]`) | `RecordingObservationStore` | `tengu history range` / `asof` | `[recorder]` retention |
 | `<state dir>/ledger.db` | paper accounts, positions, orders, fills, funding, risk verdicts, account owners | exec tools via `PaperLedger::place` | `risk_status`, `paper_positions`, `tengu risk status` | none |
@@ -565,13 +563,13 @@ No provider key on this machine: keys are secrets of the `tengu-seal` Cloudflare
 | `<TENGU_HOME>/state/<sources.state>/sources.db` | raw snapshots (sha256), source records, coverage, cursors, tombstones, kill switches | `tengu sources fetch` / `import` / `terms` / `disable` / `enable` / `purge` | `tengu sources asof`, `source_evidence` | per-row retention (`raw_retention_days`, `record_retention_days`; 0 = forever) |
 | `<TENGU_HOME>/state/soe/operator.toml` | the signed private operator profile (0600) | `tengu soe init` (template), the operator | the O1 `tengu soe` commands | none |
 | `<TENGU_HOME>/state/<sources.state>/` (SOE state root, beside `sources.db`) | `operator.toml`; run dirs `cycles/<week>/`, `replays/<id>/`, `reviews/<day>/` (frozen: `MANIFEST.json` + read-only); `stage-cache/<key>.jsonl`; state logs `candidates`, `episodes`, `forecast-log`, `grades`, `resolutions`, `replays`, `reviews`, `holdout-reads` (`.jsonl`) | `tengu soe cycle` / `replay` / `grade` / `resolve` / `review`, the `soe_cycle` job; `soe_propose` / `soe_challenge` into an open run dir | `soe_view`, `tengu soe show` / `verify` / `review` | none (run dirs frozen, logs append-only) |
-| `<TENGU_HOME>/logs/{egress,decisions,risk}.jsonl` | network audit · Jev calls · risk verdict mirror | `egress.rs` · decision loops · `paper_store.rs` | operators | `tengu prune` deletes `logs/` |
-| `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` · `logs/maps/<sha256>.json` | one recording per `tengu run` / `tengu decide` process · the execution maps `tengu decide --map` ran | `JsonlTraceSink` (`bootstrap/trace.rs`) · `cli/decide.rs` | `tengu trace`, `tengu studio` | `tengu prune` deletes `logs/` |
+| `<TENGU_HOME>/logs/{egress,decisions,risk}.jsonl` | network audit · Jev calls · risk verdict mirror | `egress.rs` · decision loops · `paper_store.rs` | operators | `tengu prune` (no `--sandbox`) deletes `logs/` |
+| `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` · `logs/maps/<sha256>.json` | one recording per `tengu run` / `tengu decide` process · the execution maps `tengu decide --map` ran | `JsonlTraceSink` (`bootstrap/trace.rs`) · `cli/decide.rs` | `tengu trace`, `tengu studio` | `tengu prune` deletes `logs/`; `--sandbox <s>` only `trace/<s>/` |
 | `<TENGU_HOME>/state/solana-writes.db` | per-wallet send lease, pending sends, write fences | `outbound/solana/send.rs` | the next send | none |
 | `sandboxes/<n>/builder.json` · `config.toml.prev` | the builder's canvas (`deny_unknown_fields`) · the config Finalise replaced | the builder (`adapters/outbound/builder_store.rs`, atomic) | the builder, `tengu sandbox compile` | none |
 | process env only: `TENGU_KEYS_SESSION_TOKEN` (+ `_PROXY`, `_SESSION_EXP_MS`) | the seal-proxy session (24 h default, ≤ 168 h); no provider key anywhere on disk | `outbound/keys::install` | every routed client, `run-agent` / `mcp-bridge` children | the session's `exp_ms` (not refreshed in-process) |
 
-`<state dir>` = `<TENGU_HOME>/state/<[xmarket] state>` (else `<TENGU_HOME>/state`); outside every fs root and workspace; `tengu prune` never deletes `<TENGU_HOME>/state` beyond `state/flows` (layout: `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout).
+`<state dir>` = `<TENGU_HOME>/state/<[xmarket] state>` (else `<TENGU_HOME>/state`); outside every fs root and workspace; `tengu prune` never deletes `<TENGU_HOME>/state` (layout: `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout).
 
 ---
 
@@ -591,11 +589,11 @@ The subagent's per-turn records cross the IPC boundary in `AgentIpcOutput.metric
 
 ### A. The doctrine is real
 
-"LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" isn't just a mantra. The planner LLM call in `RagPlanner::plan` gets no tools, no tool executor, no memory manager, and `suppress_grounding_nudge`, because the planner has exactly one job: emit plan JSON. See `bootstrap/orchestrator.rs::RuntimeChatServiceFactory::run_turn_inner` (reached through `run_turn_with_system`). The boundary is enforced in code.
+"LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" isn't just a mantra. The planner in `RegistryPlanner::plan` / `replan` holds an engine, not a chat service: `PlannerLlm::call` (`application/orchestrator/planner.rs`) sends one message with no tools, no tool executor, no bridge, no `[[mcp_servers]]` and no memory, because the planner has exactly one job: emit plan JSON. There is nothing to strip — the boundary is structural (test `planner_call_has_no_hands_and_reports_usage`).
 
 ### B. Planner and runner share one `session_id`
 
-The caller resolves the id once (`bootstrap::orchestrator::resolve_session_id`: `TENGU_SESSION_ID` env override or fresh UUID; `tengu webhooks` mints `webhook-<name>-<uuid>` per request) and `build_orchestrator` hands the same string to both `RagPlanner` and `SubprocessRunner`, so planner messages and subagent step summaries share the same session key.
+The caller resolves the id once (`bootstrap::orchestrator::resolve_session_id`: `TENGU_SESSION_ID` env override or fresh UUID; `tengu webhooks` mints `webhook-<name>-<uuid>` per request) and `build_orchestrator` hands the same string to both `RegistryPlanner` and `SubprocessRunner`, so planner messages and subagent step summaries share the same session key.
 
 ### C. Sandbox config crosses the IPC boundary (Phase 7.2)
 
@@ -622,9 +620,9 @@ Implementation: `domain/plan.rs::AgentCompose`, threaded through `AgentIpcInput.
 
 ### G. Engines: four backends, mixed is the verified pattern (Phase 7.3, `local` 2026-09-23, `codex` 2026-10-10)
 
-Each `[agents.<name>]` block declares its `engine`: `"openrouter"`, `"local"` (any OpenAI-compatible server on the host — Unsloth, Ollama, llama.cpp, vLLM; direct, never via the proxy), `"claude_code"` or `"codex"` (the OpenAI Codex CLI on the ChatGPT subscription; refused in a hardened sandbox) — the same field for in-process agents. Model slug format depends on engine: OpenRouter wants `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6` (build with `--features claude_code`); Codex a bare OpenAI id (`gpt-5.5`; feature `codex`, default); `local` sends the server's own id.
+Each `[agents.<name>]` block declares its `engine`: `"openrouter"`, `"local"` (any OpenAI-compatible server on the host — Unsloth, Ollama, llama.cpp, vLLM; direct, never via the proxy), `"claude_code"` or `"codex"` (the OpenAI Codex CLI on the ChatGPT subscription; refused in a hardened sandbox) — the same field for in-process agents. Model slug format depends on engine: OpenRouter wants `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`; Codex a bare OpenAI id (`gpt-5.5`); `local` sends the server's own id. Every engine is in every build.
 
-**A Claude Code planner sets `builtin_tools_profile = "none"` (2026-10-14).** A CLI engine takes its tengu tools from the bridge per run, and a planner turn (`run_turn_inner` with a system override) passes no tools, no bridge and no `[[mcp_servers]]`; with profile `none` the CLI has no built-ins either, so it can only write plan JSON (`planner_turn_gets_no_bridge_tools`; live: `sandboxes/a2a-lab`). Before 2026-10-14 the bridge still reached a planner that was also the chat agent, hence the old "OpenRouter for the planner" rule. Codex keeps its own built-in shell / patch tool (`-s read-only` by default) even on a tool-less turn — prefer Claude Code for the planner. Operator rule: frontier models only on the subscriptions (CLAUDE.md gotcha "Model spend").
+**A Claude Code planner sets `builtin_tools_profile = "none"` (2026-10-14).** A CLI engine takes its tengu tools from the bridge per run, and the planner call (`PlannerLlm::call`) passes no tools, no bridge and no `[[mcp_servers]]`; with profile `none` the CLI has no built-ins either, so it can only write plan JSON (`planner_call_has_no_hands_and_reports_usage`; live: `sandboxes/a2a-lab`). Before 2026-10-14 the bridge still reached a planner that was also the chat agent, hence the old "OpenRouter for the planner" rule. Codex keeps its own built-in shell / patch tool (`-s read-only` by default) even on a tool-less turn — prefer Claude Code for the planner. Operator rule: frontier models only on the subscriptions (CLAUDE.md gotcha "Model spend").
 
 ### H. Claude Code and Codex subagents see tengu's tools via the MCP bridge (Phase 7.4; Codex 2026-10-10)
 
@@ -709,7 +707,7 @@ Provider keys are Cloudflare Worker secrets; tengu holds only a session signed b
 Trace ONE turn end-to-end before changing anything:
 
 ```
-cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping
+cargo run --release --features postgres_memory -- chat --sandbox lping
 > what is the current BTC price in USD?
 ```
 
@@ -718,9 +716,9 @@ cargo run --release --features postgres_memory,claude_code -- chat --sandbox lpi
 Follow the call chain:
 
 1. `adapters/inbound/tui/mod.rs` — captures the input, dispatches to the engine thread
-2. `bootstrap::orchestrator::build_orchestrator` — constructs `Orchestrator`
-3. `application/orchestrator/mod.rs::Orchestrator::handle` — calls `replan::drive` → `RagPlanner::plan`
-4. `application/orchestrator/planner.rs::RagPlanner::plan` — load planner registry file, LLM call, parse verdict
+2. `bootstrap::orchestrator::planner_llm` + `build_orchestrator` — the planner's engine, then `Orchestrator`
+3. `application/orchestrator/mod.rs::Orchestrator::handle` — calls `replan::drive` → `RegistryPlanner::plan`
+4. `application/orchestrator/planner.rs::RegistryPlanner::plan` — load planner registry file, `PlannerLlm::call`, parse verdict
 5. `application/orchestrator/replan.rs::drive` — runs the plan, handles retry/replan
 6. `adapters/outbound/subprocess_runner.rs::SubprocessRunner::run_step` — spawns child, pipes IPC
 7. `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` — child entry: load sandbox config → `egress::install` → `[agents.<name>]`, build tools, multi-turn loop
@@ -743,4 +741,4 @@ That's the whole story. Every other doc in `docs/` zooms into one of those layer
 
 ---
 
-*Written 2026-04-27; last synced 2026-10-13 against `main` at 099ceb6fdf1e217293b614b6d232d74ab29d123c (§2.19 Studio builder + `engine = "codex"`, §2.20 A2A — renumbered from a second §2.19 —, §2.21 seal proxy + Privy Solana signing; mechanic U; sandboxes `a2a-lab`; stores: `builder.json`, the session; tool count 51; Codex in the engine, bridge and egress rows). Before that 2026-10-09 against `main` at f7ac9a5636e2493e3839e896cba9951a2d41aefb (§2.17 SOE O3 / O4: weekly cycle, replay, grades, Review #2 packet, `soe_*` tools, the `kind = "job"` feed; §2.18 execution trace + Tengu Studio; `control-loop-lab`; mechanics R, S; stores: SOE state root, trace, maps). Before that 2026-10-08 against `main` at bc9bc12a038654ac4941c714abcfa777c99af631 (added §1b C ranking flow, §2.14–2.17: lineage + evidence, strategy ranking, source evidence, SOE; mechanics P, Q; SEC events, labels, execution maps, `xlab-w2` / `soe` sandboxes; corrected: skill directory order, executor abort + parallel leaves, child log forwarding, tool count 47, `tengu prune` scope). Before that 2026-10-02 against `feature/xmarket` at 699bb83e79e3dac2f76ca9cbef69b3573b31252d (added §1b other flows, §2.7–2.13: `tengu run`, decision loops + replay, typed observations + recorder, tool families, xmarket risk / paper, xlab, engine parity; corrected: session-id resolution, plan-schema validation, metrics kinds and layers, bridge env, `AgentCompose` path). Companion files: `architecture-2026-04-27.svg` (the picture), `architecture-2026-04-27.html` (the explorer), `code-map.md` (every file), `SESSION_HANDOFF.md` (the running state log), `comparison-2026-04-26.md` (vs Hermes / PI).*
+*Written 2026-04-27; 2026-10-22: the planner calls its engine through `PlannerLlm` (step 2, step 3.8, §2.1, §2.4, mechanic A, G); deleted `wiring.rs`, `OrchestratorChatPort`, the `run_turn_with_system` path, the memory injector / writer / provider; `Plan::validate` before any step. Last synced 2026-10-13 against `main` at 099ceb6fdf1e217293b614b6d232d74ab29d123c (§2.19 Studio builder + `engine = "codex"`, §2.20 A2A — renumbered from a second §2.19 —, §2.21 seal proxy + Privy Solana signing; mechanic U; sandboxes `a2a-lab`; stores: `builder.json`, the session; tool count 51; Codex in the engine, bridge and egress rows). Before that 2026-10-09 against `main` at f7ac9a5636e2493e3839e896cba9951a2d41aefb (§2.17 SOE O3 / O4: weekly cycle, replay, grades, Review #2 packet, `soe_*` tools, the `kind = "job"` feed; §2.18 execution trace + Tengu Studio; `control-loop-lab`; mechanics R, S; stores: SOE state root, trace, maps). Before that 2026-10-08 against `main` at bc9bc12a038654ac4941c714abcfa777c99af631 (added §1b C ranking flow, §2.14–2.17: lineage + evidence, strategy ranking, source evidence, SOE; mechanics P, Q; SEC events, labels, execution maps, `xlab-w2` / `soe` sandboxes; corrected: skill directory order, executor abort + parallel leaves, child log forwarding, tool count 47, `tengu prune` scope). Before that 2026-10-02 against `feature/xmarket` at 699bb83e79e3dac2f76ca9cbef69b3573b31252d (added §1b other flows, §2.7–2.13: `tengu run`, decision loops + replay, typed observations + recorder, tool families, xmarket risk / paper, xlab, engine parity; corrected: session-id resolution, plan-schema validation, metrics kinds and layers, bridge env, `AgentCompose` path). Companion files: `architecture-2026-04-27.svg` (the picture), `architecture-2026-04-27.html` (the explorer), `code-map.md` (every file), `SESSION_HANDOFF.md` (the running state log), `comparison-2026-04-26.md` (vs Hermes / PI).*

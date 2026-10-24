@@ -18,9 +18,6 @@
 //! | `surprise?`, `evidence_strength` | text · `LOW` `MEDIUM` `HIGH` `UNKNOWN` |
 //! | `[quality]` · `[lesson]?` | lineage episode `Quality` (decision × outcome stored apart) · `Lesson` |
 
-// Consumers land with the cycle (O3 `run_cycle`, private `episodes.jsonl`).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use super::experiment::ApprovalKind;

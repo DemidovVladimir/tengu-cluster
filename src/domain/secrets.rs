@@ -110,7 +110,7 @@ fn is_chain_id(v: &str) -> bool {
         return h.len() == 64 && is_hex(h);
     }
     (32..=88).contains(&v.len())
-        && crate::domain::solana::bs58_decode(v).is_ok_and(|b| b.len() == 32 || b.len() == 64)
+        && crate::domain::base58::bs58_decode(v).is_ok_and(|b| b.len() == 32 || b.len() == 64)
 }
 
 /// Registry of secret values that must never appear in tool output,
@@ -154,21 +154,17 @@ impl SecretRegistry {
         result
     }
 
-    /// `redact` every string leaf of `v` in place.
+    /// `redact` every string leaf and object key of `v` in place.
     pub fn redact_value(&self, v: &mut Value) {
         if self.values.is_empty() {
             return;
         }
-        match v {
-            Value::String(s) => {
-                if self.values.iter().any(|x| s.contains(x.as_str())) {
-                    *s = self.redact(s);
-                }
-            }
-            Value::Array(a) => a.iter_mut().for_each(|x| self.redact_value(x)),
-            Value::Object(o) => o.values_mut().for_each(|x| self.redact_value(x)),
-            _ => {}
-        }
+        map_strings(v, &|s| {
+            self.values
+                .iter()
+                .any(|x| s.contains(x.as_str()))
+                .then(|| self.redact(s))
+        });
     }
 
     /// Redact a typed observation: headline, `errors[].message`, string
@@ -183,6 +179,33 @@ impl SecretRegistry {
         }
         obs.features.values_mut().for_each(|v| self.redact_value(v));
         self.redact_value(&mut obs.data);
+    }
+}
+
+/// The one JSON walker of the redactors: `f` on every string leaf and every
+/// object key of `v` (keys are input like values); `None` = unchanged. Two
+/// keys that end alike keep one value.
+pub(crate) fn map_strings(v: &mut Value, f: &dyn Fn(&str) -> Option<String>) {
+    match v {
+        Value::String(s) => {
+            if let Some(c) = f(s) {
+                *s = c;
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| map_strings(x, f)),
+        Value::Object(o) => {
+            o.values_mut().for_each(|x| map_strings(x, f));
+            let renamed: Vec<(String, String)> = o
+                .keys()
+                .filter_map(|k| f(k).map(|n| (k.clone(), n)))
+                .collect();
+            for (old, new) in renamed {
+                if let Some(x) = o.remove(&old) {
+                    o.insert(new, x);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -307,6 +330,18 @@ mod tests {
         assert_eq!(
             v,
             json!({"a": ["x [REDACTED] y", 1], "b": {"c": "[REDACTED]"}})
+        );
+    }
+
+    #[test]
+    fn redact_value_also_redacts_object_keys() {
+        let mut r = SecretRegistry::new();
+        r.register("sk-secret".into());
+        let mut v = json!({"sk-secret": 1, "b": {"k=sk-secret": "sk-secret", "c": 2}});
+        r.redact_value(&mut v);
+        assert_eq!(
+            v,
+            json!({"[REDACTED]": 1, "b": {"k=[REDACTED]": "[REDACTED]", "c": 2}})
         );
     }
 

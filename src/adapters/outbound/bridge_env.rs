@@ -9,12 +9,8 @@
 //! bridge by inheritance — the engine never writes a secret value (nor a
 //! `[[mcp_servers]]` config) into the file. Besides the names below: `TENGU_BRIDGE_WORKSPACE`,
 //! `TENGU_BRIDGE_TOOLS`, `TENGU_BRIDGE_MAX_RESULT_CHARS`, `TENGU_EGRESS`,
-//! `TENGU_SECRETS_LOADED` (names only), `TENGU_SESSION_ID` and `TENGU_CONFIG`
+//! `TENGU_SECRETS_LOADED` (names only), `TENGU_SESSION_ID`, `TENGU_RUN_ID` and `TENGU_CONFIG`
 //! (`config::paths::TENGU_CONFIG_ENV`, absolute: the bridge loads it).
-
-// The builder is used by the CLI engines only (features `claude_code`,
-// `codex`); the bridge reads the names in every build.
-#![cfg_attr(not(any(feature = "claude_code", feature = "codex")), allow(dead_code))]
 
 /// The calling agent's per-tool scope map (JSON `HashMap<String, ToolScope>`).
 /// Used only when the bridge cannot resolve the agent from `TENGU_CONFIG`.
@@ -50,6 +46,12 @@ pub(crate) const TENGU_BRIDGE_GRANT_WORKSPACE_ENV: &str = "TENGU_BRIDGE_GRANT_WO
 /// Absent = the bridge refuses `compress_and_store` with the reason.
 pub(crate) const TENGU_BRIDGE_SUMMARY_FILE_ENV: &str = "TENGU_BRIDGE_SUMMARY_FILE";
 
+/// A recorded `run-agent` step's journal (`trace_store::JournalSink`): the
+/// bridge appends each tool call's `tool.*` events there, as the step's own
+/// executor does; the parent replays them into its run on any exit.
+/// Absent = the bridge records nothing.
+pub(crate) const TENGU_BRIDGE_JOURNAL_ENV: &str = "TENGU_BRIDGE_JOURNAL";
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -73,6 +75,9 @@ pub(crate) struct StepBridge {
     /// back as its IPC summary. `None` = the bridge refuses the call with
     /// the reason.
     pub summary_file: Option<PathBuf>,
+    /// [`TENGU_BRIDGE_JOURNAL_ENV`]: the step's journal when the parent
+    /// records the step; `None` = no tool events.
+    pub journal: Option<PathBuf>,
 }
 
 /// What one CLI run hands its `tengu mcp-bridge`.
@@ -136,6 +141,12 @@ pub(crate) fn bridge_env(run: &BridgeRun<'_>) -> Map<String, Value> {
             s(file.to_string_lossy().into_owned()),
         );
     }
+    if let Some(file) = &run.step.journal {
+        env.insert(
+            TENGU_BRIDGE_JOURNAL_ENV.into(),
+            s(file.to_string_lossy().into_owned()),
+        );
+    }
     if let Some(file) = run.transcript {
         env.insert(
             TENGU_BRIDGE_TRANSCRIPT_FILE_ENV.into(),
@@ -173,6 +184,7 @@ pub(crate) fn bridge_env(run: &BridgeRun<'_>) -> Map<String, Value> {
         "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
         "TENGU_PERSISTENT_STORE_CHUNK_OVERLAP",
         "TENGU_SESSION_ID",
+        crate::adapters::outbound::egress::RUN_ID_ENV,
         crate::adapters::outbound::secrets::SECRETS_LOADED_ENV,
     ] {
         if let Ok(v) = std::env::var(name) {

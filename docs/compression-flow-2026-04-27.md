@@ -72,7 +72,7 @@ preamble only; a model that answers in full and stores a shorter note keeps
 its answer.
 
 ### Read path
-`RagPlanner::replan` (legacy planner type name) reads prior step outputs from
+`RegistryPlanner::replan` (legacy planner type name) reads prior step outputs from
 Postgres `agentic_memory` (`RecallStore::recall_step_outputs`, top
 `[memory] cross_plan_top_k`, default 5) via pgvector first and FTS fallback
 when `postgres_memory` is enabled; `plan()` reads this session's outputs too

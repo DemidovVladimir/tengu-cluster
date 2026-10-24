@@ -4,7 +4,6 @@ use crate::domain::plan::Step;
 use crate::ports::orchestration::WorkerHandle;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -29,7 +28,6 @@ pub enum ExecResult {
         error: String,
         finished: Finished,
     },
-    Cancelled,
 }
 
 pub struct DagExecutor;
@@ -49,9 +47,8 @@ impl DagExecutor {
         worker: Arc<dyn WorkerHandle>,
         policy: &RetryPolicy,
         events: &EventBus,
-        cancel: Arc<AtomicBool>,
     ) -> ExecResult {
-        Self::run_reusing(plan, worker, policy, events, cancel, &Finished::new()).await
+        Self::run_reusing(plan, worker, policy, events, &Finished::new()).await
     }
 
     /// [`Self::run`], but a step identical to one that finished in an earlier
@@ -64,7 +61,6 @@ impl DagExecutor {
         worker: Arc<dyn WorkerHandle>,
         policy: &RetryPolicy,
         events: &EventBus,
-        cancel: Arc<AtomicBool>,
         reuse: &Finished,
     ) -> ExecResult {
         let mut completed_outputs: HashMap<StepId, String> = HashMap::new();
@@ -105,29 +101,29 @@ impl DagExecutor {
                 })
                 .collect()
         };
+        // Every step's child sees the plan it is part of (`run_step`).
+        let shared_plan = Arc::new(plan.clone());
         let mut in_flight: HashSet<StepId> = HashSet::new();
-        // Every way out — an early return, this future dropped unfinished —
-        // aborts the steps still in flight ([`InFlight`]).
+        // Every way out — an early return, this future dropped unfinished
+        // (Telegram `/stop`, a shutdown deadline) — aborts the steps still
+        // in flight ([`InFlight`]); their `run-agent` children are killed on
+        // drop (`SubprocessRunner`).
         let mut futures = InFlight(FuturesUnordered::new());
 
         loop {
-            // Honor cancellation before dispatching the next batch of ready
-            // steps.
-            if cancel.load(Ordering::SeqCst) {
-                return ExecResult::Cancelled;
-            }
-
             // Dispatch ready steps.
             let completed: HashSet<StepId> = completed_outputs.keys().cloned().collect();
             for step in plan.ready_steps(&completed) {
                 if in_flight.contains(&step.id) {
                     continue;
                 }
-                let step_inputs = render_step_inputs(step, &completed_outputs);
+                let step_inputs =
+                    render_step_inputs(step, &completed_outputs, worker.input_cap(step));
                 let worker = Arc::clone(&worker);
                 let policy = policy.clone();
                 let events = events.clone();
                 let step_clone = step.clone();
+                let plan = Arc::clone(&shared_plan);
                 in_flight.insert(step.id.clone());
                 // A recording bus: the step's work (its `run-agent` child's
                 // tool events) runs caused by its `step.started`.
@@ -136,8 +132,14 @@ impl DagExecutor {
                     agent: step.agent.clone(),
                 });
                 futures.push(tokio::spawn(async move {
-                    let work =
-                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events);
+                    let work = run_step_with_retry(
+                        &step_clone,
+                        &step_inputs,
+                        &plan,
+                        worker,
+                        &policy,
+                        &events,
+                    );
                     let outcome = match cause {
                         Some(c) => crate::application::trace_exec::caused_by(c, work).await,
                         None => work.await,
@@ -180,17 +182,12 @@ impl DagExecutor {
                 }
                 None => break,
             }
-
-            // Re-check cancellation after each completion so a flag set
-            // while steps were running is observed before the next dispatch.
-            if cancel.load(Ordering::SeqCst) {
-                return ExecResult::Cancelled;
-            }
         }
 
         // Nothing in flight, nothing ready: a step that never ran depends on
-        // an unknown step or sits in a cycle (plans are not validated up
-        // front). Its section of the reply would be empty — replan instead.
+        // an unknown step or sits in a cycle. `replan::drive` validates every
+        // plan first (`Plan::validate`), so this is a backstop for direct
+        // callers. Its section of the reply would be empty — replan instead.
         if let Some(stuck) = plan
             .steps
             .iter()
@@ -263,20 +260,41 @@ impl<T> Drop for InFlight<T> {
     }
 }
 
-fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> String {
+fn render_step_inputs(
+    step: &Step,
+    completed: &HashMap<StepId, String>,
+    cap: Option<usize>,
+) -> String {
     if step.depends_on.is_empty() {
         return String::new();
     }
     let mut out = String::new();
     for dep in &step.depends_on {
         if let Some(body) = completed.get(dep) {
-            out.push_str(&format!(
-                "<step-input from=\"{}\">\n{}\n</step-input>\n\n",
-                dep.0, body
+            // An upstream step's output is text the model wrote from what its
+            // tools read: cut at the receiver's tool-result cap, then fenced
+            // (`domain::untrusted`), origin `step:<id>`.
+            out.push_str(&crate::domain::untrusted::fence(
+                &format!("step:{}", dep.0),
+                &cap_input(dep, body, cap),
             ));
+            out.push_str("\n\n");
         }
     }
     out
+}
+
+/// `body` cut at `cap` bytes (a char boundary), with a last line naming the
+/// step and how much of it is shown.
+fn cap_input<'a>(dep: &StepId, body: &'a str, cap: Option<usize>) -> std::borrow::Cow<'a, str> {
+    match cap.and_then(|c| crate::domain::token::truncate_at_boundary(body, c)) {
+        None => std::borrow::Cow::Borrowed(body),
+        Some((head, shown)) => std::borrow::Cow::Owned(format!(
+            "{head}\n\n[step {} output cut — showing {shown} of {} chars]",
+            dep.0,
+            body.len()
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -292,7 +310,7 @@ mod tests {
     struct OkWorker;
     #[async_trait]
     impl WorkerHandle for OkWorker {
-        async fn run_step(&self, step: &Step, inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, inputs: &str, _: &Plan) -> anyhow::Result<String> {
             Ok(format!("out({})[{}]", step.id.0, inputs.trim()))
         }
     }
@@ -302,7 +320,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for OrderRecordingWorker {
-        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _inputs: &str, _: &Plan) -> anyhow::Result<String> {
             self.order.lock().await.push(step.id.0.clone());
             Ok(format!("out-{}", step.id.0))
         }
@@ -329,8 +347,56 @@ mod tests {
         }
     }
 
-    fn no_cancel() -> Arc<std::sync::atomic::AtomicBool> {
-        Arc::new(std::sync::atomic::AtomicBool::new(false))
+    /// An upstream output longer than the receiver's cap reaches it cut, the
+    /// last line naming the step; under the cap it arrives whole.
+    #[tokio::test]
+    async fn step_inputs_are_cut_at_the_receivers_cap() {
+        struct Capped {
+            cap: usize,
+            inputs: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl WorkerHandle for Capped {
+            async fn run_step(
+                &self,
+                step: &Step,
+                inputs: &str,
+                _: &Plan,
+            ) -> anyhow::Result<String> {
+                self.inputs.lock().await.push(inputs.to_string());
+                Ok(if step.id.0 == "s1" {
+                    "é".repeat(20)
+                } else {
+                    "done".into()
+                })
+            }
+            fn input_cap(&self, _step: &Step) -> Option<usize> {
+                Some(self.cap)
+            }
+        }
+        let policy = RetryPolicy::new(1);
+        for (cap, cut) in [(15, true), (40, false)] {
+            let inputs = Arc::new(Mutex::new(Vec::new()));
+            let worker = Arc::new(Capped {
+                cap,
+                inputs: inputs.clone(),
+            });
+            DagExecutor::run(&linear_plan(), worker, &policy, &new_bus()).await;
+            let s2 = inputs.lock().await[1].clone();
+            let (_, inner) = crate::domain::untrusted::unwrap(s2.trim_end()).expect("one fence");
+            if cut {
+                // 15 bytes fall inside the 8th "é": the cut keeps 7 (14 bytes).
+                assert_eq!(
+                    inner,
+                    format!(
+                        "{}\n\n[step s1 output cut — showing 14 of 40 chars]",
+                        "é".repeat(7)
+                    )
+                );
+            } else {
+                assert_eq!(inner, "é".repeat(20));
+            }
+        }
     }
 
     /// Each step id with the trace cause its work ran under.
@@ -342,7 +408,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for CauseRecordingWorker {
-        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _inputs: &str, _: &Plan) -> anyhow::Result<String> {
             let cause = crate::application::trace_exec::cause();
             self.seen.lock().await.push((step.id.0.clone(), cause));
             Ok(format!("out-{}", step.id.0))
@@ -367,9 +433,8 @@ mod tests {
         let bus = new_bus().traced(bridge);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let worker = Arc::new(CauseRecordingWorker { seen: seen.clone() });
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
-        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus, no_cancel()).await;
+        let policy = RetryPolicy::new(1);
+        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus).await;
         assert!(matches!(result, ExecResult::Done { .. }));
         let d = sink.all();
         let started: Vec<String> = d
@@ -401,7 +466,7 @@ mod tests {
         let worker = Arc::new(CauseRecordingWorker {
             seen: untraced.clone(),
         });
-        DagExecutor::run(&linear_plan(), worker, &policy, &new_bus(), no_cancel()).await;
+        DagExecutor::run(&linear_plan(), worker, &policy, &new_bus()).await;
         assert!(untraced.lock().await.iter().all(|(_, c)| c.is_none()));
     }
 
@@ -410,23 +475,20 @@ mod tests {
         struct FailS2;
         #[async_trait]
         impl WorkerHandle for FailS2 {
-            async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+            async fn run_step(
+                &self,
+                step: &Step,
+                _inputs: &str,
+                _: &Plan,
+            ) -> anyhow::Result<String> {
                 if step.id.0 == "s2" {
                     anyhow::bail!("s2 broke")
                 }
                 Ok(format!("out-{}", step.id.0))
             }
         }
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
-        let first = DagExecutor::run(
-            &linear_plan(),
-            Arc::new(FailS2),
-            &policy,
-            &new_bus(),
-            no_cancel(),
-        )
-        .await;
+        let policy = RetryPolicy::new(1);
+        let first = DagExecutor::run(&linear_plan(), Arc::new(FailS2), &policy, &new_bus()).await;
         let ExecResult::NeedsReplan {
             failed, finished, ..
         } = first
@@ -444,15 +506,8 @@ mod tests {
         let worker = Arc::new(OrderRecordingWorker {
             order: order.clone(),
         });
-        let again = DagExecutor::run_reusing(
-            &linear_plan(),
-            worker,
-            &policy,
-            &new_bus(),
-            no_cancel(),
-            &finished,
-        )
-        .await;
+        let again =
+            DagExecutor::run_reusing(&linear_plan(), worker, &policy, &new_bus(), &finished).await;
         assert!(matches!(again, ExecResult::Done { .. }));
         assert_eq!(*order.lock().await, vec!["s2".to_string()]);
 
@@ -463,15 +518,7 @@ mod tests {
         let worker = Arc::new(OrderRecordingWorker {
             order: order.clone(),
         });
-        DagExecutor::run_reusing(
-            &changed,
-            worker,
-            &policy,
-            &new_bus(),
-            no_cancel(),
-            &finished,
-        )
-        .await;
+        DagExecutor::run_reusing(&changed, worker, &policy, &new_bus(), &finished).await;
         assert_eq!(
             *order.lock().await,
             vec!["s1".to_string(), "s2".to_string()]
@@ -485,9 +532,8 @@ mod tests {
             order: order.clone(),
         });
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
-        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus, no_cancel()).await;
+        let policy = RetryPolicy::new(1);
+        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus).await;
         assert!(matches!(result, ExecResult::Done { .. }));
         assert_eq!(
             *order.lock().await,
@@ -498,19 +544,11 @@ mod tests {
     #[tokio::test]
     async fn dependent_step_sees_upstream_output() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
-        let result = DagExecutor::run(
-            &linear_plan(),
-            Arc::new(OkWorker),
-            &policy,
-            &bus,
-            no_cancel(),
-        )
-        .await;
+        let policy = RetryPolicy::new(1);
+        let result = DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus).await;
         match result {
             ExecResult::Done { final_output } => {
-                assert!(final_output.contains("s1")); // s1's output fed into s2 via <step-input>
+                assert!(final_output.contains("s1")); // s1's output fed into s2, fenced as `step:s1`
                 assert!(final_output.contains("s2"));
             }
             _ => panic!("expected Done"),
@@ -532,12 +570,11 @@ mod tests {
     #[tokio::test]
     async fn parallel_leaves_are_joined_into_the_reply() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let plan = Plan {
             steps: vec![step("a", &[]), step("b", &[])],
         };
-        match DagExecutor::run(&plan, Arc::new(OkWorker), &policy, &bus, no_cancel()).await {
+        match DagExecutor::run(&plan, Arc::new(OkWorker), &policy, &bus).await {
             ExecResult::Done { final_output } => {
                 let (a, b) = (
                     final_output.find("### a (agent_a)"),
@@ -555,15 +592,14 @@ mod tests {
     #[tokio::test]
     async fn a_step_that_never_starts_needs_a_replan() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         for steps in [
             vec![step("a", &[]), step("b", &["ghost"])],
             vec![step("a", &[]), step("b", &["a", "ghost"])],
             vec![step("a", &["b"]), step("b", &["a"])],
         ] {
             let plan = Plan { steps };
-            match DagExecutor::run(&plan, Arc::new(OkWorker), &policy, &bus, no_cancel()).await {
+            match DagExecutor::run(&plan, Arc::new(OkWorker), &policy, &bus).await {
                 ExecResult::NeedsReplan { error, .. } => {
                     assert!(error.contains("never became ready"), "{error}")
                 }
@@ -577,7 +613,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for FailFastSlowWorker {
-        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _inputs: &str, _: &Plan) -> anyhow::Result<String> {
             if step.id.0 == "fail" {
                 anyhow::bail!("boom");
             }
@@ -592,8 +628,7 @@ mod tests {
     #[tokio::test]
     async fn a_replan_aborts_steps_still_in_flight() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = Arc::new(FailFastSlowWorker {
             slow_finished: Arc::clone(&slow_finished),
@@ -601,7 +636,7 @@ mod tests {
         let plan = Plan {
             steps: vec![step("fail", &[]), step("slow", &[])],
         };
-        let result = DagExecutor::run(&plan, worker, &policy, &bus, no_cancel()).await;
+        let result = DagExecutor::run(&plan, worker, &policy, &bus).await;
         assert!(matches!(result, ExecResult::NeedsReplan { .. }));
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
         assert!(
@@ -616,8 +651,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_run_aborts_steps_still_in_flight() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = Arc::new(FailFastSlowWorker {
             slow_finished: Arc::clone(&slow_finished),
@@ -625,7 +659,7 @@ mod tests {
         let plan = Plan {
             steps: vec![step("slow", &[])],
         };
-        let run = DagExecutor::run(&plan, worker, &policy, &bus, no_cancel());
+        let run = DagExecutor::run(&plan, worker, &policy, &bus);
         let cut = tokio::time::timeout(std::time::Duration::from_millis(50), run).await;
         assert!(cut.is_err(), "the step outlives the timeout");
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -633,16 +667,5 @@ mod tests {
             !slow_finished.load(std::sync::atomic::Ordering::SeqCst),
             "the step kept running after its run was dropped"
         );
-    }
-
-    #[tokio::test]
-    async fn cancel_flag_short_circuits_before_dispatch() {
-        let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let result =
-            DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus, cancel).await;
-        assert!(matches!(result, ExecResult::Cancelled));
     }
 }

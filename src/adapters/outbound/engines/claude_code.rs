@@ -21,6 +21,10 @@
 //! | `[[mcp_servers]]` behind `{server}__{tool}` bridge tools | their names only (`TENGU_BRIDGE_MCP_SERVERS`): the bridge takes each from the config it loads — no value of the config (a `${VAR}`-expanded secret) is written to the temp `--mcp-config` |
 //! | `compress_and_store` succeeded (a `run-agent` step) | the run ends once the round's other calls are answered — the CLI is stopped, as the in-process loop stops after its round; the run's usage so far is reported as the `result` line would (`RunUsage`) |
 //! | `max_tool_rounds` | counts tool calls (`tool_use` blocks) of the run, not rounds: past it the CLI is killed with an error |
+//! | silence | an empty `ThinkingDelta` every `cli_run::KEEPALIVE_SECS` (a long bridged tool, a long thought); the CLI is killed after `stream_event_timeout_secs` of no output |
+//!
+//! The run loop is `cli_run::drive` (shared with Codex); this file keeps the
+//! args, the env strip and the stream-json parser ([`NdjsonRun`]).
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -28,11 +32,9 @@ use futures::stream;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, warn};
 
-use crate::adapters::outbound::tools::skill_lifecycle::compress_and_store;
 use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolCall, ToolDef};
 use crate::ports::engine::EngineContext;
 use crate::ports::engine::{Engine, EngineDiagnostics};
@@ -45,9 +47,11 @@ use crate::ports::engine::{Engine, EngineDiagnostics};
 pub(crate) enum BuiltinToolsProfile {
     None,
     ReadOnly,
-    /// Read-only + WebSearch (server-side at Anthropic, on the
-    /// subscription). No WebFetch: it would fetch from this machine outside
-    /// tengu's egress and scopes — pages go through `http_request`.
+    /// WebSearch only (server-side at Anthropic, on the subscription).
+    /// No Read / Glob / Grep: they are not workspace-bound (an xpower
+    /// research agent read the state dir with them, 2026-10-19); no
+    /// WebFetch: it would fetch from this machine outside tengu's egress and
+    /// scopes — files and pages go through bridged tools.
     Research,
     Editor,
     EditorShell,
@@ -73,7 +77,7 @@ impl BuiltinToolsProfile {
         match self {
             Self::None => String::new(),
             Self::ReadOnly => "Read,Glob,Grep".into(),
-            Self::Research => "Read,Glob,Grep,WebSearch".into(),
+            Self::Research => "WebSearch".into(),
             Self::Editor => "Read,Glob,Grep,Edit,Write,MultiEdit".into(),
             Self::EditorShell => "Read,Glob,Grep,Edit,Write,MultiEdit,Bash".into(),
         }
@@ -247,9 +251,8 @@ fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a s
         .collect()
 }
 
-/// The settings a `builtin_tools_profile = "none"` run adds through
-/// `--settings` (which still applies under `--setting-sources ""`):
-/// no auto-memory, no hooks from any source.
+/// The settings every run adds through `--settings` (which still applies
+/// under `--setting-sources ""`): no auto-memory, no hooks from any source.
 const ISOLATED_SETTINGS: &str = r#"{"autoMemoryEnabled":false,"disableAllHooks":true}"#;
 
 /// `claude` arguments for one run — all but the prompt (stdin), the working
@@ -259,7 +262,7 @@ const ISOLATED_SETTINGS: &str = r#"{"autoMemoryEnabled":false,"disableAllHooks":
 /// |---|---|
 /// | `--strict-mcp-config` | always: only the `--mcp-config` servers (the tengu bridge), never the operator's user / project / plugin MCP servers — they run outside tengu scopes and egress. No bridge = no MCP server |
 /// | `--tools <profile>` | built-in tools; `""` = none (`builtin_tools_profile = "none"`) |
-/// | profile `none` (the hardened one, `config/hardening.rs`): `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
+/// | every profile: `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
 /// | `--mcp-config <file>` `--allowedTools mcp__tengu-tools__<name>…` | the bridge; `--tools` covers built-ins only, so each bridged tool is allowed by name |
 fn cli_args(
     profile: BuiltinToolsProfile,
@@ -286,18 +289,16 @@ fn cli_args(
         args.extend(["--system-prompt".into(), sp.into()]);
     }
     args.extend(["--tools".into(), profile.cli_tools_arg().into()]);
-    if profile == BuiltinToolsProfile::None {
-        args.extend(
-            [
-                "--setting-sources",
-                "",
-                "--disable-slash-commands",
-                "--settings",
-                ISOLATED_SETTINGS,
-            ]
-            .map(Into::into),
-        );
-    }
+    args.extend(
+        [
+            "--setting-sources",
+            "",
+            "--disable-slash-commands",
+            "--settings",
+            ISOLATED_SETTINGS,
+        ]
+        .map(Into::into),
+    );
     if let Some((config, tools)) = bridge {
         args.extend(["--mcp-config".into(), config.as_os_str().to_owned()]);
         // Variadic flag: last, and never bare (the CLI rejects a value-less one).
@@ -422,13 +423,38 @@ fn str_field<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
     value.get(key).and_then(|v| v.as_str()).unwrap_or_default()
 }
 
-/// The usage of one CLI run so far: each API response's
-/// `input_tokens` / `output_tokens` (`message.usage`, the last one seen per
+/// An Anthropic `usage` object as (input, output, cached): its
+/// `input_tokens` counts only the uncached part, so the whole prompt adds
+/// `cache_read_input_tokens` and `cache_creation_input_tokens`; the cache
+/// reads are the cached part.
+fn anthropic_usage(usage: &serde_json::Value) -> (u32, u32, u32) {
+    let tokens = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let cached = tokens("cache_read_input_tokens");
+    let input = tokens("input_tokens")
+        .saturating_add(cached)
+        .saturating_add(tokens("cache_creation_input_tokens"));
+    (input, tokens("output_tokens"), cached)
+}
+
+/// (input, output, cached) as a `StreamEvent::Usage`; `None` when nothing
+/// was counted.
+fn usage_event(
+    (input_tokens, output_tokens, cached_input_tokens): (u32, u32, u32),
+) -> Option<StreamEvent> {
+    (input_tokens > 0 || output_tokens > 0).then_some(StreamEvent::Usage {
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+    })
+}
+
+/// The usage of one CLI run so far: each API response's usage
+/// (`message.usage` through `anthropic_usage`, the last one seen per
 /// `message.id` — the CLI repeats a response's usage on each of its lines),
 /// summed — what the `result` line reports when the run ends on its own.
 #[derive(Default)]
 struct RunUsage {
-    by_message: std::collections::HashMap<String, (u32, u32)>,
+    by_message: std::collections::HashMap<String, (u32, u32, u32)>,
 }
 
 impl RunUsage {
@@ -445,25 +471,70 @@ impl RunUsage {
         let Some(usage) = message.get("usage") else {
             return;
         };
-        let tokens = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let id = str_field(message, "id");
         let key = if id.is_empty() {
             format!("#{}", self.by_message.len())
         } else {
             id.to_string()
         };
-        self.by_message
-            .insert(key, (tokens("input_tokens"), tokens("output_tokens")));
+        self.by_message.insert(key, anthropic_usage(usage));
     }
 
-    fn total(&self) -> Option<(u32, u32)> {
-        let (input, output) = self
-            .by_message
-            .values()
-            .fold((0u32, 0u32), |(i, o), (a, b)| {
-                (i.saturating_add(*a), o.saturating_add(*b))
-            });
-        (input > 0 || output > 0).then_some((input, output))
+    fn total(&self) -> Option<StreamEvent> {
+        usage_event(
+            self.by_message
+                .values()
+                .fold((0u32, 0u32, 0u32), |(i, o, c), (a, b, d)| {
+                    (
+                        i.saturating_add(*a),
+                        o.saturating_add(*b),
+                        c.saturating_add(*d),
+                    )
+                }),
+        )
+    }
+}
+
+/// One CLI run's stream-json, for `cli_run::drive`: each line through
+/// [`process_ndjson_line`], into the bridge's transcript and the run's usage.
+#[derive(Default)]
+struct NdjsonRun {
+    emitted_text: bool,
+    tool_calls: u32,
+    /// Open `tool_use` ids → tool, until their `tool_result`.
+    tool_names: std::collections::HashMap<String, String>,
+    /// Usage per API response: a run stopped early has no `result` line,
+    /// whose cumulative usage the turn's metric would take.
+    usage: RunUsage,
+    transcript: Option<Transcript>,
+}
+
+impl super::cli_run::LineParser for NdjsonRun {
+    fn line(&mut self, line: &str) -> Vec<StreamEvent> {
+        if let Some(t) = self.transcript.as_mut() {
+            t.absorb(line);
+        }
+        self.usage.absorb(line);
+        process_ndjson_line(
+            line,
+            &mut self.emitted_text,
+            &mut self.tool_calls,
+            &mut self.tool_names,
+        )
+    }
+
+    fn tool_calls(&self) -> u32 {
+        self.tool_calls
+    }
+
+    fn calls_open(&self) -> bool {
+        !self.tool_names.is_empty()
+    }
+
+    /// What the `result` line would have carried: the run's usage so far
+    /// (the turn takes the last `Usage` frame).
+    fn stopped(&mut self) -> Vec<StreamEvent> {
+        self.usage.total().into_iter().collect()
     }
 }
 
@@ -581,21 +652,8 @@ fn process_ndjson_line(
                 }
 
                 // Usage from this turn
-                if let Some(usage) = msg.get("usage") {
-                    let inp = usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    let out = usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    if inp > 0 || out > 0 {
-                        events.push(StreamEvent::Usage {
-                            input_tokens: inp,
-                            output_tokens: out,
-                        });
-                    }
+                if let Some(event) = msg.get("usage").map(anthropic_usage).and_then(usage_event) {
+                    events.push(event);
                 }
             }
         }
@@ -634,21 +692,8 @@ fn process_ndjson_line(
             }
 
             // Emit final usage from result (cumulative)
-            if let Some(usage) = json.get("usage") {
-                let inp = usage
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let out = usage
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                if inp > 0 || out > 0 {
-                    events.push(StreamEvent::Usage {
-                        input_tokens: inp,
-                        output_tokens: out,
-                    });
-                }
+            if let Some(event) = json.get("usage").map(anthropic_usage).and_then(usage_event) {
+                events.push(event);
             }
 
             if is_error {
@@ -886,166 +931,21 @@ impl Engine for ClaudeCodeEngine {
             "Spawning Claude Code CLI subprocess (stream-json, --strict-mcp-config)"
         );
 
-        // Spawn subprocess
-        let mut child = cmd.spawn().map_err(|e| {
+        let child = cmd.spawn().map_err(|e| {
             anyhow::anyhow!("Failed to spawn claude CLI at {:?}: {}", self.cli_path, e)
         })?;
-
-        // Write prompt to stdin, then close it to signal EOF
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(prompt.as_bytes()).await?;
-            stdin.shutdown().await?;
-        }
-
-        // Take stdout for NDJSON streaming
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from Claude CLI"))?;
-
-        let timeout_secs = self.timeout_secs;
-        let max_tool_rounds = context.max_tool_rounds.unwrap_or(70);
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
-
-        // Spawn async reader task that processes NDJSON lines and emits StreamEvents
-        tokio::spawn(async move {
-            // Keep temp files (and a temp workspace) alive until subprocess exits
-            let _mcp_temp = mcp_temp;
-            let _temp_workspace = temp_workspace;
-            let mut transcript = transcript;
-
-            let reader = tokio::io::BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let mut emitted_text = false;
-            let mut tool_call_count: u32 = 0;
-            let mut tool_names = std::collections::HashMap::new();
-            let idle_timeout = Duration::from_secs(timeout_secs);
-
-            let mut timed_out = false;
-            let mut tool_limit_hit = false;
-            // `compress_and_store` succeeded (a run-agent step's bridge stored
-            // the summary): the run ends once the round's calls are answered.
-            let mut summary_stored = false;
-            let mut step_done = false;
-            // Usage per API response: a run stopped early has no `result`
-            // line, whose cumulative usage the turn's metric would take.
-            let mut usage = RunUsage::default();
-            loop {
-                match tokio::time::timeout(idle_timeout, lines.next_line()).await {
-                    Ok(Ok(Some(line))) => {
-                        if line.trim().is_empty() {
-                            continue;
-                        }
-                        let events = process_ndjson_line(
-                            &line,
-                            &mut emitted_text,
-                            &mut tool_call_count,
-                            &mut tool_names,
-                        );
-                        if let Some(t) = transcript.as_mut() {
-                            t.absorb(&line);
-                        }
-                        usage.absorb(&line);
-                        summary_stored |= events.iter().any(|e| {
-                            matches!(e, StreamEvent::ToolRan { name, ok: true } if name == compress_and_store::NAME)
-                        });
-                        for event in events {
-                            if tx.send(event).await.is_err() {
-                                break;
-                            }
-                        }
-                        if summary_stored && tool_names.is_empty() {
-                            step_done = true;
-                            break;
-                        }
-                        // Enforce max tool rounds — kill subprocess if exceeded
-                        if tool_call_count > max_tool_rounds {
-                            tool_limit_hit = true;
-                            break;
-                        }
-                    }
-                    Ok(Ok(None)) => break, // EOF
-                    Ok(Err(e)) => {
-                        warn!(error = %e, "Error reading Claude CLI stdout");
-                        break;
-                    }
-                    Err(_) => {
-                        timed_out = true;
-                        break;
-                    }
-                }
-            }
-
-            if step_done {
-                info!(
-                    tool_call_count,
-                    "Claude Code: compress_and_store stored the step summary — ending the CLI run"
-                );
-                let _ = child.kill().await;
-                // What the `result` line would have carried: the run's usage
-                // so far (the turn takes the last `Usage` frame).
-                if let Some((input_tokens, output_tokens)) = usage.total() {
-                    let _ = tx
-                        .send(StreamEvent::Usage {
-                            input_tokens,
-                            output_tokens,
-                        })
-                        .await;
-                }
-                let _ = tx.send(StreamEvent::Done).await;
-            } else if tool_limit_hit {
-                error!(
-                    tool_call_count,
-                    max_tool_rounds, "Claude Code max tool rounds exceeded — killing subprocess"
-                );
-                let _ = child.kill().await;
-                let _ = tx
-                    .send(StreamEvent::Error {
-                        message: format!(
-                            "Max tool rounds exceeded ({} calls, limit {}). \
-                             The agent may be stuck in a retry loop.",
-                            tool_call_count, max_tool_rounds
-                        ),
-                    })
-                    .await;
-            } else if timed_out {
-                error!(timeout_secs, "Claude CLI idle timeout — killing subprocess");
-                let _ = child.kill().await;
-                let _ = tx
-                    .send(StreamEvent::Error {
-                        message: format!(
-                            "Claude CLI idle timeout — no output for {}s",
-                            timeout_secs
-                        ),
-                    })
-                    .await;
-            } else {
-                let _ = tx.send(StreamEvent::Done).await;
-            }
-
-            // Wait for subprocess to exit and log any stderr
-            match child.wait_with_output().await {
-                Ok(output) => {
-                    let stderr_str = String::from_utf8_lossy(&output.stderr);
-                    if !stderr_str.is_empty() {
-                        warn!(stderr = %stderr_str, "Claude CLI stderr");
-                    }
-                    // A step ended after `compress_and_store` was killed on purpose.
-                    if !output.status.success() && !step_done {
-                        warn!(
-                            exit_code = output.status.code(),
-                            "Claude CLI exited with non-zero status"
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to wait for Claude CLI process");
-                }
-            }
-        });
-
-        // Return the channel receiver as an async stream
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        let limits = super::cli_run::RunLimits {
+            cli: "Claude CLI",
+            idle: Duration::from_secs(self.timeout_secs),
+            keepalive: Duration::from_secs(super::cli_run::KEEPALIVE_SECS),
+            max_tool_rounds: context.max_tool_rounds.unwrap_or(70),
+        };
+        let parser = NdjsonRun {
+            transcript,
+            ..NdjsonRun::default()
+        };
+        // The temp files (and a temp workspace) live until the CLI exits.
+        super::cli_run::drive(child, &prompt, parser, limits, (mcp_temp, temp_workspace)).await
     }
 }
 
@@ -1158,12 +1058,11 @@ mod tests {
         );
     }
 
-    /// Profile `none` (the hardened one) runs the CLI without settings
-    /// files, CLAUDE.md / AGENTS.md discovery, skills, auto-memory and
-    /// hooks — with the bridge still last; every other profile keeps the
-    /// operator's settings.
+    /// Every profile runs the CLI without settings files, CLAUDE.md /
+    /// AGENTS.md discovery, skills, auto-memory and hooks — with the bridge
+    /// still last (2026-10-22; was profile `none` only).
     #[test]
-    fn cli_args_isolate_the_none_profile() {
+    fn cli_args_isolate_every_profile() {
         let tools = vec![ToolDef::new("read_file", "d", serde_json::json!({}))];
         let cfg = std::path::Path::new("/tmp/tengu-mcp.json");
         let none = strings(cli_args(
@@ -1198,14 +1097,19 @@ mod tests {
 
         for profile in [
             BuiltinToolsProfile::ReadOnly,
+            BuiltinToolsProfile::Research,
             BuiltinToolsProfile::Editor,
             BuiltinToolsProfile::EditorShell,
         ] {
             let args = strings(cli_args(profile, None, None, Some((cfg, &tools))));
+            assert_eq!(value_after(&args, "--setting-sources"), "", "{profile:?}");
+            assert_eq!(
+                value_after(&args, "--settings"),
+                ISOLATED_SETTINGS,
+                "{profile:?}"
+            );
             assert!(
-                !args.iter().any(|a| a == "--setting-sources"
-                    || a == "--settings"
-                    || a == "--disable-slash-commands"),
+                args.iter().any(|a| a == "--disable-slash-commands"),
                 "{profile:?}: {args:?}"
             );
         }
@@ -1295,11 +1199,13 @@ mod tests {
         "TENGU_BRIDGE_GRANT_WORKSPACE",
         "TENGU_BRIDGE_SUMMARY_FILE",
         "TENGU_BRIDGE_TRANSCRIPT_FILE",
+        "TENGU_BRIDGE_JOURNAL",
         "TENGU_BRIDGE_MCP_SERVERS",
         "TENGU_EGRESS",
         "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
         "TENGU_PERSISTENT_STORE_CHUNK_OVERLAP",
         "TENGU_SESSION_ID",
+        "TENGU_RUN_ID",
         "TENGU_SECRETS_LOADED",
     ];
 
@@ -1406,8 +1312,8 @@ mod tests {
             .is_none());
     }
 
-    /// A `run-agent` step names its workspace grant and summary file
-    /// explicitly in the bridge env.
+    /// A `run-agent` step names its workspace grant, summary file and
+    /// journal explicitly in the bridge env.
     #[test]
     fn step_bridge_options_reach_the_bridge_env() {
         let engine =
@@ -1415,6 +1321,7 @@ mod tests {
                 .with_step_bridge(StepBridge {
                     grant_workspace: true,
                     summary_file: Some(PathBuf::from("/tmp/tengu-summary-x")),
+                    journal: Some(PathBuf::from("/tmp/tengu-journal-x")),
                 });
         let tools = [ToolDef::new("read_file", "d", serde_json::json!({}))];
         let cfg = engine.build_mcp_config_json(
@@ -1428,6 +1335,7 @@ mod tests {
         let env = &cfg["mcpServers"]["tengu-tools"]["env"];
         assert_eq!(env["TENGU_BRIDGE_GRANT_WORKSPACE"], "1");
         assert_eq!(env["TENGU_BRIDGE_SUMMARY_FILE"], "/tmp/tengu-summary-x");
+        assert_eq!(env["TENGU_BRIDGE_JOURNAL"], "/tmp/tengu-journal-x");
     }
 
     /// A parent Claude Code session's env is dropped; the operator's auth,
@@ -1486,15 +1394,15 @@ mod tests {
     }
 
     /// Config validation (`config::CLAUDE_CODE_PROFILES`) and the engine
-    /// accept the same names; `research` adds WebSearch and never WebFetch.
+    /// accept the same names; `research` is WebSearch alone: no file reads
+    /// outside the workspace, never WebFetch.
     #[test]
     fn profiles_match_config_and_research_has_no_fetch() {
         for name in crate::config::CLAUDE_CODE_PROFILES {
             assert!(BuiltinToolsProfile::parse(name).is_some(), "{name}");
         }
         let research = BuiltinToolsProfile::Research.cli_tools_arg();
-        assert_eq!(research, "Read,Glob,Grep,WebSearch");
-        assert!(!research.contains("WebFetch") && !research.contains("Bash"));
+        assert_eq!(research, "WebSearch");
     }
 
     fn msg(role: Role, content: &str) -> Message {
@@ -1518,7 +1426,10 @@ mod tests {
         ];
         let once = ClaudeCodeEngine::format_prompt(&messages, Some("SYS PROMPT"));
         assert!(!once.contains("SYS PROMPT"), "{once}");
-        assert_eq!(once, "User: goal\n\nmemory block");
+        assert_eq!(
+            once,
+            "<turn role=\"user\">\ngoal\n</turn>\n\n<turn role=\"system\">\nmemory block\n</turn>"
+        );
         let args = strings(cli_args(
             BuiltinToolsProfile::None,
             None,
@@ -1528,7 +1439,12 @@ mod tests {
         assert_eq!(value_after(&args, "--system-prompt"), "SYS PROMPT");
         // No context prompt: every system message is in the prompt.
         let all = ClaudeCodeEngine::format_prompt(&messages, None);
-        assert!(all.starts_with("SYS PROMPT\n\nUser: goal"), "{all}");
+        assert!(
+            all.starts_with(
+                "<turn role=\"system\">\nSYS PROMPT\n</turn>\n\n<turn role=\"user\">\ngoal"
+            ),
+            "{all}"
+        );
     }
 
     /// The stream as the bridge's conversation: one assistant message per
@@ -1677,6 +1593,34 @@ mod tests {
             .collect()
     }
 
+    /// A CLI that fails without a word ends the turn in an error carrying
+    /// its stderr; one that floods stderr is not stalled by the pipe.
+    #[tokio::test]
+    async fn a_silent_failed_exit_is_an_error_and_stderr_never_stalls_the_cli() {
+        let (events, _) = run_stub("echo 'Not logged in · Please run /login' >&2\nexit 1\n").await;
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Error { message }) if message.contains("Not logged in")),
+            "{events:?}"
+        );
+
+        const TEXT: &str = r#"echo '{"type":"assistant","message":{"id":"msg_0","content":[{"type":"text","text":"answer"}]}}'"#;
+        let (events, took) = run_stub(&format!(
+            "head -c 300000 /dev/zero | tr '\\0' x >&2\n{TEXT}\n"
+        ))
+        .await;
+        assert!(took < Duration::from_secs(10), "stalled: {took:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::TextDelta { text } if text == "answer")),
+            "{events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done)),
+            "{events:?}"
+        );
+    }
+
     /// A successful `compress_and_store` ends the run (the CLI is stopped,
     /// the run's summed usage, `Done`), once the round's other calls are
     /// answered — the stub would otherwise keep going for 30 s; a refused
@@ -1684,7 +1628,7 @@ mod tests {
     #[tokio::test]
     async fn compress_and_store_ends_the_run_after_its_round() {
         const TEXT: &str = r#"echo '{"type":"assistant","message":{"id":"msg_0","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":7,"output_tokens":3}}}'"#;
-        const CALLS: &str = r#"echo '{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_a","name":"mcp__tengu-tools__read_file","input":{"path":"a"}},{"type":"tool_use","id":"toolu_c","name":"mcp__tengu-tools__compress_and_store","input":{"summary":"done"}}],"usage":{"input_tokens":10,"output_tokens":5}}}'"#;
+        const CALLS: &str = r#"echo '{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_a","name":"mcp__tengu-tools__read_file","input":{"path":"a"}},{"type":"tool_use","id":"toolu_c","name":"mcp__tengu-tools__compress_and_store","input":{"summary":"done"}}],"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":2,"output_tokens":5}}}'"#;
         const STORED: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_c","content":"stored — stop now"}]}}'"#;
         const READ: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"alpha"}]}}'"#;
         const LATE: &str =
@@ -1709,8 +1653,9 @@ mod tests {
                 &events[events.len() - 2..],
                 [
                     StreamEvent::Usage {
-                        input_tokens: 17,
-                        output_tokens: 8
+                        input_tokens: 39,
+                        output_tokens: 8,
+                        cached_input_tokens: 20
                     },
                     StreamEvent::Done
                 ]

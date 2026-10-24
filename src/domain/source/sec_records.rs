@@ -132,9 +132,9 @@ mod tests {
 
     use super::*;
     use crate::domain::canonical::sha256_hex;
-    use crate::domain::marketdata::{fmt_time, parse_time};
     use crate::domain::sec::{index_acceptance, submissions};
     use crate::domain::source::{SourceClass, Trust};
+    use crate::domain::time::{fmt_time, parse_time};
 
     fn fixture(name: &str) -> String {
         let path = format!("{}/tests/fixtures/sec/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -171,8 +171,8 @@ mod tests {
     }
 
     fn record(accession: &str, time: FilingTime) -> SourceRecord {
-        let subs = sha256_hex(&fixture("CIK0000320193.json"));
-        let index = sha256_hex(&fixture(&format!("{accession}-index.htm")));
+        let subs = sha256_hex(fixture("CIK0000320193.json"));
+        let index = sha256_hex(fixture(&format!("{accession}-index.htm")));
         let observed = parse_time("2026-10-08T12:00:00Z").unwrap();
         filing_record(
             &stamp(),

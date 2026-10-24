@@ -55,10 +55,10 @@ use crate::config::soe::{load_profile_with_text, load_replay_set, SoeConfig, SOE
 use crate::config::sources::{sources_db, SourcesConfig};
 use crate::config::Config;
 use crate::domain::lineage::value::Time;
-use crate::domain::marketdata::parse_time;
 use crate::domain::soe::portfolio::{IsoWeek, WeeklyPortfolio};
 use crate::domain::soe::record::from_toml;
 use crate::domain::soe::review::CycleGrade;
+use crate::domain::time::parse_time;
 use crate::ports::clock::Clock;
 use crate::ports::runtime::{LeaseLost, Ownership, Unleased};
 use crate::ports::soe::{CycleStore, RunDir, RunStatus, StageRunner};

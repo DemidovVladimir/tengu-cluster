@@ -24,7 +24,7 @@
 |---|---|---|
 | `TENGU_HOME` | **required** = `$HOME/tengu-lab/home`, exported **first** | isolates `logs/decisions.jsonl`, `logs/maps/`, `state/` from `~/.tengu` (the weekend run). tengu loads the nearest `.env` up from the cwd (dotenvy walks parent dirs): a worktree under `.claude/worktrees/` reads the main checkout's `.env`, which sets `TENGU_HOME=~/.tengu`. An exported value wins (dotenv never overrides) |
 | `OPENROUTER_API_KEY` | required | Jev decisions only (the `lab` engine is `claude_code` since 2026-10-14). Export it; a parent `.env` may also supply it (see `TENGU_HOME`) — never print it |
-| — (no env var) | required | the `lab` engine: a `--features claude_code` build + the `claude` CLI on `PATH`, logged in (the Claude subscription) — `doctor` builds every agent's engine |
+| — (no env var) | required | the `lab` engine: the `claude` CLI on `PATH`, logged in (the Claude subscription) — `doctor` builds every agent's engine and looks for its CLI on `PATH` |
 | `OPENROUTER_BASE_URL` | optional | default `https://openrouter.ai/api` |
 | `RUST_LOG` | optional | `tengu run` and the `tengu studio` server log to stderr + `$TENGU_HOME/logs/tengu.log` (`RUST_LOG` replaces their default `tengu=info`); `decide` / `doctor` / `studio graph` / `trace` log to **stderr** (since ST-11; stdout = the JSON / report alone, the server's stdout = its URL alone) — there `tengu=info` is always added, so `RUST_LOG` cannot silence them |
 
@@ -32,7 +32,7 @@
 cd <repo or worktree root>               # --sandbox is cwd-relative
 export TENGU_HOME="$HOME/tengu-lab/home"   # never ~/.tengu
 mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
-cargo build --release --features claude_code   # `lab` engine; default features include `studio` (S1–S7); `cargo build` (debug, ST-03) behaves the same
+cargo build --release                      # default features include `studio` (S1–S7); `cargo build` (debug, ST-03) behaves the same
 T=target/release/tengu                     # $CARGO_TARGET_DIR/release/tengu when that is set
 S=sandboxes/control-loop-lab; W="$HOME/tengu-lab/control-loop-lab"
 J() { sed -n '/^{/,$p'; }                  # only for a binary before ST-11 (logs on stdout): $T decide … | J | jq …
@@ -106,7 +106,6 @@ Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22.
 |---|---|---|
 | `Failed to load sandbox 'control-loop-lab' from sandboxes/control-loop-lab/config.toml` | cwd is not the repo / worktree root | `cd` there (`--sandbox` is cwd-relative) |
 | `OPENROUTER_API_KEY is required for the decision model` | key not exported in this terminal (Jev) | export it (name only in notes and transcripts) |
-| `lab: backend init error: claude_code engine requires --features claude_code` | binary built without `claude_code` | `cargo build --release --features claude_code`; `claude` on `PATH` and logged in |
 | lines land in `~/.tengu/logs/decisions.jsonl` | `TENGU_HOME` not exported in that terminal (a parent `.env` may set `~/.tengu`) | stop; export; never clean `~/.tengu` |
 | `jq: parse error` on `decide` output | a binary before ST-11: stdout starts with `tengu=info` log lines | `… \| sed -n '/^{/,$p' \| jq …` (`J` above) |
 | first log lines show `proxy="socks5h://127.0.0.1:9050"` | base defaults (no `$TENGU_HOME/config.toml`) install Tor, then `--sandbox` installs `proxy="direct"` before any call | nothing — the doctor's `Egress` block is the truth |

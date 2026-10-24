@@ -728,7 +728,7 @@
       <div class="gap-icon">🔴</div>
       <div>
         <div class="gap-title">Pre-turn Memory Prefetch <span class="tag partial">Partial</span></div>
-        <div class="gap-desc">Planner side: <code>RagPlanner::plan</code> injects cross-session / within-session / cross-plan recall blocks from Postgres before the LLM call. In-process chat: <code>MemoryManager::search</code> runs at turn start. <code>memory/injector.rs</code> + <code>MemoryProvider::prefetch</code> exist but sit on a dead path.</div>
+        <div class="gap-desc">Planner side: <code>RegistryPlanner::plan</code> injects cross-session / within-session / cross-plan recall blocks from Postgres before the LLM call. In-process chat: <code>MemoryManager::search</code> runs at turn start. <code>memory/injector.rs</code> + <code>MemoryProvider::prefetch</code> exist but sit on a dead path.</div>
         <div class="gap-fix">→ Wire or delete the injector path (tracked in SESSION_HANDOFF)</div>
       </div>
     </div>
@@ -1098,7 +1098,7 @@ Full procedural instructions here...</pre>
     <div class="gap-icon">🟡</div>
     <div>
       <div class="gap-title">Pre-turn Memory Prefetch + Context Fencing <span class="tag partial">Partial</span></div>
-      <div class="gap-desc">Planner: <code>RagPlanner::plan</code> injects Postgres recall blocks (cross-session / within-session / cross-plan) before the LLM call. Chat: <code>MemoryManager::search</code> at turn start + <code>memory/fencing.rs</code> <code>&lt;memory-context&gt;</code> helpers. The <code>memory/injector.rs</code> / <code>MemoryProvider::prefetch</code> path is dead code.</div>
+      <div class="gap-desc">Planner: <code>RegistryPlanner::plan</code> injects Postgres recall blocks (cross-session / within-session / cross-plan) before the LLM call. Chat: <code>MemoryManager::search</code> at turn start + <code>memory/fencing.rs</code> <code>&lt;memory-context&gt;</code> helpers. The <code>memory/injector.rs</code> / <code>MemoryProvider::prefetch</code> path is dead code.</div>
       <div class="gap-fix">→ Wire or delete the injector path; confirm every lane is fenced.</div>
     </div>
   </div>
@@ -1126,7 +1126,7 @@ Full procedural instructions here...</pre>
     <div>
       <div class="gap-title">Messaging Platform Breadth</div>
       <div class="gap-desc">Tengu supports Telegram + an inbound webhooks listener (<code>tengu webhooks</code>, HMAC-verified). Hermes supports 6 platforms (Telegram, Discord, Slack, WhatsApp, Signal). Each additional platform multiplies reach significantly.</div>
-      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>adapters/inbound/telegram.rs</code> / <code>adapters/inbound/webhooks.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
+      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>adapters/inbound/telegram/</code> / <code>adapters/inbound/webhooks.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
     </div>
   </div>
 

@@ -233,10 +233,9 @@
       <div class="b a">SOL is 148.21 USD (sol_price row, 12 s old).</div>
     </div>
     <div class="grid" style="grid-template-columns:minmax(0,1fr)">
-      <div class="card data"><h3><code>TENGU_TUI_METRICS=1</code></h3><p>A one-line token summary after every recorded call. Totals are kept even while the panel is off.</p></div>
-      <div class="card data"><h3><code>TENGU_TUI_RAG_DEBUG=1</code></h3><p>A line per planner registry query with its top three hits. Both flags accept <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code>.</p></div>
+      <div class="card data"><h3><code>TENGU_TUI_METRICS=1</code></h3><p>A one-line token summary after every recorded call. Totals are kept even while the panel is off. The flag accepts <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code>.</p></div>
       <div class="card jev"><h3>Decision feed</h3><p>When the config has <code>[decision_loops]</code>, every new line of <code>decisions.jsonl</code> for those loops appears as a bubble, from any process. It polls every 300 ms.</p></div>
-      <div class="card hands"><h3>Slash commands</h3><p><code>/skills</code> <code>/enable</code> <code>/disable</code> <code>/reload</code> <code>/purge</code> <code>/reset</code> <code>/cost</code> <code>/context</code> <code>/engine</code> <code>/eco</code> <code>/standard</code> <code>/precise</code> <code>/theme</code> <code>/help</code>, plus skill commands.</p></div>
+      <div class="card hands"><h3>Slash commands</h3><p><code>/skills</code> <code>/enable</code> <code>/disable</code> <code>/reload</code> <code>/purge</code> <code>/reset</code> <code>/cost</code> <code>/context</code> <code>/engine</code> <code>/theme</code> <code>/help</code>, plus skill commands.</p></div>
     </div>
   </div>
 </section>
@@ -330,14 +329,14 @@
     <h2 id="s-cmd">What a slash does in Telegram</h2>
   </div>
   <ul class="states">
-    <li><span class="chip bad">stop</span><span><b>/stop</b>Cancels the running turn: "⏹ Stop requested."</span></li>
+    <li><span class="chip bad">stop</span><span><b>/stop</b>Stops the running turn at once: its plan steps are aborted and their <code>run-agent</code> children killed. Replies "⏹ Stopping current operation...", then "⏹ Stopped."</span></li>
     <li><span class="chip data">list</span><span><b>/agents</b>Reachable agents with role, tool count and [default].</span></li>
     <li><span class="chip data">reset</span><span><b>/reset · /purge</b>Clear your conversations; purge also wipes vector memory and saved attachments.</span></li>
     <li><span class="chip hands">skills</span><span><b>/reload</b>Re-scan the skill files and rebuild the tools.</span></li>
     <li><span class="chip hands">dir</span><span><b>/project &lt;name&gt;</b>A new project folder from <code>[scaffold.project]</code>; conversations reset.</span></li>
-    <li><span class="chip data">lens</span><span><b>/help /eco /standard /precise /cost /context /engine</b>Built-in chat commands.</span></li>
+    <li><span class="chip data">info</span><span><b>/help /cost /context /engine</b>Built-in chat commands.</span></li>
   </ul>
-  <p class="note warn"><b>Not implemented:</b> <code>[telegram] tool_approvals</code> and <code>approve_only</code> gate nothing; no tool call waits for an approval. The config still loads and logs a warning naming them.</p>
+  <p class="note warn"><b>No approvals:</b> no tool call waits for an approval. The old <code>[telegram] tool_approvals</code> and <code>approve_only</code> keys gated nothing and were removed; <code>[telegram]</code> refuses unknown keys, so a config that still sets one fails the load.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -350,7 +349,7 @@
     <li><span><b>Private agents stay private.</b> No <code>description</code> and not default: never routable, never the default, not in <code>/agents</code> or the team block.</span></li>
     <li><span><b>Webhooks authenticate first.</b> HMAC-SHA256 or an exact <code>Authorization</code> header, compared in constant time, before any work starts.</span></li>
     <li><span><b>Bad endpoint config fails at start.</b> Both or neither secret, an empty inline secret, or a loop with no <code>[decision_loops]</code> block stops the listener.</span></li>
-    <li><span><b>One owner.</b> <code>tengu webhooks</code> takes the same leases as <code>tengu run</code>; a second process exits 1.</span></li>
+    <li><span><b>One owner.</b> <code>tengu webhooks</code> is <code>tengu run</code> with no feeds and only the endpoints' loops: the same leases, heartbeat and drain; a second process exits 1.</span></li>
     <li><span><b>Every request is recorded.</b> A configured endpoint's request is one <code>trigger.webhook</code> root in the execution trace, its loop or plan events under it, then <code>webhook.responded</code> with the code. Never the body or a header; an unknown endpoint is only logged.</span></li>
     <li><span><b>Plans are recorded.</b> With <code>[orchestrator]</code>, <code>tengu chat</code> and <code>tengu telegram</code> each write one run of <code>plan.*</code> / <code>step.*</code> events (<a href="studio.html">Studio</a>).</span></li>
     <li><span><b>Loops stay ordered.</b> One event at a time per loop, at most 64 waiting by default; the rest get <code>429</code>.</span></li>
@@ -362,12 +361,12 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Open each door</h2>
-    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code>, <code>studio</code>, <code>codex</code> and <code>a2a</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
+    <p>The default build has every engine plus <code>telegram</code>, <code>studio</code>, <code>a2a</code> and <code>webhooks</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>TELEGRAM_BOT_TOKEN=&lt;bot token&gt; TENGU_TELEGRAM_ALLOWED_USERS=&lt;your id&gt; tengu telegram --sandbox lping</span>
-<span class="ln cmd"><span class="p">$ </span>cargo build --release --features webhooks</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release</span>
 <span class="ln cmd"><span class="p">$ </span>TENGU_LPING_WEBHOOK_SECRET=example-secret target/release/tengu webhooks --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>BODY='{"pool":"example"}'; SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac example-secret | sed 's/^.* //')</span>
 <span class="ln cmd"><span class="p">$ </span>curl -s -X POST localhost:7081/webhooks/solana_events -H "X-Tengu-Signature: sha256=$SIG" -d "$BODY"</span>
@@ -391,11 +390,12 @@
         <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td>the TUI loop, plan and metrics bubbles, decision feed</td></tr>
         <tr><td><code>src/adapters/inbound/tui/view.rs</code></td><td>bubbles, <code>[tool]</code> lines, header, themes</td></tr>
         <tr><td><code>src/adapters/inbound/tui/app.rs</code></td><td>bubble roles; the requests the UI thread sends the engine thread (messages, slash commands)</td></tr>
-        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>allow-list, routing, per-user state, commands, chunked replies</td></tr>
+        <tr><td><code>src/adapters/inbound/telegram/</code></td><td>allow-list, routing, per-user state, commands, chunked replies</td></tr>
         <tr><td><code>src/adapters/inbound/channel.rs</code></td><td><code>@role:</code> parsing, chunking, team activity</td></tr>
         <tr><td><code>src/adapters/inbound/activity.rs</code></td><td>activity line text per tool</td></tr>
         <tr><td><code>src/ports/tool_activity.rs</code></td><td>the activity port every surface implements</td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns owned by the loop dispatch; each request's <code>trigger.webhook</code> root and answer; <code>tengu webhooks</code>' recording</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns owned by the loop dispatch; each request's <code>trigger.webhook</code> root and answer</td></tr>
+        <tr><td><code>src/adapters/inbound/run.rs</code></td><td><code>tengu webhooks</code> = <code>run_webhooks</code>: the runtime with no feeds and only the endpoints' loops</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td>the loop queue: one at a time, cap, drain; <code>Turns</code>: the orchestrator turns the drain waits for</td></tr>
         <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>resolve_session_id</code>, <code>build_orchestrator</code> (+ the recording a surface hands it)</td></tr>
       </tbody>
@@ -404,7 +404,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -518,7 +518,7 @@
       return out(202, { endpoint: name, loop: e.loop, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The JSON body becomes the loop event (a non-JSON body becomes a string). Events run one at a time.");
     }
     if (down.checked) return out(503, { error: "shutting down — not accepting webhook turns" }, "New turns are refused; running ones get <code>shutdown_grace_secs</code>, then are aborted (recorded <code>plan.completed</code>, dropped).");
-    out(202, { agent: e.agent, endpoint: name, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The planner gets <code>goal_template</code> plus the raw body. The answer goes to the log and, with <code>postgres_memory</code>, to Open Brain.");
+    out(202, { agent: e.agent, endpoint: name, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The planner gets <code>goal_template</code> plus the raw body in an <code>&lt;untrusted origin=\"webhook:" + name + "\"&gt;</code> fence. The answer goes to the log and, with <code>postgres_memory</code>, to Open Brain.");
   }
   [ep, auth, env, down].forEach(function (x) { x.addEventListener("change", wh); });
   q.addEventListener("input", wh);

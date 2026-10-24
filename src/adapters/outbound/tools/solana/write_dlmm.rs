@@ -930,7 +930,7 @@ mod tests {
 
     /// Live, keyless: simulate closing the funded operator wallet's real
     /// SOL/USDC position on mainnet (full close path: ATAs, remove, claim
-    /// fee, rewards, close, unwrap). `cargo test --bin tengu -- --ignored
+    /// fee, rewards, close, unwrap). `cargo test --lib -- --ignored
     /// live_dlmm_close --nocapture`.
     #[tokio::test]
     #[ignore]
@@ -960,7 +960,7 @@ mod tests {
             Some(p) => (operator, *p),
             None => {
                 let filters = vec![
-                    json!({"memcmp": {"offset": 0, "bytes": crate::domain::solana::bs58_encode(&crate::domain::lp::dlmm::POSITION_V2_DISC)}}),
+                    json!({"memcmp": {"offset": 0, "bytes": crate::domain::base58::bs58_encode(&crate::domain::lp::dlmm::POSITION_V2_DISC)}}),
                     json!({"memcmp": {"offset": 8, "bytes": pool.to_string()}}),
                 ];
                 let (_, any) = rpc
@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     /// Live, keyless: simulate opening a small 20-bin spot position as the
-    /// operator wallet on mainnet. `cargo test --bin tengu -- --ignored
+    /// operator wallet on mainnet. `cargo test --lib -- --ignored
     /// live_dlmm_open --nocapture`.
     #[tokio::test]
     #[ignore]

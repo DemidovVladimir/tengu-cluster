@@ -29,10 +29,6 @@
 //! | `holdout_empty` | a counted holdout read of a set without a `HOLDOUT` case |
 //! | `replay_run_exists` | a replay run id (report or case dir) used before |
 
-// Consumers land with `tengu soe cycle|replay|grade|resolve|review|verify|show`,
-// the `soe_*` tools and the stage-runner adapters.
-#![allow(dead_code)]
-
 pub(crate) mod cycle;
 pub(crate) mod freeze;
 pub(crate) mod grade;

@@ -4,6 +4,11 @@
 //! (`adapters/outbound/tools/mod.rs`) gates registration on the same names,
 //! and its tests fail if the two drift.
 
+/// Separator between an `[[mcp_servers]]` server and its tool in the name
+/// tengu exposes (`{server}__{tool}`). Provider function names allow only
+/// `[a-zA-Z0-9_-]`, so a `.` would be rejected by the model API.
+pub(crate) const MCP_NAME_SEPARATOR: &str = "__";
+
 pub(crate) const AGENTIC_MEMORY: &str = "agentic_memory";
 pub(crate) const SHARED_CACHE: &str = "shared_cache";
 pub(crate) const PERSISTENT_STORE: &str = "persistent_store";

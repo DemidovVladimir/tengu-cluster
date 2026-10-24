@@ -35,9 +35,6 @@
 //! O4 conditions outside a packet (weekend evidence, approval bypass,
 //! realised low-margin work) are O5+ or operational — not flagged here.
 
-// Consumers land with `tengu soe review` (O4).
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "sandbox": "control-loop-lab",
-  "config_hash": "f5c2ae92364cda98550bfc253ff82beabe5594bb3abe751abcf79465ada53a73",
+  "config_hash": "192b9c251fad16fd044e8a23bdf1680d68effca21a7537efbf4d66e86e5b0692",
   "nodes": [
     {
       "id": "runtime:control-loop-lab",

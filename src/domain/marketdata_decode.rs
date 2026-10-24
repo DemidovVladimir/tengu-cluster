@@ -25,7 +25,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::domain::market::{decimal_value, parse_decimal, InstrumentId, HYPERLIQUID};
-use crate::domain::marketdata::{fmt_time, Bar, CtxPoint, FundingPoint, Interval};
+use crate::domain::marketdata::{Bar, CtxPoint, FundingPoint, Interval};
+use crate::domain::time::fmt_time;
 
 /// The HL coin of a `hyperliquid:` instrument id (`hyperliquid:xyz:TSLA` →
 /// `xyz:TSLA`).
@@ -540,7 +541,7 @@ mod tests {
         assert_eq!(coin, "BTC");
         assert_eq!(
             btc.t_ms,
-            crate::domain::marketdata::parse_time("2026-09-30").unwrap()
+            crate::domain::time::parse_time("2026-09-30").unwrap()
         );
         assert_eq!(
             (
@@ -577,7 +578,7 @@ mod tests {
         let rows = hl_asset_ctxs_csv(shuffled).unwrap();
         assert_eq!(
             rows[0].1.t_ms,
-            crate::domain::marketdata::parse_time("2026-09-30T00:01:00Z").unwrap()
+            crate::domain::time::parse_time("2026-09-30T00:01:00Z").unwrap()
         );
         assert_eq!(rows[0].1.impact_ask, Some(150.1));
     }

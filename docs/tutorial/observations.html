@@ -432,7 +432,7 @@ active_id=-1567 active_price=148.205 base_fee_pct=0.1 bin_step=10 enabled=true q
         <tr><td><code>src/domain/observation.rs</code></td><td>the envelope, <code>Field</code>, statuses, <code>CachePolicy</code>, <code>is_fresh</code>, <code>render_text</code>, <code>compact_text</code>, <code>decision_value</code></td></tr>
         <tr><td><code>src/application/observe.rs</code></td><td><code>observe()</code>: cache hit or live read, record, put</td></tr>
         <tr><td><code>src/ports/observation.rs</code></td><td>the <code>ObservationStore</code> port: get, put, compare-and-swap, remove, record</td></tr>
-        <tr><td><code>src/adapters/outbound/observations.rs</code></td><td><code>observations.db</code>: slot-monotonic upsert, 7-day purge; the recording decorator</td></tr>
+        <tr><td><code>src/adapters/outbound/observations.rs</code></td><td><code>observations.db</code> (mode 0600): slot-monotonic upsert, 7-day purge; the recording decorator</td></tr>
         <tr><td><code>src/ports/history.rs</code></td><td><code>HistoryRow</code> and the history port: append, range, asof</td></tr>
         <tr><td><code>src/adapters/outbound/history_sqlite.rs</code></td><td>one SQLite file per UTC day, retention, read-only readers</td></tr>
         <tr><td><code>src/config/recorder.rs</code></td><td><code>[recorder]</code>: schemas, <code>keep_data</code>, <code>change_only</code>, heartbeat, intervals</td></tr>
@@ -444,7 +444,7 @@ active_id=-1567 active_price=148.205 base_fee_pct=0.1 bin_step=10 enabled=true q
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

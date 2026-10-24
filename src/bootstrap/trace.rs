@@ -4,18 +4,18 @@
 //!
 //! | Helper | Builds |
 //! |---|---|
-//! | [`open_sink`] | a new recording of the runner name (`--sandbox`, else `default`) under `<TENGU_HOME>/logs/trace/`, `config_hash` = `Config::source_sha256`, redacting with the process `SecretRegistry`; fail-soft: an unwritable dir = `NoopTrace` + a warn, the run goes on |
+//! | [`open_sink`] | a new recording of the runner name (`--sandbox`, else `default`) under `<TENGU_HOME>/logs/trace/`, `config_hash` = `Config::source_sha256`, redacting with the process `SecretRegistry`; its run id names the process's egress records from then on (`egress::set_run_id`; not an eval row's); fail-soft: an unwritable dir = `NoopTrace` + a warn, the run goes on |
 //! | [`open_orchestration`] · [`close`] | a chat / telegram / eval recording, opened only with `[orchestrator]` (their plans are all they record) · its last event, `run.closed` |
 //! | [`run_ids`] · [`Recording`] | `runtime_id` + `run_id` for `AuditLog` (`decisions.jsonl`) · the sink + ids handed to each decision loop (`bootstrap::decision`) |
 //! | [`reader`] · [`run_path`] | a sandbox's `JsonlTraceReader` · one run's file |
+//! | [`turn_span`] · [`name_turn`] | the `turn` span one chat / Telegram turn, webhook request, A2A task, `run-agent` step or bridge runs under: its `tengu.log` lines carry `run_id` (`egress::run_id`) and `session_id`, the ids `egress.jsonl` and the trace carry |
 //!
-//! Who records: `tengu run` (`RunKind::Run`, `runtime_id` = the lease holder,
-//! `bootstrap/runtime.rs::start`: `runtime.*`, `feed.*`, `loop.*`, every
-//! loop's step / tool events, each webhook request's `trigger.webhook` and
-//! its work, escalation turns), `tengu decide` (`RunKind::Decide`, no
-//! `runtime_id`: `trigger.*` + the loop's step / tool events), `tengu
-//! webhooks` (`RunKind::Webhooks`, `runtime_id` = the lease holder: the same
-//! per-request events, `run.closed`), `tengu chat` / `tengu telegram` (one
+//! Who records: `tengu run` and `tengu webhooks` (`RunKind::Run`,
+//! `runtime_id` = the lease holder, `bootstrap/runtime.rs::start`:
+//! `runtime.*`, `feed.*`, `loop.*`, every loop's step / tool events, each
+//! webhook request's `trigger.webhook` and its work, escalation turns),
+//! `tengu decide` (`RunKind::Decide`, no `runtime_id`: `trigger.*` + the
+//! loop's step / tool events), `tengu chat` / `tengu telegram` (one
 //! per process) and `tengu eval` (one per orchestrated row) with
 //! `[orchestrator]` (`plan.*`, `step.*`, `metrics.recorded`, each step's
 //! `run-agent` `tool.*`; `application/orchestrator/trace.rs`).
@@ -62,6 +62,10 @@ pub(crate) fn open_sink(
                 path = %sink.path().display(),
                 "trace recording"
             );
+            // Egress records name it (an eval row's is one of many at once).
+            if kind != RunKind::Eval {
+                crate::adapters::outbound::egress::set_run_id(sink.run_id());
+            }
             Arc::new(sink)
         }
         Err(e) => {
@@ -81,6 +85,29 @@ pub(crate) fn open_orchestration(
 ) -> Option<Arc<dyn TraceSink>> {
     config.orchestrator.as_ref()?;
     Some(open_sink(config, None, kind, secrets))
+}
+
+/// The `turn` span (module table); `session_id` `None` = filled later
+/// ([`name_turn`]).
+pub(crate) fn turn_span(session_id: Option<&str>) -> tracing::Span {
+    let span = tracing::info_span!(
+        "turn",
+        run_id = tracing::field::Empty,
+        session_id = tracing::field::Empty
+    );
+    name_turn(&span, session_id);
+    span
+}
+
+/// Fill a [`turn_span`]'s ids: this process's recording, and `session_id`
+/// once known (a `run-agent` step: after its IPC input).
+pub(crate) fn name_turn(span: &tracing::Span, session_id: Option<&str>) {
+    if let Some(run) = crate::adapters::outbound::egress::run_id() {
+        span.record("run_id", run.as_str());
+    }
+    if let Some(s) = session_id {
+        span.record("session_id", s);
+    }
 }
 
 /// The last event of a chat / telegram / eval / webhooks recording.

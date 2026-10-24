@@ -22,8 +22,6 @@
 # State: ~/.tengu/state/soe/ (sources.db; outside every fs root and workspace).
 # Workspace: ~/soe-ws (only .tengu/observations.db).
 
-runtime_profile = "auto"
-
 # --- Network: open now, switchable to Tor (every transport through egress.rs) --
 # Whether SEC and TED accept Tor exits is unverified. The ceiling = the hosts of
 # the registry rows below (each row's hosts must sit inside it).

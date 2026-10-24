@@ -122,7 +122,7 @@ pub(crate) fn policies(srcs: &[Src]) -> BTreeMap<String, SourcePolicy> {
 
 /// The raw body sha256 of one read.
 pub(crate) fn snap(source: &str, native: &str, observed: i64, tag: &str) -> String {
-    sha256_hex(&format!("{source}:{native}:{observed}:{tag}"))
+    sha256_hex(format!("{source}:{native}:{observed}:{tag}"))
 }
 
 /// A first read of `native` (module defaults per [`Kind`]), identity set.

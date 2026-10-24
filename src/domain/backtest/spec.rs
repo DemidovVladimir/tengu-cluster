@@ -41,9 +41,10 @@ use crate::domain::backtest::costs::{CostSpec, HalfSpread};
 use crate::domain::backtest::labels::LabelSpec;
 use crate::domain::backtest::stats::PeriodKind;
 use crate::domain::book::Side;
-use crate::domain::calendar::parse_hm;
 use crate::domain::market::InstrumentId;
-use crate::domain::marketdata::{parse_time, Interval};
+use crate::domain::marketdata::Interval;
+use crate::domain::time::parse_hm;
+use crate::domain::time::parse_time;
 use crate::domain::tz::Zone;
 
 /// Ids in a universe, an `exclude` list or a split.

@@ -23,11 +23,11 @@ use crate::domain::backtest::engine::{count_skips, ArmResult, CandidateSet, RunP
 use crate::domain::backtest::gate::GateSummary;
 use crate::domain::backtest::spec::{SplitSpec, StrategySpec, Universe};
 use crate::domain::backtest::stats::{paired_diff_ci, Calibration, DiffCi, InstrumentRow, Summary};
-use crate::domain::marketdata::fmt_time;
 use crate::domain::observation::{
     set_int, set_num, set_str, ErrorClass, Features, ObsStatus, Observed, ReadError,
     MAX_LINE1_CHARS,
 };
+use crate::domain::time::fmt_time;
 
 /// The arm the row's features and line 1 describe, when present.
 pub const PRIMARY_ARM: &str = "research";

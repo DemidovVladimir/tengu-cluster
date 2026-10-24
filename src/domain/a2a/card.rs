@@ -110,8 +110,7 @@ pub fn build(spec: &CardSpec) -> AgentCard {
 pub fn etag(card_json: &Value) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(card_json.to_string().as_bytes());
-    let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
-    format!("\"{hex}\"")
+    format!("\"{}\"", crate::domain::canonical::hex(&digest[..16]))
 }
 
 #[cfg(test)]

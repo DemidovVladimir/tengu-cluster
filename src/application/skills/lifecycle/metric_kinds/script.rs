@@ -1,13 +1,16 @@
-//! `script` — invoke `sh <path>` with env vars, parse stdout JSON `{pass, score, notes?}`.
+//! `script` — `sh <path>` through the shell port (the `[egress]` wrapper,
+//! the shell timeout) in `ctx.workspace`, with `PROMPT`, `TRANSCRIPT` and
+//! `EXPECTED_OUTCOME` set; parse stdout JSON `{pass, score, notes?}`. A
+//! script that fails to run or exits non-zero is a failed outcome.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
-use std::process::Command;
 
 use crate::application::skills::lifecycle::metrics::{
     FixtureContext, MetricKind, MetricOutcome, MetricRunCtx, MetricSpec,
 };
+use crate::domain::scope::shell_quote;
 
 pub(crate) struct ScriptKind;
 
@@ -20,25 +23,28 @@ impl MetricKind for ScriptKind {
         ctx: &MetricRunCtx<'_>,
     ) -> Result<MetricOutcome> {
         let path = match spec {
-            MetricSpec::Script { path, .. } => ctx.skill_dir.join(path),
+            MetricSpec::Script { path, .. } => std::path::absolute(ctx.skill_dir.join(path))?,
             _ => anyhow::bail!("ScriptKind given wrong spec"),
         };
+        let command = format!("sh {}", shell_quote(&path.to_string_lossy()));
+        let env = [
+            ("PROMPT", fixture_prompt_env(fixture)),
+            ("TRANSCRIPT", fixture_transcript_env(fixture)),
+            ("EXPECTED_OUTCOME", fixture_expected_env(fixture)),
+        ];
+        let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
-        let prompt_val = fixture_prompt_env(fixture);
-        let transcript_val = fixture_transcript_env(fixture);
-        let expected_val = fixture_expected_env(fixture);
-
-        let out = tokio::task::spawn_blocking(move || {
-            Command::new("sh")
-                .arg(&path)
-                .env("PROMPT", prompt_val)
-                .env("TRANSCRIPT", transcript_val)
-                .env("EXPECTED_OUTCOME", expected_val)
-                .output()
-        })
-        .await??;
-
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stdout = match ctx.shell.execute_shell_env(&command, ctx.workspace, &env) {
+            Ok(stdout) => stdout,
+            Err(e) => {
+                return Ok(MetricOutcome {
+                    pass: false,
+                    score: 0.0,
+                    notes: Some(format!("script failed: {e}")),
+                    raw: json!({ "error": e.to_string() }),
+                })
+            }
+        };
 
         let parsed: Result<ScriptOutput, _> = serde_json::from_str(stdout.trim());
         match parsed {
@@ -59,7 +65,7 @@ impl MetricKind for ScriptKind {
 }
 
 // The script's env contract: the row's prompt, the agent's reply and the
-// expected outcome (all three used to be passed empty).
+// expected outcome.
 fn fixture_prompt_env(f: &FixtureContext<'_>) -> String {
     f.prompt.to_string()
 }
@@ -84,12 +90,8 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    struct NoShell;
-    impl crate::ports::shell::ShellExecutionPort for NoShell {
-        fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
-            Ok(String::new())
-        }
-    }
+    // Scripts run for real: the local shell (egress wrapper, timeout).
+    use crate::adapters::outbound::shell::LocalShellExecutor;
 
     fn write_script(dir: &Path, body: &str) -> String {
         let path = dir.join("m.sh");
@@ -107,13 +109,11 @@ mod tests {
         let ctx = MetricRunCtx {
             skill_dir: dir.path(),
             workspace: &ws,
-            shell: &NoShell,
+            shell: &LocalShellExecutor::new(),
             tools: None,
             judge: None,
             http: None,
-            memory_manager: None,
             secret_registry: None,
-            activity: None,
             tool_scopes: None,
             conversation: None,
             sibling_metrics: None,
@@ -144,13 +144,11 @@ mod tests {
         let ctx = MetricRunCtx {
             skill_dir: dir.path(),
             workspace: &ws,
-            shell: &NoShell,
+            shell: &LocalShellExecutor::new(),
             tools: None,
             judge: None,
             http: None,
-            memory_manager: None,
             secret_registry: None,
-            activity: None,
             tool_scopes: None,
             conversation: None,
             sibling_metrics: None,
@@ -198,5 +196,36 @@ mod tests {
         );
         let out = run_script(&dir, path).await;
         assert_eq!(out.notes.as_deref(), Some("low confidence"));
+    }
+
+    /// A non-zero exit is a failed outcome with the reason, not an error.
+    #[tokio::test]
+    async fn failing_script_yields_fail() {
+        let dir = TempDir::new().unwrap();
+        let path = write_script(dir.path(), "#!/bin/sh\necho 'boom' >&2\nexit 3\n");
+        let out = run_script(&dir, path).await;
+        assert!(!out.pass);
+        let notes = out.notes.unwrap();
+        assert!(
+            notes.contains("exit 3") && notes.contains("boom"),
+            "{notes}"
+        );
+    }
+
+    /// A shell that cannot pass variables refuses; the env is never dropped.
+    #[test]
+    fn a_shell_without_env_refuses_variables() {
+        use crate::ports::shell::ShellExecutionPort;
+        struct NoEnv;
+        impl ShellExecutionPort for NoEnv {
+            fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
+                Ok(String::new())
+            }
+        }
+        let ws = std::env::temp_dir();
+        assert!(NoEnv.execute_shell_env("true", &ws, &[]).is_ok());
+        assert!(NoEnv
+            .execute_shell_env("true", &ws, &[("PROMPT", "x")])
+            .is_err());
     }
 }

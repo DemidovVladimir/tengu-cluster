@@ -106,13 +106,13 @@ Passed to every `engine.run()` call:
 ### Tool Assembly (`src/bootstrap/tools.rs`, catalog in `src/adapters/outbound/tools/mod.rs`)
 - `compute_base_tools()` — static tool defs for the outer loop; opt-in names (`src/domain/tools.rs::WORKSPACE_TOOLS`) join via `workspace_tools` or `tools`
 - `advertised_defs()` (`adapters/outbound/tools/mod.rs`) — the catalog's tool defs an agent sees (memory gate + its opt-ins)
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers the catalog plugins through `register_catalog` (workspace, memory, cache, `agentic_memory` with feature `postgres_memory`, skill-lifecycle, manage_skill, http, crypto, skill_resource, view_skill, solana, hyperliquid, xm, xlab, sources) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers the catalog plugins through `register_catalog` (workspace, memory, cache, `agentic_memory` with feature `postgres_memory`, skill-lifecycle, manage_skill, http, crypto, skill_resource, view_skill, solana, hyperliquid, xm, xlab, sources) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `ToolStack`: the tools to advertise (the `[[mcp_servers]]` proxy tools found on connect appended), the executor wrapped in `SanitizedToolExecutor`, and the raw `PluginToolExecutor` (eval's `tool_assertion` metrics only). One in-process agent turn over it: `bootstrap/turn.rs::run_once` (A2A agent endpoint, `tengu tool turn`).
 
 ### Skill Lifecycle (`src/application/skills/lifecycle/`, `src/adapters/outbound/tools/skill_lifecycle/`)
 A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
 
 - `skill_distill` (LLM-callable tool, opt-in via `workspace_tools`) — an agent authors a new skill from the current conversation. Writes `skills/<name>/{SKILL.md, evals/prompts.yaml, metrics/<scaffolds>}` atomically. Cache discipline: the new skill does NOT load into the current conversation.
-- `tengu eval <skill>` (integrated into `adapters/inbound/eval.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
+- `tengu eval <skill>` (`adapters/inbound/eval/`; rows, judge and report types in `application/skills/lifecycle/eval.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
 - `tengu skill evolve <skill>` — bounded rewrite→rescore loop. Baseline, scratch git worktree, N cycles via the `skill-improver` agent, best-cycle selection (no regression > 0.05 on other gated metrics), user approval gate, apply-or-discard.
 
 All three honour harness-owned doctrine: cycle counts, regression tolerance, best-cycle selection, and approval are Rust policy; LLMs only propose content. See [[skills#Metrics & Evolution]] and `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
@@ -140,7 +140,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 ### Engines
 | Module | Purpose |
 |--------|---------|
-| `adapters/outbound/engines/mod.rs` | Engine factory (`build_engine`, `build_step_engine`, `build_planner_engine`) |
+| `adapters/outbound/engines/mod.rs` | Engine factory (`build_engine`, `build_step_engine`) |
 | `adapters/outbound/engines/openrouter.rs` | OpenRouter engine |
 | `adapters/outbound/engines/local.rs` | Local OpenAI-compatible engine |
 | `adapters/outbound/engines/claude_code.rs` | Claude Code engine (feature-gated) |
@@ -177,20 +177,20 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 ### Memory
 | Module | Purpose |
 |--------|---------|
-| `application/memory/` + `ports/memory.rs` + `adapters/outbound/memory/` | `MemoryManager` + providers, `<memory-context>` fencing, `disk_vector.rs` (bincode store), `embedder.rs` (OpenRouter `text-embedding-3-small`) |
+| `application/memory/` + `ports/memory.rs` + `adapters/outbound/memory/` | `MemoryManager` (the workspace vector backend behind the memory tools; providers removed 2026-10-22), `<memory-context>` fencing, `disk_vector.rs` (bincode store), `embedder.rs` (OpenRouter `text-embedding-3-small`) |
 | `adapters/outbound/tools/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
 
 ### Channel Adapters
 | Module | Purpose |
 |--------|---------|
 | `adapters/inbound/tui/mod.rs` | Terminal UI adapter (cursive) |
-| `adapters/inbound/telegram.rs` | Telegram bot adapter |
+| `adapters/inbound/telegram/` | Telegram bot adapter |
 | `adapters/inbound/webhooks.rs` | Inbound webhook listener (feature `webhooks`) |
 
 ### Orchestration
 | Module | Purpose |
 |--------|---------|
-| `application/orchestrator/` | `RagPlanner` (`planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state), `wiring.rs` (planner LLM port); `Plan` types in `domain/plan.rs` |
+| `application/orchestrator/` | `RegistryPlanner` + `PlannerLlm` (the planner's engine call, `planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `trace.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state); `Plan` types in `domain/plan.rs` |
 | `adapters/outbound/subprocess_runner.rs` | `SubprocessRunner` — spawns `tengu run-agent` per plan step (IPC JSON over stdin/stdout) |
 
 ### Infrastructure
@@ -199,7 +199,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 | `adapters/outbound/secrets.rs` | Encrypted secrets vault (AES-256-GCM) + `SanitizedToolExecutor` redaction |
 | `adapters/outbound/egress.rs` | Network policy: Tor by default, host allowlist, shell sandbox, JSONL audit |
 | `adapters/outbound/scaffold.rs` | Workspace directory scaffolding |
-| `adapters/outbound/prune.rs` | State/cache cleanup (never `<TENGU_HOME>/state` beyond `state/flows`) |
+| `adapters/outbound/prune.rs` | State/cache cleanup: shared logs + memory, or one sandbox's traces + workspaces (never `<TENGU_HOME>/state`) |
 
 ### Added since 2026-09-24 (pointers only)
 | Subsystem | Entry points | Read |

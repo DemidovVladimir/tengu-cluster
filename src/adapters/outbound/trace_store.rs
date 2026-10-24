@@ -6,6 +6,7 @@
 //! | [`JsonlTraceSink::open`] | a fresh `run_id` (UUID v4) = a new file, first line `run.opened` (`{kind, pid}`; node `runtime:<sandbox>` for a `tengu run`, none for a decide — its `trigger.*` root names the trigger); a restart never appends to an old run |
 //! | [`JsonlTraceSink::emit`](TraceSink::emit) | under one lock: next `seq`, stamp (`RunContext::stamp`), payload redacted — `domain::trace::scrub_value`: every string and object key, secrets then URLs — then bounded ([`MAX_PAYLOAD_BYTES`], whole fields dropped), one `write_all` on an append-mode file (`decision_loop::append_line`); a failed write keeps the `seq` (no gap) and only warns |
 //! | [`JsonlTraceReader`] | one sandbox dir; a `run_id` must be a lowercase UUID (no path from a request reaches the disk); unparsable lines and a partial last line are skipped; `last_seq` = the last complete line's (no full parse); `follow` tails the file every 250 ms into a bounded channel (256): a slow reader holds the tail, nothing is dropped, a reconnect resumes by `seq` |
+//! | [`JournalSink`] · [`append_journal_metrics`] · [`read_journal`] | a `run-agent` step's journal (`AgentIpcInput.journal`: a 0600 temp file the parent makes per step and removes once read): one JSON line per tool event (`{"event": {id, draft}}` — from the child and from its Claude Code / Codex bridge, `TENGU_BRIDGE_JOURNAL`) or engine turn (`{"metrics": …}`, the child), each one `write_all` on an append-mode file; the parent reads it after the child exits however it exits — clean, failed, an engine error, killed at the timeout — replays the events under the step (`trace_exec::replay_child`) and, when no IPC reply came, forwards the metrics |
 //!
 //! Nothing here deletes a run; `tengu prune` removes `<TENGU_HOME>/logs`
 //! wholesale (the lab runs under its own `TENGU_HOME`).
@@ -16,11 +17,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::mpsc::{self, Receiver};
 use tracing::warn;
 
 use crate::application::decision_loop::append_line;
+use crate::application::trace_exec::{child_draft, child_id, MAX_CHILD_EVENTS};
+use crate::config::builder::sandbox_name_error;
+use crate::domain::metrics::MetricsRecord;
 use crate::domain::observation::now_ms;
 use crate::domain::secrets::SecretRegistry;
 use crate::domain::trace::{
@@ -39,18 +44,13 @@ pub(crate) fn trace_root(home: &Path) -> PathBuf {
     home.join("logs").join("trace")
 }
 
-/// A sandbox name as a directory: letters, digits, `.`, `_`, `-`; not
-/// starting with `.`.
+/// A sandbox name as a directory: the one name rule
+/// (`domain::runtime::valid_name`).
 pub(crate) fn check_sandbox_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
-        && !name.starts_with('.')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    if !ok {
-        bail!("sandbox name `{name}`: letters, digits, `.`, `_`, `-` only");
+    match sandbox_name_error(name) {
+        Some(why) => bail!("sandbox name {why}"),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// A run id as a file name: a lowercase hyphenated UUID, nothing else.
@@ -308,6 +308,128 @@ impl TraceReader for JsonlTraceReader {
         });
         Ok(rx)
     }
+}
+
+/// One line of a step journal ([`JournalSink`], [`append_journal_metrics`]).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JournalLine {
+    /// A draft and the id its writer gave it (`trace_exec::child_id`).
+    Event { id: String, draft: EventDraft },
+    /// One engine turn's `Subagent` record.
+    Metrics(MetricsRecord),
+}
+
+fn write_journal(path: &Path, line: &JournalLine) -> Result<()> {
+    let mut text = serde_json::to_string(line)?;
+    text.push('\n');
+    append_line(path, &text).with_context(|| format!("step journal {}", path.display()))
+}
+
+/// A `run-agent` step's trace sink (module table): every draft appended to
+/// the step's journal as it happens — by the child for the calls it runs,
+/// by its Claude Code / Codex bridge for the ones that run there
+/// (`TENGU_BRIDGE_JOURNAL`). Ids `ipc:<pid>:<n>`; past `MAX_CHILD_EVENTS`
+/// in one process nothing is written (one warn).
+pub(crate) struct JournalSink {
+    path: PathBuf,
+    secrets: Arc<SecretRegistry>,
+    pid: u32,
+    written: Mutex<usize>,
+}
+
+impl JournalSink {
+    pub(crate) fn new(path: PathBuf, secrets: Arc<SecretRegistry>) -> Self {
+        Self {
+            path,
+            secrets,
+            pid: std::process::id(),
+            written: Mutex::new(0),
+        }
+    }
+}
+
+impl TraceSink for JournalSink {
+    fn emit(&self, draft: EventDraft) -> Option<String> {
+        let mut n = self.written.lock().unwrap_or_else(|p| p.into_inner());
+        if *n >= MAX_CHILD_EVENTS {
+            if *n == MAX_CHILD_EVENTS {
+                warn!(
+                    kept = MAX_CHILD_EVENTS,
+                    "step journal: later tool events not recorded"
+                );
+                *n += 1;
+            }
+            return None;
+        }
+        let id = child_id(self.pid, *n + 1);
+        let line = JournalLine::Event {
+            id: id.clone(),
+            draft: child_draft(draft, &self.secrets),
+        };
+        match write_journal(&self.path, &line) {
+            Ok(()) => {
+                *n += 1;
+                Some(id)
+            }
+            Err(e) => {
+                warn!(error = %format!("{e:#}"), "step journal write failed");
+                None
+            }
+        }
+    }
+
+    /// The step writes into the parent's run, not one of its own.
+    fn run_id(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// Append one engine turn's metrics record to the step's journal — what the
+/// parent forwards when the child ends without an IPC reply. A failed write
+/// only warns.
+pub(crate) fn append_journal_metrics(path: &Path, rec: &MetricsRecord) {
+    if let Err(e) = write_journal(path, &JournalLine::Metrics(rec.clone())) {
+        warn!(error = %format!("{e:#}"), "step journal: metrics write failed");
+    }
+}
+
+/// A step journal read back ([`read_journal`]).
+#[derive(Debug, Default)]
+pub(crate) struct Journal {
+    /// `(own id, draft)` in write order, at most `MAX_CHILD_EVENTS`.
+    pub events: Vec<(String, EventDraft)>,
+    pub metrics: Vec<MetricsRecord>,
+}
+
+/// The step's journal, read by the parent once the child has exited —
+/// however it exited (module table): unparsable lines and a partial last
+/// line skipped, events past `MAX_CHILD_EVENTS` dropped (one warn); a
+/// missing or unreadable file = empty.
+pub(crate) fn read_journal(path: &Path) -> Journal {
+    let mut journal = Journal::default();
+    let Ok(bytes) = std::fs::read(path) else {
+        return journal;
+    };
+    let mut dropped = 0usize;
+    for line in bytes.split(|b| *b == b'\n') {
+        match serde_json::from_slice::<JournalLine>(line) {
+            Ok(JournalLine::Event { id, draft }) if journal.events.len() < MAX_CHILD_EVENTS => {
+                journal.events.push((id, draft))
+            }
+            Ok(JournalLine::Event { .. }) => dropped += 1,
+            Ok(JournalLine::Metrics(rec)) => journal.metrics.push(rec),
+            Err(_) => {}
+        }
+    }
+    if dropped > 0 {
+        warn!(
+            dropped,
+            kept = MAX_CHILD_EVENTS,
+            "step journal: tool events past the cap not replayed"
+        );
+    }
+    journal
 }
 
 #[cfg(test)]
@@ -671,5 +793,117 @@ mod tests {
             assert!(JsonlTraceReader::new(tmp.path(), bad).is_err(), "{bad}");
         }
         assert!(r.runs().unwrap().is_empty(), "no dir = no runs");
+    }
+
+    fn turn(tokens: u32) -> MetricsRecord {
+        MetricsRecord {
+            ts_unix: 1,
+            prompt_tokens: tokens,
+            completion_tokens: 1,
+            total_tokens: tokens + 1,
+            layers: vec![],
+            step_id: Some("s1".into()),
+            ..MetricsRecord::call(
+                crate::domain::metrics::MetricsKind::Subagent,
+                "s",
+                "researcher",
+                "claude-haiku-5-5",
+            )
+        }
+    }
+
+    /// A step's journal holds what the child and its bridge recorded even
+    /// when no IPC reply came: two writers (distinct ids), a secret redacted
+    /// before the disk, the metrics, a torn last line skipped; replayed, the
+    /// finishes sit under their own starts and the roots under the step.
+    #[tokio::test]
+    async fn a_step_journal_survives_any_exit() {
+        use crate::application::trace_exec::tests::{call, Fixed, MemTrace};
+        use crate::application::trace_exec::{replay_child, TracedExecutor};
+        use crate::ports::engine::ToolExecutor;
+        use crate::ports::tool::ToolOutput;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.jsonl");
+        let mut secrets = SecretRegistry::new();
+        secrets.register("sk-or-v1-0123456789abcdef".into());
+        let secrets = Arc::new(secrets);
+        let writer = |pid| {
+            let mut j = JournalSink::new(path.clone(), Arc::clone(&secrets));
+            j.pid = pid;
+            Arc::new(j)
+        };
+        let child = TracedExecutor::new(
+            Arc::new(Fixed(Ok(ToolOutput::from("4 pools".to_string())))),
+            writer(101),
+            "researcher",
+            None,
+        );
+        let mut c = call("call_1", "dlmm_pools");
+        c.arguments = serde_json::json!({"key": "sk-or-v1-0123456789abcdef"});
+        child.execute_typed(&c, &[]).await.unwrap();
+        append_journal_metrics(&path, &turn(10));
+        let bridge = TracedExecutor::new(
+            Arc::new(Fixed(Err("boom".into()))),
+            writer(202),
+            "researcher",
+            None,
+        );
+        assert!(bridge
+            .execute_typed(&call("mcp:n:7", "http_request"), &[])
+            .await
+            .is_err());
+        append_line(&path, "{\"event\": {\"id\": \"ipc:202:3\"").unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sk-or-v1-0123456789abcdef"), "{text}");
+        let j = read_journal(&path);
+        let ids: Vec<&str> = j.events.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["ipc:101:1", "ipc:101:2", "ipc:202:1", "ipc:202:2"]);
+        assert!(
+            j.events.iter().all(|(_, d)| d.ts_ms.is_some()),
+            "the writer's clock"
+        );
+        assert_eq!(j.metrics.len(), 1);
+        assert_eq!(j.metrics[0].prompt_tokens, 10);
+
+        let parent = MemTrace::default();
+        assert_eq!(replay_child(&parent, j.events, "run:7", "chat"), 4);
+        let d = parent.all();
+        assert_eq!(
+            parent.kinds(),
+            [
+                "tool.started",
+                "tool.completed",
+                "tool.started",
+                "tool.failed"
+            ]
+        );
+        assert_eq!(d[0].parent_event_id.as_deref(), Some("run:7"));
+        assert_eq!(d[1].parent_event_id, Some(MemTrace::id(0)));
+        assert_eq!(d[2].parent_event_id.as_deref(), Some("run:7"));
+        assert_eq!(d[3].parent_event_id, Some(MemTrace::id(2)));
+        assert_eq!(d[3].call_id.as_deref(), Some("mcp:n:7"));
+    }
+
+    /// One process writes at most `MAX_CHILD_EVENTS`; the reader keeps at
+    /// most that many per step; no file = nothing.
+    #[test]
+    fn a_step_journal_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.jsonl");
+        assert!(read_journal(&path).events.is_empty());
+        let started = || EventDraft::new(Component::Tool, "tool.started", Status::Running);
+        for pid in [1, 2] {
+            let mut j = JournalSink::new(path.clone(), Arc::new(SecretRegistry::new()));
+            j.pid = pid;
+            for _ in 0..MAX_CHILD_EVENTS + 3 {
+                j.emit(started());
+            }
+            assert!(j.emit(started()).is_none());
+        }
+        let lines = std::fs::read_to_string(&path).unwrap().lines().count();
+        assert_eq!(lines, 2 * MAX_CHILD_EVENTS);
+        assert_eq!(read_journal(&path).events.len(), MAX_CHILD_EVENTS);
     }
 }

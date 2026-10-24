@@ -16,20 +16,18 @@
 //! | Audit | one egress line per request: `tool = "gecko_ohlcv"`, `host`, `path` (full pool address), `status`, `ms` |
 //! | Partial bars | the newest bar is the open one: dropped (never stored) |
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use reqwest::Url;
 use serde_json::{json, Value};
 
 use super::{
-    grid_ceil, grid_floor, missing_ranges, no_bars_note, resume_note, stored_span, ReportRow, Retry,
+    grid_ceil, grid_floor, missing_ranges, no_bars_note, resume_note, stored_span, ReportRow,
 };
 use crate::adapters::outbound::egress;
-use crate::adapters::outbound::http_class::{
-    http_status_error, reqwest_error, retry_after_ms, HttpError, Scrubber,
-};
-use crate::adapters::outbound::rate_limit::{limiters, Limiters, Priority};
+use crate::adapters::outbound::http_class::{Budget, GatedHttp, HttpError, Retry, Scrubber};
+use crate::adapters::outbound::rate_limit::{limiters, Limiters};
 use crate::config::rate_limits::RateLimitConfig;
 use crate::config::sections::SandboxSections;
 use crate::domain::market::InstrumentId;
@@ -197,90 +195,28 @@ impl GeckoClient {
         let mut bare = url.clone();
         bare.set_query(None);
         let scrub = Scrubber::for_api(&bare);
-        let gate = egress::policy()
-            .check_url(&url)
-            .and_then(|_| self.scope.check_net_host(&self.host));
-        if let Err(e) = gate {
-            let err = HttpError::new(ErrorClass::Fatal, format!("{e:#}"));
-            self.audit(&url, Err(&err), None);
-            return Err(err.into());
-        }
-        let budget = self.budget.as_ref();
-        if let Err(err) = self
-            .limiters
-            .acquire(RATE_LIMIT, budget, 1, Priority::Read, self.max_budget_wait)
-            .await
-        {
-            self.audit(&url, Err(&err), None);
-            return Err(err.into());
-        }
-        let started = Instant::now();
-        let sent = self
+        let req = self
             .http
             .get(url.clone())
             .timeout(self.timeout)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await;
-        let result = match sent {
-            Err(e) => Err(reqwest_error(e, &self.host, &scrub)),
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let retry_after = retry_after_ms(resp.headers());
-                match resp.text().await {
-                    Err(e) => Err(reqwest_error(e, &self.host, &scrub)),
-                    Ok(body) if (200..300).contains(&status) => {
-                        decode(&body, interval, &self.host).map(|bars| (status, bars))
-                    }
-                    Ok(body) => Err(http_status_error(
-                        status,
-                        retry_after,
-                        &body,
-                        &self.host,
-                        &scrub,
-                    )),
-                }
-            }
-        };
-        let ms = Some(started.elapsed().as_millis() as u64);
-        match result {
-            Ok((status, bars)) => {
-                self.audit(&url, Ok(status), ms);
-                Ok(bars)
-            }
-            Err(err) => {
-                if err.class == ErrorClass::RateLimited {
-                    self.limiters
-                        .penalize(RATE_LIMIT, budget, err.retry_after_ms);
-                }
-                self.audit(&url, Err(&err), ms);
-                Err(err.into())
-            }
-        }
-    }
-
-    fn audit(&self, url: &Url, outcome: std::result::Result<u16, &HttpError>, ms: Option<u64>) {
-        let mut event = json!({
-            "tool": "gecko_ohlcv",
-            "host": self.host,
-            "path": url.path(),
-            "ms": ms,
-        });
-        match outcome {
-            Ok(status) => {
-                event["verdict"] = "allowed".into();
-                event["status"] = status.into();
-            }
-            Err(e) => {
-                event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
-                event["class"] = e.class.as_str().into();
-                event["reason"] = e.message.clone().into();
-                if let Some(s) = e.http_status {
-                    event["status"] = s.into();
-                }
-            }
-        }
-        egress::policy().audit(event);
+            .header(reqwest::header::ACCEPT, "application/json");
+        let bars = GatedHttp::new(
+            &self.scope,
+            &scrub,
+            json!({"tool": "gecko_ohlcv", "path": url.path()}),
+        )
+        .budget(Budget {
+            limiters: self.limiters,
+            name: RATE_LIMIT,
+            config: self.budget.as_ref(),
+            weight: 1,
+            max_wait: self.max_budget_wait,
+        })
+        .send(req, |r| {
+            decode(&r.success(&self.host, &scrub)?.body, interval, &self.host)
+        })
+        .await?;
+        Ok(bars)
     }
 }
 
@@ -407,8 +343,8 @@ async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::backfill::test_support::FAST;
     use crate::adapters::outbound::http_class::read_error;
+    use crate::adapters::outbound::http_class::test_support::FAST;
     use crate::adapters::outbound::http_class::test_support::{
         canned, local_scope, serve, test_client, Canned,
     };

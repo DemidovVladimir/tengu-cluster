@@ -70,10 +70,10 @@
 
     <rect x="0" y="50" width="305" height="56" rx="4" class="col-tengu" />
     <text x="10" y="66" class="h3">Orchestration / planner</text>
-    <text x="10" y="80" class="body">RagPlanner → SubprocessRunner → run-agent</text>
-    <text x="10" y="92" class="mono">engine = "rag" · [agents.*] with description</text>
+    <text x="10" y="80" class="body">RegistryPlanner → SubprocessRunner → run-agent</text>
+    <text x="10" y="92" class="mono">[orchestrator] agent · [agents.*] with description</text>
     <circle cx="296" cy="98" r="3" class="new" />
-    <text x="10" y="103" class="small">+ event bus, RagQueried, file-backed registry</text>
+    <text x="10" y="103" class="small">+ event bus, file-backed registry</text>
     <rect x="317" y="50" width="305" height="56" rx="4" class="col-hermes" />
     <text x="327" y="66" class="h3">Orchestration / planner</text>
     <text x="327" y="80" class="body">run_agent() loop · memory prefetch + sync</text>
@@ -325,14 +325,14 @@
     <rect x="237" y="0" width="225" height="86" rx="4" class="col-tengu" />
     <circle cx="251" cy="14" r="4" class="new" />
     <text x="261" y="18" class="h3">TUI debug panel</text>
-    <text x="247" y="36" class="body">RagQueried event rendered as</text>
-    <text x="247" y="48" class="body">compact System bubble in cursive</text>
-    <text x="247" y="64" class="small">opt-in via TENGU_TUI_RAG_DEBUG=1;</text>
-    <text x="247" y="76" class="small">top-3 hits w/ scores per planner call</text>
+    <text x="247" y="36" class="body">removed 2026-10-22: the registry</text>
+    <text x="247" y="48" class="body">is a file, nothing is scored</text>
+    <text x="247" y="64" class="small">read TENGU_PLANNER_REGISTRY.md;</text>
+    <text x="247" y="76" class="small">TENGU_TUI_METRICS=1 stays</text>
     <rect x="474" y="0" width="225" height="86" rx="4" class="col-tengu" />
     <circle cx="488" cy="14" r="4" class="new" />
     <text x="498" y="18" class="h3">Durable msg persistence</text>
-    <text x="484" y="36" class="body">RagPlanner mints session_id;</text>
+    <text x="484" y="36" class="body">RegistryPlanner mints session_id;</text>
     <text x="484" y="48" class="body">plan() writes user-event rows</text>
     <text x="484" y="64" class="small">forward-compat search_messages;</text>
     <text x="484" y="76" class="small">no read-back hydration yet</text>

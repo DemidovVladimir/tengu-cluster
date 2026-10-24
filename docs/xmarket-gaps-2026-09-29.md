@@ -522,7 +522,7 @@ After: `risk-exec-idempotency-ids` (M0), `risk-gate-enforcement` (M0), `risk-pap
   - `paper_positions` (account defaults to [risk] account) -> paper_positions/1:<account>, ttl 2 s, marks from fresh rows, lazy funding accrual.
   - `paper_cancel` (P1, resting orders).
   domain/tools.rs: the names plus XM_EXEC_TOOLS = [paper_order, paper_close, paper_cancel], added to WORKSPACE_TOOLS, one catalog row each.
-  Tests: cargo test --bin tengu catalog, tests/scope_lint.rs, tool tests with MemStore + a tempdir ledger.
+  Tests: cargo test --lib catalog, tests/scope_lint.rs, tool tests with MemStore + a tempdir ledger.
 - **No-Rust path:** None. http_request + a skill cannot fill against a book or keep a ledger, and an external MCP server would sit outside the gate (and outside the Rust-only repo).
 - **Evidence:** rg -n -i 'paper_order|paper_positions|paper_close' src: no hits. Read src/adapters/outbound/tools/mod.rs and src/domain/tools.rs.
 
@@ -645,14 +645,14 @@ After: `rt-daemon` (M0), `rt-health` (M0)
 - **No-Rust path:** yes — compose and Makefile only; no Rust needed
 - **Evidence:** read docker-compose.yml, docker-compose.tor.yml, Dockerfile, Makefile, deploy/cloud-init.yml; rg -n 'expand_tilde' src/bootstrap/decision.rs:60 (workspace ~ expansion)
 
-### `x-m0-e2e-test` — Offline end-to-end test (HL ctx / book / `perpDexs` / OI-cap + EDGAR fixtures, scripted Jev) under `cargo test --bin tengu`, < 30 s
+### `x-m0-e2e-test` — Offline end-to-end test (HL ctx / book / `perpDexs` / OI-cap + EDGAR fixtures, scripted Jev) under `cargo test --lib`, < 30 s
 
 M0 · M · rust · missing · application | outbound | bootstrap (test only) · PRD §13 §30 §31 §32 §35 S7
 After: `hl-book-tool` (M0), `hl-ctx-tool` (M0), `info-edgar` (M0), `jev-event-key` (M0), `jev-event-templating` (M0), `ops-audit-atomic-write` (M0), `risk-audit-verdicts` (M0), `risk-kill-switch` (M0), `risk-paper-tools` (M0), `rt-daemon` (M0), `rt-scheduler` (M0), `x-shared-workspace-and-state-layout` (M0)
 
 - **Tracker note:** Fixtures also include `perpDexs` + `perpsAtOpenInterestCap` replies; the scripted run is `inspect_book` → `compare` → `paper_enter` and asserts the `xm_compare/1` row.
 - **Have:** Only per-module unit tests. Decision-loop tests drive a scripted DecisionEngine inside src/application/decision_loop/mod.rs (tests from :537). tests/ holds code_map.rs, layering_lint.rs, scope_lint.rs, run_agent_ipc.rs and mcp_bridge_external.rs. No test crosses feed tick → loop → exec tool → ledger → audit.
-- **Need:** One #[tokio::test] in the binary crate: runs under `cargo test --bin tengu` in under 30 s, no network. A replay HTTP transport serves JSON/XML fixtures captured from the 2026-09-29 probes: tests/fixtures/xmarket/hl_meta_ctx_xyz.json, hl_l2book_xyz_TSLA.json, edgar_getcurrent_8k.atom, company_tickers_exchange.json. A scripted DecisionEngine returns inspect_book, then paper_enter. Uses a tempdir TENGU_HOME and one shared workspace. Assert: (1) the HL feed tick writes mkt_ctx/1:hyperliquid:xyz:TSLA; (2) a new 8-K accession emits exactly one loop event, and a repeated poll emits none; (3) one risk_decisions row (allow) and one fill row share the call_id; (4) paper_positions/1:<account> VWAP and fee equal values hand-computed from the 20-level book; (5) every decisions.jsonl line parses and carries the accession-derived session id; (6) with the kill-switch file present, the next paper_enter returns risk = deny, rule = kill_switch, and writes no fill.
+- **Need:** One #[tokio::test] in the crate: runs under `cargo test --lib` in under 30 s, no network. A replay HTTP transport serves JSON/XML fixtures captured from the 2026-09-29 probes: tests/fixtures/xmarket/hl_meta_ctx_xyz.json, hl_l2book_xyz_TSLA.json, edgar_getcurrent_8k.atom, company_tickers_exchange.json. A scripted DecisionEngine returns inspect_book, then paper_enter. Uses a tempdir TENGU_HOME and one shared workspace. Assert: (1) the HL feed tick writes mkt_ctx/1:hyperliquid:xyz:TSLA; (2) a new 8-K accession emits exactly one loop event, and a repeated poll emits none; (3) one risk_decisions row (allow) and one fill row share the call_id; (4) paper_positions/1:<account> VWAP and fee equal values hand-computed from the 20-level book; (5) every decisions.jsonl line parses and carries the accession-derived session id; (6) with the kill-switch file present, the next paper_enter returns risk = deny, rule = kill_switch, and writes no fill.
 - **No-Rust path:** none — the repo is Rust-only, and the slice's guarantees (atomic gate + fill, dedup, audit join) can only be proven in code
 - **Evidence:** ls tests/ (5 files, no end-to-end test); read the src/application/decision_loop/mod.rs test module (scripted engine, test escalator at :586); user rule: test runs capped at 30 s
 
@@ -2424,7 +2424,7 @@ M7 · S · rust · partial · ports | application | bootstrap · PRD §35 S8
 M7 · L · rust · missing · application | ports | outbound | inbound | config · PRD §33 §34 §35 S8
 After: `info-store` (M4), `ops-audit-record-v2` (M5), `ops-clock-port` (M7), `ops-history-recorder` (M1), `ops-rules-baseline` (M5), `risk-paper-tools` (M0)
 
-- **Have:** Pieces only: StubbedExecutor replays canned tool outputs (src/adapters/inbound/eval.rs:598-642); an in-memory MemStore exists in observe.rs tests; a pure policy has a golden-vector replay (src/domain/lp/hedge.rs:588, tests/fixtures/hedge-vectors.jsonl). The loop reads the wall clock (mod.rs:138, 333). There is no event replay, as-of store, fake clock, recorded-decision cache or arms configuration.
+- **Have:** Pieces only: StubbedExecutor replays canned tool outputs (src/adapters/inbound/eval.rs:598-642); an in-memory MemStore exists in observe.rs tests; a pure policy has a golden-vector replay (src/domain/lp/hedge_tests.rs:45, tests/fixtures/hedge-vectors.jsonl). The loop reads the wall clock (mod.rs:138, 333). There is no event replay, as-of store, fake clock, recorded-decision cache or arms configuration.
 - **Need:** application/replay/:
   - mod.rs: per arm, reset the loops and feed events in time order through DecisionLoop::handle_event on a FakeClock.
   - source.rs: merge recorded info events event/1 (by first_seen_ms only, to avoid lookahead), market-anomaly triggers recomputed from recorded rows by the deterministic layer, and schedule ticks.

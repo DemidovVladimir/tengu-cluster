@@ -232,18 +232,16 @@ fn on_submit(siv: &mut Cursive, text: &str, tx: &mpsc::Sender<ChatRequest>) {
 }
 
 /// Update the header bar with agent/engine info.
-pub fn update_header(siv: &mut Cursive, agent_name: &str, engine_label: &str, lens: &str) {
-    let text = format!("  TENGU  {}  {}  {}", agent_name, engine_label, lens);
+pub fn update_header(siv: &mut Cursive, agent_name: &str, engine_label: &str) {
     siv.call_on_name("header", |view: &mut TextView| {
         let mut styled = StyledString::new();
         styled.append_styled(
             "  TENGU",
             Style::from(Color::Light(BaseColor::Cyan)).combine(Effect::Bold),
         );
-        styled.append_plain(format!("  {}  {}  {}", agent_name, engine_label, lens));
+        styled.append_plain(format!("  {}  {}", agent_name, engine_label));
         view.set_content(styled);
     });
-    let _ = text;
 }
 
 /// Re-engage auto-scroll so new content is always visible.

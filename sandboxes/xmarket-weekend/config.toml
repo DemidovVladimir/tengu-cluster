@@ -54,8 +54,6 @@
 # State: ~/.tengu/state/xmarket-weekend/ (ledger.db, runtime.db, history/, KILL = halt);
 # workspace ~/xmarket-weekend-ws (only .tengu/observations.db).
 
-runtime_profile = "auto"
-
 # Open: latency-sensitive book reads. Tool ceiling = the HL host; the
 # placeholder engine's API traffic is not under this ceiling (egress.rs: LLM
 # API = proxy only), so nothing else is listed.

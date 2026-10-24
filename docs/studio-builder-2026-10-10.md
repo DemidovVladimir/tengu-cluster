@@ -37,8 +37,8 @@ Wire colours: **green current** = Rust compiled it · amber = compiles, read the
 | Engine | Card | Auth | Notes |
 |---|---|---|---|
 | `openrouter` | Agent · OpenRouter API | `OPENROUTER_API_KEY` (vault / env / Cloudflare) | planner: use this one |
-| `claude_code` | Agent · Claude (subscription) | `claude` CLI login | build `--features claude_code`; built-in tools profile (`claude_tools`: none · read_only · research = + WebSearch on the subscription · editor · editor_shell) |
-| `codex` | Agent · OpenAI (ChatGPT subscription) | `codex login` | default feature; `sandbox` read-only / workspace-write; `codex_web_search` → `agents.<name>.codex.web_search` disabled (default) · cached · live (OpenAI's search on the subscription); refused in hardened sandboxes (`docs/engine-backends.md` § Codex) |
+| `claude_code` | Agent · Claude (subscription) | `claude` CLI login | built-in tools profile (`claude_tools`: none (default) · read_only · research = WebSearch only, on the subscription · editor · editor_shell) |
+| `codex` | Agent · OpenAI (ChatGPT subscription) | `codex login` | `sandbox` read-only / workspace-write; `codex_web_search` → `agents.<name>.codex.web_search` disabled (default) · cached · live (OpenAI's search on the subscription); refused in hardened sandboxes (`docs/engine-backends.md` § Codex) |
 | `local` | Agent · Local model | optional key env | server URL (LAN ok) + context window |
 
 Live check 2026-10-10 (one canvas-built sandbox, `tengu tool turn`, list_directory + read_file through tengu): openrouter ✅ · claude_code ✅ · codex ✅ · local: not run here (operator's PC).

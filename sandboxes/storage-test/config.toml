@@ -4,16 +4,11 @@
 # Or TUI:   tengu chat --sandbox storage-test
 # The agent uses engine = "claude_code" — build with `--features claude_code`.
 
-runtime_profile = "auto"
-
 # Network: Tor by default (`make tor` must be running). Uncomment for the
 # open internet:
 # [egress]
 # network = "open"
 
-[hub]
-bind = "127.0.0.1"
-port = 7072
 
 [memory]
 enabled = true
@@ -22,7 +17,6 @@ persistent_store_chunk_size = 5000
 persistent_store_chunk_overlap = 200
 
 [telegram]
-tool_approvals = false
 # allowed_users = ["<your Telegram user id>"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 [scaffold]
@@ -51,6 +45,8 @@ skill_packages = ["telegram-rag-ingest"]
 # persistent_store; pasted text → write_file → persistent_store. Scopes: the
 # [default_scopes] above.
 tools = ["persistent_store", "read_file", "http_request", "write_file"]
+# No [agents.storage.claude_code] block: profile "none" (the default since
+# 2026-10-22) — no built-in Bash / Read / Write; only the tools above.
 # Planner-facing description (used when an [orchestrator] routes a step here).
 description = """
 Stores files and searches them by semantic query. Best for: ingesting a set \

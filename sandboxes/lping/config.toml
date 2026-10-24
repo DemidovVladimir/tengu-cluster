@@ -20,8 +20,6 @@
 # `lp_executor` send real transactions, see
 # "Signing" at the bottom of this file.
 
-runtime_profile = "auto"
-
 # --- Network -----------------------------------------------------------------
 # Open: paid RPC providers + market-data APIs (and OpenRouter) commonly block
 # Tor exits, and streaming feeds are latency-sensitive. Flip to "tor" to test.
@@ -61,8 +59,10 @@ goal_template = "A Solana on-chain event arrived. Summarise what happened (pool,
 # writes its cache (`<workspace>/.tengu/observations.db`) → fs_roots. RPC tools
 # read $SOLANA_RPC_URL when set (else the public mainnet endpoint): if you set
 # it, add that URL's host to their net_hosts too.
+# http_request: any host, but $SOLANA_RPC_URL expands only toward a host named
+# here ("*" does not count): set it to another RPC → add that host too.
 [default_scopes.http_request]
-net_hosts = ["*"]
+net_hosts = ["*", "api.mainnet-beta.solana.com"]
 env_reads = ["SOLANA_RPC_URL"]   # explicit: "*" would expand any $SECRET into a URL (review H1)
 fs_roots = ["~/lping-workspace"]
 
@@ -147,12 +147,11 @@ fs_roots = ["~/lping-workspace"]
 
 [orchestrator]
 agent = "lping"
-engine = "rag"
 max_attempts_per_step = 3
 max_replans = 2
 
 # Planner + in-process chat agent, on the Claude subscription. A planner turn
-# gets no tools and no bridge (bootstrap::orchestrator::run_turn_inner), and
+# gets no tools and no bridge (orchestrator::planner::PlannerLlm::call), and
 # `builtin_tools_profile = "none"` leaves the CLI no built-ins: plan JSON only.
 [agents.lping]
 default = true

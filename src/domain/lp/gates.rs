@@ -11,7 +11,7 @@
 //! | [`token_percentages`], [`check_position_imbalance`] | `src/utils/meteoraUtils.ts:121-152,305-339` |
 //! | [`wallet_balanced_for_5050`] | `meteoraUtils.ts:369-402` |
 //! | [`plan_swap_for_deposit`] | `src/modules/swapPlanner.ts:147-286` |
-//! | [`price_from_bin`], [`bin_from_price`], [`bin_array_index`], [`centered_range`] | `meteoraUtils.ts:70-79,418-436`; SDK `getBinIdFromPrice`, `binIdToBinArrayIndex`; `meteoraAdapter.ts:594-596` (71-bin bug, fixed) |
+//! | [`price_from_bin`], [`bin_array_index`], [`centered_range`] | `meteoraUtils.ts:70-79,418-436`; SDK `binIdToBinArrayIndex`; `meteoraAdapter.ts:594-596` (71-bin bug, fixed) |
 //! | [`dlmm_fee_rates`], [`dynamic_volatility_accumulator`] | `@meteora-ag/dlmm` `getBaseFee` / `getVariableFee` / `getTotalFee` / `calculateFeeInfo` / `updateReference` / `updateVolatilityAccumulator` |
 //! | [`check_swap_oracle_gate`] (fail-closed) | `src/modules/swapPlanner.ts:325-337` |
 //!
@@ -22,9 +22,8 @@
 //! (1-bin) range (bot: NaN); the swap gate reports `None` instead of
 //! NaN/Infinity and also rejects non-finite inputs.
 
-// Consumed by the lp_decide / hedge_decide tools (WP-COMPOSE). `!(x > 0.0)`
-// is the TS NaN-rejecting guard, kept verbatim.
-#![allow(dead_code, clippy::neg_cmp_op_on_partial_ord)]
+// `!(x > 0.0)` is the TS NaN-rejecting guard, kept verbatim.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
 
 use serde::{Deserialize, Serialize};
 
@@ -859,9 +858,6 @@ pub(crate) const MAX_BIN_PER_ARRAY: i64 = 70;
 /// `src/config/constants.ts:153`).
 pub(crate) const MAX_POSITION_WIDTH_BINS: u32 = 70;
 const BASIS_POINT_MAX: f64 = 10_000.0;
-/// |log-ratio − nearest integer| below this snaps to the integer before
-/// rounding, so an exact bin price maps to its own bin under every rounding.
-const BIN_SNAP_EPS: f64 = 1e-9;
 
 /// `getPriceFromBinId` (`meteoraUtils.ts:70-79`):
 /// `(1 + bin_step/1e4)^bin_id × 10^(dec_x − dec_y)` — quote per base in UI
@@ -872,64 +868,10 @@ pub(crate) fn price_from_bin(bin_id: i32, bin_step: u16, dec_x: u8, dec_y: u8) -
     per_lamport * 10f64.powi(i32::from(dec_x) - i32::from(dec_y))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Rounding {
-    /// Floor — SDK `getBinIdFromPrice(.., min = true)`.
-    Down,
-    /// Ceil — SDK `min = false` (the bot's `priceToNearestBinId`, despite its name).
-    Up,
-    /// Round half away from zero.
-    Nearest,
-}
-
-/// SDK `getBinIdFromPrice(toPricePerLamport(price), bin_step, min)`:
-/// `ln(price × 10^(dec_y − dec_x)) / ln(1 + bin_step/1e4)`, rounded as asked.
-/// Log ratios within 1e-9 of an integer snap to it first (the SDK's own
-/// float input makes `ceil` of an exact bin price land one bin high).
-/// `None` for a non-positive / non-finite price, a zero bin step, or an id
-/// outside `i32`.
-pub(crate) fn bin_from_price(
-    price: f64,
-    bin_step: u16,
-    dec_x: u8,
-    dec_y: u8,
-    rounding: Rounding,
-) -> Option<i32> {
-    if !price.is_finite() || price <= 0.0 || bin_step == 0 {
-        return None;
-    }
-    let per_lamport = price * 10f64.powi(i32::from(dec_y) - i32::from(dec_x));
-    let raw = per_lamport.ln() / (f64::from(bin_step) / BASIS_POINT_MAX).ln_1p();
-    if !raw.is_finite() {
-        return None;
-    }
-    let snapped = if (raw - raw.round()).abs() < BIN_SNAP_EPS {
-        raw.round()
-    } else {
-        raw
-    };
-    let id = match rounding {
-        Rounding::Down => snapped.floor(),
-        Rounding::Up => snapped.ceil(),
-        Rounding::Nearest => snapped.round(),
-    };
-    if id < f64::from(i32::MIN) || id > f64::from(i32::MAX) {
-        return None;
-    }
-    Some(id as i32)
-}
-
 /// SDK `binIdToBinArrayIndex`: `floor(bin_id / 70)`, negatives included
 /// (-1 → -1, -70 → -1, -71 → -2).
 pub(crate) fn bin_array_index(bin_id: i32) -> i64 {
     i64::from(bin_id).div_euclid(MAX_BIN_PER_ARRAY)
-}
-
-/// SDK `getBinArrayLowerUpperBinId`: inclusive bin id bounds of an array.
-pub(crate) fn bin_array_bounds(index: i64) -> (i64, i64) {
-    let lower = index * MAX_BIN_PER_ARRAY;
-    (lower, lower + MAX_BIN_PER_ARRAY - 1)
 }
 
 /// Every bin array index a `[min_bin_id, max_bin_id]` range touches, ascending.
@@ -1780,29 +1722,6 @@ mod tests {
     }
 
     #[test]
-    fn bin_from_price_roundings() {
-        let exact = price_from_bin(-6301, 4, 9, 6);
-        for r in [Rounding::Down, Rounding::Up, Rounding::Nearest] {
-            assert_eq!(bin_from_price(exact, 4, 9, 6, r), Some(-6301), "{r:?}");
-        }
-        // Decimal.js: ln(0.150)/ln(1.0004) = -4743.748… → floor -4744, ceil -4743.
-        assert_eq!(bin_from_price(150.0, 4, 9, 6, Rounding::Down), Some(-4744));
-        assert_eq!(bin_from_price(150.0, 4, 9, 6, Rounding::Up), Some(-4743));
-        assert_eq!(
-            bin_from_price(150.0, 4, 9, 6, Rounding::Nearest),
-            Some(-4744)
-        );
-        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert_eq!(bin_from_price(bad, 4, 9, 6, Rounding::Down), None);
-        }
-        assert_eq!(bin_from_price(150.0, 0, 9, 6, Rounding::Down), None);
-        for id in [-20_000, -6301, -1, 0, 1, 70, 12_345] {
-            let p = price_from_bin(id, 10, 9, 6);
-            assert_eq!(bin_from_price(p, 10, 9, 6, Rounding::Up), Some(id));
-        }
-    }
-
-    #[test]
     fn bin_array_index_floors_negatives() {
         for (id, idx) in [
             (0, 0),
@@ -1816,8 +1735,6 @@ mod tests {
         ] {
             assert_eq!(bin_array_index(id), idx, "bin {id}");
         }
-        assert_eq!(bin_array_bounds(-1), (-70, -1));
-        assert_eq!(bin_array_bounds(1), (70, 139));
         assert_eq!(bin_array_indexes(-6301, -6281), vec![-91, -90]);
         assert_eq!(bin_array_indexes(0, 69), vec![0]);
         assert!(bin_array_indexes(5, 4).is_empty());

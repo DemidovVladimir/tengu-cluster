@@ -5,9 +5,26 @@ edition = "2021"
 rust-version = "1.78"
 license = "MIT"
 
+# Every module lives in the `tengu` lib (private modules, one `pub fn run`);
+# the bin only calls it. Same name as the bin, so tracing targets stay
+# `tengu::…` (`RUST_LOG=tengu=info`). Doc comments hold tables and shell
+# snippets, not Rust examples: no doctests. Unit tests: `cargo test --lib`.
+[lib]
+name = "tengu"
+path = "src/lib.rs"
+doctest = false
+
 [[bin]]
 name = "tengu"
 path = "src/main.rs"
+
+# One workspace: one Cargo.lock, one target/. `crates/tengu-seal` (the seal
+# proxy formats) is a member; the Cloudflare Worker builds for wasm32 with
+# its own lockfile, so it stays out.
+[workspace]
+members = ["crates/tengu-seal"]
+exclude = ["cloudflare/seal-worker"]
+resolver = "2"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -79,16 +96,20 @@ hmac = { version = "0.12", optional = true }
 curve25519-dalek = { version = "~4.1", default-features = false }
 
 [features]
-default = ["openrouter", "telegram", "studio", "codex", "a2a"]
+# Every engine (openrouter, local, claude_code, codex) is always built: the
+# binary only spawns a CLI when an agent names its engine.
+default = ["telegram", "studio", "a2a", "webhooks"]
 telegram = ["teloxide", "dptree", "reqwest011"]
-openrouter = []
 postgres_memory = ["tokio-postgres"]
-claude_code = []
-# `engine = "codex"`: the OpenAI Codex CLI on the ChatGPT subscription
-# (`engines/codex.rs`). A default feature: the binary only spawns `codex`
-# when an agent names the engine.
-codex = []
+# `tengu webhooks` and decision-loop escalation under `tengu run`. A default
+# feature since 2026-10-22 (a default build used to stop at "escalation
+# unavailable").
 webhooks = ["axum", "hmac"]
+# No-ops since 2026-10-22: every engine is always built. Kept so older build
+# commands (`--features claude_code`, `TENGU_FEATURES=openrouter,…`) still work.
+openrouter = []
+claude_code = []
+codex = []
 # `tengu studio --sandbox <s>`: the local Studio server (loopback only;
 # HTML/CSS/JS from web/studio/ embedded with include_str!). axum as for
 # webhooks. A default feature since 2026-10-09 (the normal build and the Docker

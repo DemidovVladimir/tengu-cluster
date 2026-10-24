@@ -66,14 +66,14 @@
 
 ## Minimal Schema
 
-As built: `ensure_schema` in `src/adapters/outbound/tools/agentic_memory/mod.rs` (once per process, advisory lock; `vector(1536)`, HNSW cosine + English FTS indexes).
+As built: `ensure_schema` in `src/adapters/outbound/tools/agentic_memory/mod.rs` (once per process, advisory lock; `vector(1536)`, HNSW cosine + English FTS indexes). Every table has a `sandbox` column (2026-10-23): rows are stamped with the config's sandbox and every read filters on it; a row written before the column is read by no lane.
 
 | Table | Columns | Built |
 |---|---|---|
-| `memory_events` | id, session_id, agent, role, kind, content, summary, embedding, metadata, created_at | yes |
-| `memory_sources` | id, kind, uri, title, raw_path, hash, metadata, created_at | yes |
-| `memory_chunks` | id, source_id, event_id, content, embedding, metadata, created_at | yes |
-| `memory_promotions` | id, target_kind, target_id, status, reason, evidence, created_at | yes |
+| `memory_events` | id, sandbox, session_id, agent, role, kind, content, summary, embedding, metadata, created_at | yes |
+| `memory_sources` | id, sandbox, kind, uri, title, raw_path, hash, metadata, created_at | yes |
+| `memory_chunks` | id, sandbox, source_id, event_id, content, embedding, metadata, created_at | yes |
+| `memory_promotions` | id, sandbox, target_kind, target_id, status, reason, evidence, created_at | yes |
 | `memory_claims` | id, claim, confidence, source_ids, status, created_at | planned |
 | `memory_links` | from_id, to_id, relation, reason | planned |
 
@@ -81,11 +81,11 @@ As built: `ensure_schema` in `src/adapters/outbound/tools/agentic_memory/mod.rs`
 
 | Operation | Purpose |
 |---|---|
-| `capture` | Store conversation/event memory |
-| `recall` | Retrieve token-budgeted context |
+| `capture` | Store conversation/event memory (as built: `content` + `kind` from `event` · `note` · `preference` · `fact` · `claim` · `decision` — `message` / `step_output` are the harness's; `session_id` = `TENGU_SESSION_ID`, `agent` = `TENGU_AGENT_NAME` > model slug, role `agent` — never from the args) |
+| `recall` | Retrieve token-budgeted context (as built: this sandbox's events + chunks) |
 | `ingest_source` | Add file, URL, note, or transcript to raw memory |
-| `promote` | Mark stable/high-value memory for wiki compilation |
-| `compile_wiki` | Update Markdown wiki from promoted items (as built: one page `<workspace>/.tengu/agentic-memory/wiki/<title-slug>.md` from the newest 30 promotions; LLM `TENGU_WIKI_COMPILER_MODEL`, default `anthropic/claude-sonnet-4-6`, via OpenRouter; deterministic bullet page on LLM failure; a title naming an instruction file is refused) |
+| `promote` | Mark stable/high-value memory for wiki compilation (as built: a `pending` row; the operator approves: `UPDATE memory_promotions SET status = 'approved' WHERE id = '<id>'`) |
+| `compile_wiki` | Update Markdown wiki from promoted items (as built: one page `<workspace>/.tengu/agentic-memory/wiki/<title-slug>.md` from the newest 30 `approved` promotions of the sandbox; an LLM page only when `TENGU_WIKI_COMPILER_MODEL` names a model (no default; via OpenRouter — model spend rule), else or on LLM failure a deterministic bullet page; a title naming an instruction file is refused) |
 | `lint` | Find duplicates, contradictions, stale pages, missing citations (as built: counts only — events, sources, chunks, promotions, wiki pages) |
 | `propose_behavior` | Produce reviewable skill/config patch from evidence (planned; not in the Tengu `agentic_memory` op enum yet) |
 
@@ -97,7 +97,7 @@ As built: `ensure_schema` in `src/adapters/outbound/tools/agentic_memory/mod.rs`
 | `src/adapters/outbound/tools/mod.rs` | Export plugin |
 | `adapters::outbound::tools::register_catalog` | Register once |
 | `WORKSPACE_TOOLS` | Add `agentic_memory` |
-| `src/config/mod.rs` | `[agentic_memory]` section (not landed — the DB comes from `TENGU_MEMORY_DATABASE_URL` only) |
+| `src/config/memory.rs` | `[agentic_memory]` section (not landed — the DB comes from `TENGU_MEMORY_DATABASE_URL` only) |
 | `src/adapters/outbound/egress.rs` | Embedder + `compile_wiki` LLM calls use `egress::policy().llm_api_client` — Tor by default (`[egress] network = "tor"`); Postgres at `TENGU_MEMORY_DATABASE_URL` is loopback / compose-internal (`postgres-memory` on `tor-front`), never proxied |
 | `run-agent` env | `TENGU_SESSION_ID` + `TENGU_AGENT_NAME` (= the `[agents.<name>]` key) stamped onto `capture` rows when the LLM omits them |
 | `planner.rs` recall/write paths | Spike only |

@@ -320,7 +320,7 @@
     <div class="bands" id="b-bands" aria-label="Retry window per attempt"></div>
     <p class="note" id="b-feed"></p>
   </div>
-  <p class="note"><b>Budgets.</b> <code>[rate_limits.&lt;name&gt;]</code> is one token bucket per process (<code>per_minute</code>, <code>burst</code>, <code>exec_reserve</code>; xmarket: hyperliquid 600 / min). Reads leave the reserve for orders. A wait past the caller's limit is <code>rate_limited</code>, and nothing is sent. No section: unlimited.</p>
+  <p class="note"><b>Budgets.</b> <code>[rate_limits.&lt;name&gt;]</code> is one token bucket per process (<code>per_minute</code>, <code>burst</code>, <code>exec_reserve</code>; xmarket: hyperliquid 600 / min). Reads leave the reserve for orders. A wait past the caller's limit is <code>rate_limited</code>, and nothing is sent. No section: unlimited. Names read: <code>hyperliquid</code>, <code>geckoterminal</code>, <code>sec</code>, <code>ted</code>, <code>solana_rpc</code> (or a source row's own).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-cal">
@@ -366,7 +366,7 @@
     <li><span><b>A loop never runs two events at once</b>, and no more than <code>max_decisions_in_flight</code> run across loops.</span></li>
     <li><span><b>Bursts are bounded.</b> Past <code>max_queued_per_loop</code> waiting events, the next is refused and counted.</span></li>
     <li><span><b>No replay storms.</b> Missed feed slots are skipped; a clock stepping back does not stall a feed.</span></li>
-    <li><span><b>Readers never see half a heartbeat.</b> It is written to a temp file, then renamed.</span></li>
+    <li><span><b>Readers never see half a heartbeat.</b> It is written to a 0600 temp file, synced, then renamed.</span></li>
     <li><span><b>No URLs in health.</b> Heartbeats and <code>loop/1</code> / <code>feed/1</code> rows replace every URL with <code>&lt;url&gt;</code>.</span></li>
     <li><span><b>Shutdown is bounded.</b> <code>shutdown_grace_secs</code> ≤ 3600; a second signal exits 130 at once.</span></li>
     <li><span><b>No turn outlives the run.</b> A webhook planner endpoint's turn and a loop escalation's are owned by the dispatch (<code>Runtime::turns</code>): the drain waits for them with the loop events, aborts what still runs at the grace (its <code>plan.completed</code>, dropped, is written first), then the leases go and <code>runtime.stopped</code> is the last line. New turns get 503 once the drain began.</span></li>
@@ -404,7 +404,7 @@
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, the escalator (handed the run's recording and turns), stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play</td></tr>
+        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, the escalator (handed the run's recording and turns), stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play; <code>run_webhooks</code>: <code>tengu webhooks</code> = this runtime with no feeds and only the endpoints' loops</td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, turns, feeds, health, shutdown (drain → leases → <code>runtime.stopped</code>); <code>read_live</code> (the <code>--live</code> verdict, shared with Studio)</td></tr>
         <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, <code>HeldLeases</code> (the leases the keeper and the writers share: one expiry each, one sticky loss), lease keeper</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td><code>LoopDispatch</code>: turn, permits, queue bound, drain; <code>Turns</code>: owned orchestrator turns, drained with the events</td></tr>
@@ -416,7 +416,8 @@
         <tr><td><code>src/domain/calendar.rs</code> · <code>src/domain/tz.rs</code></td><td>sessions, holidays, weekend clock · NY / Paris DST</td></tr>
         <tr><td><code>src/config/runtime.rs</code> · <code>feeds.rs</code> · <code>rate_limits.rs</code></td><td><code>[runtime]</code>, <code>[feeds.*]</code>, <code>[rate_limits.*]</code></td></tr>
         <tr><td><code>src/adapters/outbound/runtime_store.rs</code></td><td><code>runtime.db</code> leases, atomic heartbeat file</td></tr>
-        <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes, system clock</td></tr>
+        <tr><td><code>src/adapters/outbound/sqlite.rs</code></td><td>every state db (<code>runtime.db</code>, <code>ledger.db</code>, <code>market.db</code>, …): mode 0600 with its WAL, busy timeout, one shared connection</td></tr>
+        <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes + the shared request pipeline (<code>GatedHttp</code>), system clock</td></tr>
         <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store, <code>RuntimeJob</code> (a job feed's run), <code>Ownership</code> (<code>ensure</code> before a write, <code>lost</code> to race a wait; <code>LeaseLost</code>, <code>Unleased</code>) and clock ports (<code>SimClock</code> for replay)</td></tr>
       </tbody>
     </table>
@@ -424,7 +425,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

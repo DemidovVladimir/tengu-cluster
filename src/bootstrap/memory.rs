@@ -1,5 +1,5 @@
-//! Memory wiring — builds the `MemoryManager` (builtin provider + disk vector
-//! store + embedder) for an agent workspace.
+//! Memory wiring — builds the `MemoryManager` (disk vector store + embedder)
+//! for an agent workspace.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,46 +15,34 @@ use crate::ports::memory::VectorStore;
 // Memory subsystem initialization
 // ---------------------------------------------------------------------------
 
-/// Resolve the memory store path: workspace-local if a workspace is provided,
-/// otherwise fall back to the global path from config (with tilde expansion).
+/// Resolve the memory store path: `<workspace>/memory` when a workspace is
+/// provided, else `[memory] store_path` (`~` expanded), else
+/// `<TENGU_HOME>/memory`.
 pub(crate) fn resolve_memory_store_path(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> std::path::PathBuf {
-    match workspace {
-        Some(ws) => ws.join("memory"),
-        None => {
-            let store_path_str = memory_config.store_path.replace(
-                "~",
-                &dirs_next::home_dir().unwrap_or_default().to_string_lossy(),
-            );
-            std::path::PathBuf::from(store_path_str)
-        }
+    use crate::config::paths::{expand_tilde, resolve_tengu_home};
+    match (workspace, memory_config.store_path.as_deref()) {
+        (Some(ws), _) => ws.join("memory"),
+        (None, Some(path)) => expand_tilde(Path::new(path)),
+        (None, None) => resolve_tengu_home().join("memory"),
     }
 }
 
-// `resolve_qdrant_collection` was removed in Phase 6 along with the Qdrant
-// backend — the disk-backed `VectorStore` does not use collection names.
-
-/// Build a `MemoryManager` populated with a `BuiltinMemoryProvider` that
-/// uses the new `Embedder` + `VectorStore` pair.
+/// Build a `MemoryManager` holding the `Embedder` + `VectorStore` pair.
 ///
-/// Returns a freshly-constructed manager (possibly empty) when memory is
-/// disabled or the vector stack fails to initialize, so channels can
-/// always hand a valid `Arc<MemoryManager>` to the orchestrator.
-/// Workspace defaults to the current directory when `None` so the
-/// `BuiltinMemoryProvider` has a real path to read AGENTS.md / MEMORY.md
-/// / daily logs from.
-/// Phase 7.6 — async sibling of `build_memory_manager` for callers that
-/// already live inside a tokio context (notably `run_agent_subprocess`,
-/// which can't take a `&Runtime` arg without re-entrant block-on hazards).
-/// Returns the same fully-wired `MemoryManager` — backed by the bincode
-/// `DiskVectorStore` (the only `VectorStore` impl since Phase 6).
+/// Returns a manager without a backend when memory is disabled or the
+/// vector stack fails to initialize, so channels can always hand a valid
+/// `Arc<MemoryManager>` to the tool executor.
+/// Async sibling of `build_memory_manager` for callers that already live
+/// inside a tokio context (notably `run_agent_subprocess`, which can't take
+/// a `&Runtime` arg without re-entrant block-on hazards). Backed by the
+/// bincode `DiskVectorStore`, the only `VectorStore` impl.
 pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> Arc<crate::application::memory::manager::MemoryManager> {
-    use crate::adapters::outbound::memory::builtin::BuiltinMemoryProvider;
     use crate::application::memory::manager::MemoryManager;
 
     let manager = Arc::new(MemoryManager::new());
@@ -63,16 +51,6 @@ pub(crate) async fn build_memory_manager_async(
         return manager;
     };
 
-    let ws = workspace
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let provider = Box::new(BuiltinMemoryProvider::new(
-        ws,
-        Arc::clone(&store),
-        Arc::clone(&embedder),
-    ));
-
-    manager.add_provider(provider).await;
     manager.set_vector_backend(embedder, store).await;
     manager
 }
@@ -96,9 +74,8 @@ async fn build_vector_stack_async(
     };
     let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
 
-    // The legacy `qdrant` backend was removed in Phase 6. The disk-backed
-    // bincode store is the only `VectorStore` impl now — `memory_config.backend`
-    // is no longer branched on.
+    // The disk-backed bincode store is the only `VectorStore` impl:
+    // `memory_config.backend` is not branched on.
     let store: Option<Arc<dyn VectorStore>> = DiskVectorStore::new(&resolved_store_path)
         .ok()
         .map(|s| Arc::new(s) as Arc<dyn VectorStore>);
@@ -110,14 +87,41 @@ async fn build_vector_stack_async(
     Some((embedder, store))
 }
 
-/// Phase 7.7 refactor #4 — sync wrapper around `build_memory_manager_async`.
-/// Pre-7.7 this duplicated the BuiltinMemoryProvider construction + the
-/// `add_provider` / `set_vector_backend` call sequence. Now those live in
-/// the async function exclusively; this wrapper just block_on's it.
+/// Sync wrapper around `build_memory_manager_async`.
+/// The backend wiring lives in the async function; this wrapper just
+/// block_on's it.
 pub(crate) fn build_memory_manager(
     memory_config: &crate::config::MemoryConfig,
     rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
 ) -> Arc<crate::application::memory::manager::MemoryManager> {
     rt.block_on(build_memory_manager_async(memory_config, workspace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An agent without a workspace keeps its vectors under `TENGU_HOME`
+    /// unless `[memory] store_path` names another dir; a workspace wins.
+    #[test]
+    fn memory_store_defaults_under_tengu_home() {
+        let mut memory = crate::config::MemoryConfig::default();
+        let home = crate::config::paths::resolve_tengu_home();
+        assert_eq!(
+            resolve_memory_store_path(&memory, None),
+            home.join("memory")
+        );
+        let ws = Path::new("/ws");
+        assert_eq!(
+            resolve_memory_store_path(&memory, Some(ws)),
+            ws.join("memory")
+        );
+        memory.store_path = Some("~/elsewhere/mem".into());
+        assert_eq!(
+            resolve_memory_store_path(&memory, None),
+            crate::config::paths::expand_tilde(Path::new("~/elsewhere/mem"))
+        );
+        assert!(!resolve_memory_store_path(&memory, None).starts_with("~"));
+    }
 }

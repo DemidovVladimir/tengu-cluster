@@ -29,7 +29,7 @@ use crate::domain::backtest::stats::{
 };
 use crate::domain::book::Side;
 use crate::domain::decision::{Answer, StepOutcome, Verdict};
-use crate::domain::marketdata::fmt_time;
+use crate::domain::time::fmt_time;
 
 /// What Jev answered for one candidate (module table).
 #[derive(Debug, Clone, PartialEq, Serialize)]

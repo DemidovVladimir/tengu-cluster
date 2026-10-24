@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use super::propose::{assess_in_run, assessment_lines, name};
 use super::{args, run_arg, SoeShared, TEXT_BUDGET};
-use crate::adapters::outbound::tools::xlab::{field, opt_str, whole};
+use crate::adapters::outbound::tools::args::{field, opt_str, whole};
 use crate::application::soe::submit::{self, Carried, RunHead};
 use crate::domain::lineage::value::Time;
 use crate::domain::message::ToolDef;

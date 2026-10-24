@@ -10,12 +10,12 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 |---|---|---|---|
 | `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) — a git submodule pinned at `7f104aa118a891aca85cfebbd68bf9f4a2cd85e7` with no `.gitmodules` entry: empty in a fresh clone or worktree | Privy agentic wallets: create / manage wallets, policies, transactions | no sandbox lists it |
 | `execution-map` | documentation | Architect → Jev: the execution-map JSON for `tengu decide --map` (`config/execution_map.rs`) — fields, narrowing rules, outcomes | no sandbox lists it |
-| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | no sandbox lists it |
+| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow; the in-chat lifecycle verbs a `learning-agent` serves | no sandbox lists it |
 | `telegram-rag-ingest` | documentation | Resources shared in Telegram (attachments, URLs, text) → searchable vector memory; answer from it later (`http_request` → `write_file` → `persistent_store`) | `storage-test` → `storage` |
 | `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab`, `xlab-w2` → `xl_architect` |
 | `soe-architect` | documentation (+ `resources/proposal.example.json`) | SOE Architect stage: read the run's packet, at least two mechanisms + `HOLD`, ranges with evidence ids or `UNKNOWN`, never a computed field; `soe_propose` call shapes and the draft format | `soe` → `soe_architect` |
 | `soe-critic` | documentation | SOE Critic stage: the seven challenge kinds and their conservative-only effects; `soe_challenge` flat call shape | `soe` → `soe_critic` |
-| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping` only) — read by the planner from `<cwd>/skills/orchestrator/SKILL.md` (`planner.rs`), not through `skill_packages`; its lifecycle-verb rows need a `learning-agent` block no sandbox ships |
+| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping` only) — read by the planner from `<cwd>/skills/orchestrator/SKILL.md` (`planner.rs`), not through `skill_packages`; ~2.8 KB: two JSON shapes, the exact-name rule, `depends_on`, compose (the lifecycle-verb rows moved to `skill-creator` 2026-10-23) |
 | `skill-eval` | documentation | Points to `tengu eval` / `tengu skill metrics` / `tengu skill evolve` | none |
 | `german-teacher` · `spanish-teacher` | documentation, learner-facing (`resources/`, `evals/prompts.yaml`) | Teacher-seeded skills (`tengu skill seed`), `editable_by_learner: true`; read their materials with `skill_resource` | none |
 | `orchestration-e2e` | no `SKILL.md` — `evals/` only | 9 eval rows + an orchestrated eval config (`tengu eval orchestration-e2e`) | `tengu eval` |
@@ -34,7 +34,7 @@ An agent that runs no shell (`[risk]`, `[soe]` or a `[solana]` signer sandbox: `
 
 | Order (first match wins) | Directory |
 |---|---|
-| 1 Managed | `~/.tengu/skills/` — the home dir's, even when `TENGU_HOME` points elsewhere (`tengu skill install --tier managed`) |
+| 1 Managed | `<TENGU_HOME>/skills/` (`tengu skill install --tier managed`) |
 | 2 Workspace dotdir | `<workspace>/.tengu/skills/` |
 | 3 Project | `<workspace>/skills/` |
 | 4 Cwd | `<cwd>/skills/` when it differs from 3 — the repo's `skills/` when tengu runs from the repo root |
@@ -86,7 +86,7 @@ metrics:                    # optional: accuracy metrics (below)
 | `commands` | registry | slash commands the skill declares |
 | `metrics` | lifecycle | `tengu eval` / `skill evolve` / `skill doctor` |
 | `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
-| `learner_facing` | written by `skill seed` / `manage_skill create` | marker; the per-learner state module (`skills/<name>/state/<learner_id>.json`, `lifecycle/learner_state.rs`) is landed but not wired |
+| `learner_facing` | written by `skill seed` / `manage_skill create` | marker only: no per-learner state exists (G12, `docs/skill-research-2026-04-28.md`) |
 
 `requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading of frontmatter skills (2026-10-08, `registry.rs::SkillGate`, checked on every `reload`): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
 
@@ -99,7 +99,7 @@ A skill's `metrics:` block declares accuracy characteristics the harness measure
 | `shell_check` | Runs a command, matches exit code + stdout regex. For deterministic outcomes (tx confirmed, file exists). |
 | `llm_judge` | Loads a `rubric_file`, lets a judge LLM score the fixture transcript against narrative criteria. For qualitative quality. |
 | `tool_assertion` | Dispatches a workspace tool (e.g. `persistent_store`) and asserts on its output via `value_matches` / `value_equals` / `value_in`. |
-| `script` | Invokes `sh <path>` with fixture data in env vars; parses stdout JSON `{pass, score, notes?}`. Escape hatch for custom checks. |
+| `script` | Runs `sh <path>` through the shell port (the `[egress]` wrapper, 300 s timeout) in the workspace, with `PROMPT` / `TRANSCRIPT` / `EXPECTED_OUTCOME` set; parses stdout JSON `{pass, score, notes?}`; a failed run or non-zero exit fails the row. Escape hatch for custom checks. |
 | `dialog_replay` | Reflective eval: scores the current dialog slice from `from_message_index` by delegating to a sibling `llm_judge` / `tool_assertion` metric (`delegate_metric`). |
 | `description_trigger` | Judge LLM decides whether the planner would route to this skill for each query in `queries_file` (`{queries: [{query, should_trigger}]}`); `runs_per_query` (3), `holdout` (0.4). |
 

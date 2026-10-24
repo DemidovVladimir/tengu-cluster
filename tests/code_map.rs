@@ -2,8 +2,9 @@
 //!
 //! Builds the file-level knowledge graph from `src/` (every `.rs` file with
 //! its layer, size and `//!` summary; `uses` edges from `crate::` paths;
-//! `implements` edges from `impl Trait for`; env vars each file names) and
-//! checks that:
+//! `implements` edges from `impl Trait for`; env vars each file names —
+//! edges from non-test code only: no inline `#[cfg(test)]` block and no file
+//! built only in tests, `tests/support/test_files.rs`) and checks that:
 //!
 //! - the `GENERATED` block in `docs/code-map.html` equals it, and
 //! - every source file is listed in `docs/code-map.md`.
@@ -17,6 +18,10 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde_json::{json, Value};
+
+#[path = "support/test_files.rs"]
+mod support;
+use support::test_files;
 
 const BEGIN: &str = "/* GENERATED:BEGIN — tests/code_map.rs, do not edit by hand */";
 const END: &str = "/* GENERATED:END */";
@@ -123,6 +128,7 @@ fn build_graph() -> Value {
         .iter()
         .map(|p| (rel(p), fs::read_to_string(p).unwrap()))
         .collect();
+    let tests = test_files(&texts);
 
     let crate_path = Regex::new(r"crate(?:::[A-Za-z_][A-Za-z0-9_]*)+").unwrap();
     let trait_def = Regex::new(r"(?m)^\s*pub(?:\([a-z]+\))?\s+trait\s+([A-Za-z0-9_]+)").unwrap();
@@ -157,7 +163,11 @@ fn build_graph() -> Value {
             "lines": text.lines().count(),
             "doc": doc,
         }));
-        let code = non_test(text);
+        let code = if tests.contains(file) {
+            String::new()
+        } else {
+            non_test(text)
+        };
         for m in crate_path.find_iter(&code) {
             if let Some(target) = resolve(m.as_str(), &files) {
                 if &target != file {

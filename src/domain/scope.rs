@@ -7,9 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// Fine-grained scope for tool execution. Default-deny: every field empty
 /// means the tool can do nothing. Config must grant access explicitly.
-///
-/// This type is defined by Phase 0 and consumed by Phase A's `ToolCtx`.
-/// Subject to refinement during Phase A if additional fields are needed.
+/// Every tool reads it from its `ToolCtx`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ToolScope {
     /// Allowed filesystem roots. Every fs-touching tool must reject
@@ -51,6 +49,43 @@ pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
         .strip_prefix("*.")
         .and_then(|suffix| host.strip_suffix(suffix))
         .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
+}
+
+/// A host `"*"` never matches in a tool scope (2026-10-22): `localhost`,
+/// `*.localhost`, `*.local` and IP literals that are loopback, private
+/// (RFC 1918), CGNAT, link-local, unique-local or unspecified, IPv4-mapped
+/// ones included — the operator's Studio, A2A servers, Ollama, a LAN PC.
+/// Name such a host in `net_hosts` to reach it. A guard on the written host,
+/// not on DNS answers: a public name that resolves to a LAN address still
+/// matches `"*"`.
+pub(crate) fn is_local_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let lower = host.to_ascii_lowercase();
+    let name = lower.trim_end_matches('.');
+    if name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") {
+        return true;
+    }
+    let local_v4 = |ip: core::net::Ipv4Addr| {
+        let [a, b, ..] = ip.octets();
+        ip.is_loopback()
+            || ip.is_private()
+            || ip.is_link_local()
+            || ip.is_unspecified()
+            || a == 0
+            || (a == 100 && (64..128).contains(&b))
+    };
+    match name.parse::<core::net::IpAddr>() {
+        Ok(core::net::IpAddr::V4(ip)) => local_v4(ip),
+        Ok(core::net::IpAddr::V6(ip)) => {
+            let first = ip.segments()[0];
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+                || ip.to_ipv4_mapped().is_some_and(local_v4)
+        }
+        Err(_) => false,
+    }
 }
 
 /// `path` as the OS resolves it once the missing directories are created:
@@ -166,6 +201,12 @@ pub(crate) fn protected_write_in(rel: &Path, hardened: bool) -> Option<&'static 
     })
 }
 
+/// `s` as one single-quoted `sh` word (`'` written `'\''`): a path or an
+/// argument spliced into a command line, never expanded by the shell.
+pub(crate) fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// The word [`ToolScope::check_shell_bin`] gates for a shell command line
 /// (`run_command`, shell skills): its first command word.
 ///
@@ -269,15 +310,40 @@ impl ToolScope {
     }
 
     pub(crate) fn check_net_host(&self, host: &str) -> anyhow::Result<()> {
+        let local = is_local_host(host);
+        if self.net_hosts.iter().any(|pattern| match pattern.as_str() {
+            "*" => !local,
+            _ => host_matches(pattern, host),
+        }) {
+            return Ok(());
+        }
+        let hint = if local && self.net_hosts.iter().any(|p| p == "*") {
+            " (\"*\" never matches a loopback / LAN / link-local host: name it)"
+        } else {
+            ""
+        };
+        anyhow::bail!(
+            "host '{}' not in allowed net_hosts {:?}{hint}",
+            host,
+            self.net_hosts
+        )
+    }
+
+    /// Check that `host` is named by a `net_hosts` pattern other than `"*"`
+    /// (exact or `*.suffix`). A request that carries an env value (a `$VAR`
+    /// in `http_request`'s URL or a header, an auth env) goes only to such a
+    /// host, so `["*"]` next to an `env_reads` grant cannot ship the secret
+    /// to any host (2026-10-22).
+    pub(crate) fn check_named_host(&self, host: &str) -> anyhow::Result<()> {
         if self
             .net_hosts
             .iter()
-            .any(|pattern| host_matches(pattern, host))
+            .any(|pattern| pattern != "*" && host_matches(pattern, host))
         {
             return Ok(());
         }
         anyhow::bail!(
-            "host '{}' not in allowed net_hosts {:?}",
+            "host '{}' gets an env value only when net_hosts names it (\"*\" does not count): {:?}",
             host,
             self.net_hosts
         )
@@ -285,9 +351,10 @@ impl ToolScope {
 
     /// Check whether `var` is allowed by this scope's `env_reads` list.
     ///
-    /// `"*"` is an allow-any wildcard — used by `permissive_scope` (the
-    /// fallback for tools with no configured scope) to keep env reads
-    /// ungated. Mirrors the `check_net_host` / `check_shell_bin` wildcard.
+    /// `"*"` is an allow-any wildcard, honoured when a configured scope
+    /// asks for it (`permissive_scope`, the fallback for tools with no
+    /// configured scope, grants no env var since 2026-10-22). Mirrors the
+    /// `check_net_host` / `check_shell_bin` wildcard.
     pub(crate) fn check_env_read(&self, var: &str) -> anyhow::Result<()> {
         if self.env_reads.iter().any(|v| v == "*" || v == var) {
             return Ok(());
@@ -627,6 +694,72 @@ mod tests {
         assert!(scope.check_shell_bin("any").is_err());
         assert!(scope.check_wallet("any").is_err());
         assert!(scope.is_deny_all());
+    }
+
+    #[test]
+    fn wildcard_skips_local_hosts() {
+        let wild = ToolScope {
+            net_hosts: vec!["*".into()],
+            ..Default::default()
+        };
+        for host in [
+            "localhost",
+            "LOCALHOST.",
+            "studio.localhost",
+            "gaming-pc.local",
+            "127.0.0.1",
+            "127.9.9.9",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.20",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "[::1]",
+            "::",
+            "fe80::1",
+            "fd00::1",
+            "[::ffff:127.0.0.1]",
+            "::ffff:192.168.0.1",
+        ] {
+            let err = wild.check_net_host(host).unwrap_err().to_string();
+            assert!(err.contains("name it"), "{host}: {err}");
+        }
+        for host in [
+            "api.example.com",
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.128.0.1",
+            "2606:4700::1111",
+            "local.example.com",
+        ] {
+            assert!(wild.check_net_host(host).is_ok(), "{host}");
+        }
+        let named = ToolScope {
+            net_hosts: vec!["*".into(), "127.0.0.1".into(), "*.local".into()],
+            ..Default::default()
+        };
+        assert!(named.check_net_host("127.0.0.1").is_ok());
+        assert!(named.check_net_host("gaming-pc.local").is_ok());
+        assert!(named.check_net_host("10.0.0.1").is_err());
+    }
+
+    #[test]
+    fn named_host_ignores_the_wildcard() {
+        let scope = ToolScope {
+            net_hosts: vec!["*".into(), "rpc.example.com".into(), "*.helius.xyz".into()],
+            ..Default::default()
+        };
+        assert!(scope.check_named_host("rpc.example.com").is_ok());
+        assert!(scope.check_named_host("mainnet.helius.xyz").is_ok());
+        assert!(scope.check_named_host("evil.example").is_err());
+        assert!(scope.check_net_host("evil.example").is_ok());
+        let wild = ToolScope {
+            net_hosts: vec!["*".into()],
+            ..Default::default()
+        };
+        assert!(wild.check_named_host("rpc.example.com").is_err());
     }
 
     /// Any one field set makes a scope something other than a deny.

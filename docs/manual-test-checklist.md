@@ -5,7 +5,7 @@ Run this at the end of every implementation phase. Both the TUI and Telegram cha
 ## Pre-flight
 
 - [ ] `cargo build --release` completes with no errors or warnings
-- [ ] `cargo test --bin tengu` passes (unit tests — the crate has no `[lib]`)
+- [ ] `cargo test --lib` passes (unit tests — all in the `tengu` lib; the bin has none)
 - [ ] `cargo test --test scope_lint --test run_agent_ipc` passes (structural scope lint + IPC boundary)
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] Network: `make tor` is up (Arti + lyrebird-rs on 127.0.0.1:9050 — `[egress] network = "tor"` is the default) OR the config sets `[egress] network = "open"`; `cargo run -- doctor [--sandbox <name>]` prints `network:` + proxy reachability (`--tor` = live exit check)
@@ -40,7 +40,7 @@ Launch with `cargo run -- telegram` (`TELEGRAM_BOT_TOKEN` env var required; `[te
 
 ## Telegram smoke (storage-test)
 
-Launch with `cargo run --features claude_code -- telegram --sandbox storage-test`. The sandbox flag must take effect for the Telegram channel too.
+Launch with `cargo run -- telegram --sandbox storage-test`. The sandbox flag must take effect for the Telegram channel too.
 
 - [ ] Bot starts against the storage-test roster without panic
 - [ ] A short message from the phone gets a coherent reply grounded in the storage-test sandbox context
@@ -49,7 +49,7 @@ Launch with `cargo run --features claude_code -- telegram --sandbox storage-test
 ## Debug probes
 
 - [ ] `TENGU_PLANNER_REGISTRY.md` at the repo root is regenerated on a planner turn and lists agents (`[agents.*]` with a `description`) + skills + core/MCP tools
-- [ ] `TENGU_PLAN.md` at the repo root holds the last accepted plan (debug mirror — children receive the plan over IPC as `plan_state`)
+- [ ] A step's system prompt holds the plan it belongs to under `## Current execution plan` (IPC `plan_state`; no plan file)
 - [ ] (with `--features postgres_memory`) step summaries landed: `psql "$TENGU_MEMORY_DATABASE_URL" -c "select session_id, agent, kind, left(content, 80) from memory_events order by created_at desc limit 5"` (`kind = step_output`)
 
 ## xmarket paper desk smoke (`sandboxes/xmarket`, ~10 min, no LLM)

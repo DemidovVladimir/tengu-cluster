@@ -26,8 +26,8 @@ use anyhow::{anyhow, Result};
 
 use crate::config::sections::SandboxSections;
 use crate::config::sources::{SourceEntry, SourceKind, SOURCES_DB};
-use crate::domain::marketdata::fmt_time;
 use crate::domain::source::SourceStamp;
+use crate::domain::time::fmt_time;
 use crate::ports::source_store::{switched_off, SourceStore};
 
 /// `[sources]`'s state dir, where `sources.db` lives; refused without it.

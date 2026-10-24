@@ -56,9 +56,29 @@ pub fn truncate_with_suffix(s: &str, max: usize, suffix: &str) -> String {
     }
 }
 
+/// `s` cut to at most `max` chars, the last one `…` when cut (counted in
+/// chars, not bytes: a display label).
+pub fn clip_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_chars_counts_chars_and_marks_a_cut() {
+        assert_eq!(clip_chars("abc", 3), "abc");
+        assert_eq!(clip_chars("abcd", 3), "ab…");
+        assert_eq!(clip_chars("éééé", 3), "éé…");
+        assert_eq!(clip_chars("abc", 0), "…");
+        assert_eq!(truncate_with_suffix("éé", 3, "…"), "é…");
+    }
 
     #[test]
     fn tool_result_budget_is_an_eighth_of_the_window() {

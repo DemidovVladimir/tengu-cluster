@@ -46,8 +46,11 @@ prior-round tool results to first-line-only mid-loop).
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-A user message hits Layers 1→2→3 (potentially →4) on the planner-side
-turn, then Layers 5→3 (→4) on each subagent step. Layers 0, 6, 7 are
+An in-process chat turn hits Layers 1→2→3 (potentially →4). On an
+orchestrated surface the planner builds its own prompt (`RegistryPlanner`) and
+`PlannerLlm::call` sends it through Layer 3's `collect_engine_response`
+with no tools (no Layer 1/2 chat flow, no →4); then Layers 5→3 (→4) run on
+each subagent step. Layers 0, 6, 7 are
 infrastructure consumed by the others. Layer 6 is Open Brain live memory
 (Postgres `agentic_memory`) plus Karpathy LLM Wiki compiled state.
 **Layer 8 is orthogonal** — it
@@ -65,7 +68,7 @@ mutates a prompt.
 |---|---|---|
 | `estimate_tokens_approx(text)` | `text.len() / 4` heuristic (`CHARS_PER_TOKEN = 4`) | Everywhere a token count is needed |
 | `estimate_tokens_approx_min1(text)` | Same, but floors to 1 | Per-message token math |
-| `truncate_at_boundary(s, max_chars)` | UTF-8-safe slice point | `truncate_tool_result`, `fit_tool_result`, `mcp_bridge::truncate_mcp_result` |
+| `truncate_at_boundary(s, max_chars)` | UTF-8-safe slice point | `truncate_tool_result`, `fit_tool_result` (the bridge reaches both through `tool_result_content`) |
 | `truncate_with_suffix(s, max, suffix)` | Truncate + append marker only when actually clipped | Display clipping (`inbound/activity.rs`, `inbound/channel.rs`) — not LLM context |
 | `tool_result_char_budget(window)` | `window / 8 × 4` chars — one tool result's share of a local model's window | `LocalEngine::tool_result_char_cap` (Layer 3 #14) |
 
@@ -177,30 +180,42 @@ Two sides, different knobs (`[memory]`, `MemoryConfig`, `config/mod.rs:1042`):
 
 | Side | field | default | what |
 |---|---|---|---|
-| chat (`service.rs:352`) | `max_recall_entries` | 5 | top-K hits of the in-process `MemoryManager` (disk bincode store), sent as one System message `[Relevant memories]\n- …` |
-| chat | `max_recall_tokens` | 600 | **not enforced** — `ChatRuntimeService.max_recall_tokens` is reserved (`#[allow(dead_code)]`) |
+| chat (`service.rs`) | `max_recall_entries` | 5 | top-K hits of the in-process `MemoryManager` (disk bincode store) as `[Relevant memories]\n- …`, fenced (#10) at the head of the current user message — never a System message, never stored in history |
+| chat | `max_recall_tokens` | 600 | caps that block (`truncate_to_token_budget`, ~4 chars / token) before fencing; 0 = no recall block. Webhook / eval turns read the same `[memory]` values (were hard-coded 10 / 2000) |
 | planner | `session_recent_n` | 10 | recent user messages of this session (in-memory ring, lost on restart; no vector search) |
 | planner | `cross_session_msg_top_k` (#9) | 0 | semantic match across sessions; 0 = disabled |
 | planner | `within_session_output_top_k` | 0 | this session's step outputs on `plan()`; 0 = disabled |
 | planner | `cross_plan_top_k` | 5 | replan recall over prior step outputs |
 
 Planner registry context comes from root `TENGU_PLANNER_REGISTRY.md`,
-regenerated from the `[agents.*]` blocks that carry a `description`, skills,
-and core + MCP tools before planner calls. Builds with
+regenerated from the `[agents.*]` blocks that carry a `description` (each
+with its own tools and skills), then skill and core + MCP tool names only,
+before planner calls. Builds with
 `postgres_memory` use Postgres `agentic_memory` for planner user-message
 persistence, cross-session message recall, within-session step-output
-recall, and replan cross-plan recall. Without `postgres_memory`, these
-durable planner-memory lanes are empty.
+recall, and replan cross-plan recall — each lane reads only rows of its own
+sandbox (`AgenticRecallStore { sandbox }`, `Config::sandbox_owner`). Without
+`postgres_memory`, these durable planner-memory lanes are empty.
 
-**#10 `<memory-context>` fencing** (`application/memory/fencing.rs::build_memory_context_block`):
-wraps text in `<memory-context>…</memory-context>` with a system note. Its
-only caller is `injector::for_turn` on `ChatOrchestratorPortImpl::run_orchestrator_turn`,
-which no live path calls — the planner uses `run_orchestrator_turn_with_system_metered`
-(no injection). The chat recall block above is **not** fenced.
+**#10 Untrusted fence** (`domain/untrusted.rs::fence`, 2026-10-23): one shape
+for every text tengu did not write — `<untrusted origin="…">` newline, text,
+newline, `</untrusted>`; `clean` drops control characters but `\n` / `\t`
+and strips every tengu fence tag to a fixpoint, so fenced text cannot close
+or forge one. A label, not enforcement. Fenced: the chat recall block (#8,
+`application/memory/fencing.rs`: a system note, then origin `memory`), the
+planner's recall rows (`memory:<kind>`), a replan's error
+(`step-error:<id>`), upstream step outputs (`step:<id>`; each cut at the
+receiver's tool-result cap, `AgentConfig::tool_result_cap`, footer naming
+the step), webhook bodies
+(`webhook:<endpoint>`), loop escalations (`loop-args` / `loop-state`), and in
+every LLM sink (`tool_result_content`, the loops and `tengu mcp-bridge`) the
+results of `http_request`, `a2a`, `[[mcp_servers]]` tools, `agentic_memory`,
+`memory_search` (#14, #19). SOE source text keeps its inline `<source-text>` fence
+on the same tag stripper.
 
-### 11. Grounding nudge + `suppress_grounding_nudge`
+### 11. Grounding nudge
 
-`application/chat/service.rs:255` (`needs_fresh_history_grounding`) and `:349`.
+`application/chat/service.rs:250` (`needs_fresh_history_grounding`) and `:395`.
 When the user message contains *"last", "latest", "most recent", "newest",
 "previous", "recently", "before that"* (whole words — "Elasticsearch" no
 longer counts), the chat layer prepends a system message:
@@ -214,15 +229,16 @@ When triggered, **memory recall is also skipped** for that turn —
 recalled summaries from older turns would compete with the freshness
 instruction.
 
-The planner-side LLM call sets `suppress_grounding_nudge = true` so the
-nudge doesn't compete with the SKILL.md "emit JSON only" instruction.
-This is set inside `bootstrap/orchestrator.rs::run_turn_inner` (`:253`,
-`suppress_grounding_nudge: system_override.is_some()`), reached through
-`run_turn_with_system` / `run_turn_with_system_metered`.
+The nudge lives in the chat layer only. The planner never goes through it:
+`PlannerLlm::call` (`application/orchestrator/planner.rs`) sends the SKILL.md
+system prompt + one user message straight to the engine (no tools, no
+memory, no nudge), so nothing competes with the "emit JSON only"
+instruction. (`suppress_grounding_nudge` and the `run_turn_with_system`
+path that set it were deleted 2026-10-22.)
 
 ### 12. Skill body assembly (+ #13)
 
-`application/skills/registry.rs::build_system_prompt_with_tools` (`:1253-1360`).
+`application/skills/registry.rs::build_system_prompt` (`:1242-1320`; no tool list since 2026-10-23 — the engine gets the tool definitions).
 Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1152`):
 
 | knob | default | what |
@@ -230,7 +246,7 @@ Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1152
 | `max_file_tokens` | 2 000 | `identity.instructions` and each workspace identity file (`IDENTITY.md`, `PROFILE.md`, `CONTEXT.md`) |
 | `max_skill_context_tokens` | 16 000 | each skill context fragment |
 | `max_total_tokens` | 32 000 | whole system prompt: an identity file past it ends the file list; a skill fragment past it is dropped with a warn (`Skill context DROPPED`); the tool listing gets 10 % slack |
-| (#13 each cut) | `truncate_to_token_budget` (`prompt_budget.rs:41`) | appends `\n\n[truncated]` |
+| (#13 each cut) | `truncate_to_token_budget` (`prompt_budget.rs:41`) | cuts at `tokens × 4` bytes on a char boundary, appends `\n\n[truncated]` |
 
 No dedup or per-skill-count cap — selection happens upstream.
 
@@ -257,6 +273,11 @@ result, footer included, is cut to fit. `run-agent` applies the
 same rules for every engine (`tool_loop::tool_result_content` + `compact_tool_result`
 of older rounds — before 2026-10-01 only for local agents; an OpenRouter step
 resent a 2 MB result on every turn).
+
+A tool that returns outside text (`domain::untrusted::tool_origin`: `http_request`,
+`a2a`, `[[mcp_servers]]` tools, `agentic_memory`, `memory_search`) goes in after
+the cut inside one `untrusted` fence (#10); `compact_tool_result` keeps the fence
+around the compacted text.
 
 ### 15. `compact_tool_result` mid-loop (`application/chat/tool_loop.rs:458`, caller `compact_older_tool_results` `:389`, called at `:226`)  — *the closest to /compact*
 
@@ -305,14 +326,15 @@ own flow budget (#5).
 
 `adapters/outbound/engines/{claude_code,codex}.rs` (set it, through `outbound/bridge_env.rs`) · `adapters/inbound/mcp_bridge.rs` (cuts).
 
-### 19. `max_mcp_result_chars` (`config/mod.rs:641` → `claude_code.rs:835` / `codex.rs:624` → `bridge_env.rs:112` → `mcp_bridge.rs:252`, cut at `:639`)
+### 19. `max_mcp_result_chars` (`config/mod.rs:641` → `claude_code.rs:835` / `codex.rs:624` → `bridge_env.rs:112` → `mcp_bridge.rs:252`, cut by `tool_result_content`)
 
 Caps tool results returned to the Claude Code and Codex CLIs through the MCP
 bridge. Default **50 000 chars / ~12.5K tokens**. The knob is
 `[agents.<name>.limits] max_mcp_result_chars`; the engine writes it into the
 bridge's env as `TENGU_BRIDGE_MAX_RESULT_CHARS` (`bridge_env::bridge_env`: Claude Code's `--mcp-config`, Codex's `-c mcp_servers.tengu-tools.env.*`), and
-`tengu mcp-bridge` cuts each result there (`truncate_mcp_result`, same
-`[truncated — showing X of Y chars]` footer; 50 000 when the env is unset).
+`tengu mcp-bridge` cuts each result there (`tool_loop::tool_result_content`, the
+loops' sink: same `[truncated — showing X of Y chars]` footer, outside text
+fenced as in #14, errors too; 50 000 when the env is unset).
 
 This exists because the **Claude Code and Codex CLI engines have no in-loop
 compaction at all**. Without this cap, bridge-routed tool results would
@@ -332,9 +354,10 @@ the picture.
 The child `tengu run-agent` process starts with **empty `messages`** —
 it never inherits the parent's chat history. The IPC payload
 (`AgentIpcInput`) carries `goal`, `agent_name`, `max_turns`, `session_id`,
-`step_id`, `sandbox_config`, `plan_state` (plus `compose` for composed steps);
-`model` / `tools` / `skills` travel empty — the child re-loads the same sandbox
-config and takes them from its own `[agents.<name>]` block. By design — keeps
+`step_id`, `sandbox_config`, `plan_state` (the plan the step belongs to, one
+bullet per step, no JSON copy; plus `compose` for composed steps); model,
+tools and skills never travel — the child re-loads the same sandbox config
+and takes them from its own `[agents.<name>]` block. By design — keeps
 subagents focused and prevents accidental context leakage between
 steps.
 
@@ -354,10 +377,10 @@ with embeddings when available and text-only fallback otherwise
 | **B — Bridge** | Claude Code and Codex subagents — the step's bridge (`mcp_bridge.rs::StepSummary`) writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary (`:619`) |
 | **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` (`:648`) |
 
-**Read side** — cross-plan recall: `RagPlanner::replan` (legacy planner type
+**Read side** — cross-plan recall: `RegistryPlanner::replan` (legacy planner type
 name) surfaces past step summaries to the planner LLM. With
 `postgres_memory`, it queries Postgres `agentic_memory` step outputs
-(`RecallStore::recall_step_outputs`) via pgvector first and FTS fallback.
+(`RecallStore::recall_step_outputs`, this sandbox only) via pgvector first and FTS fallback.
 Without that feature, planner memory lanes are empty. Capped by
 `cross_plan_top_k` (default 5; `0` = off). `plan()` reads this session's
 step outputs too when `within_session_output_top_k > 0`.
@@ -396,8 +419,8 @@ and FTS fallback. No TTL / cleanup pass.
 ### 25. Karpathy LLM Wiki + planner files
 
 Root `TENGU_PLANNER_REGISTRY.md` is regenerated from the `[agents.*]` blocks
-with a `description`, skill frontmatter, and core + MCP tool definitions before
-planner calls. It is loaded
+with a `description`, then one line of skill names and one of core + MCP tool
+names (no descriptions, no file paths: 2026-10-22) before planner calls. It is loaded
 directly into the planner prompt, so planner routing no longer depends on
 old registry search or registry fingerprints. Stable promoted knowledge
 is compiled into `.tengu/agentic-memory/wiki/*.md`.
@@ -448,8 +471,11 @@ OpenRouter response (was previously discarded). Falls back to
 row per planner-prompt section — `plan`: `system`, `roster`, `cross_session`,
 `history`, `session_recall`, `user_message`; `replan`: `system`, `roster`,
 `cross_session`, `history`, `recall`, `failure`, `user_message`
-(`orchestrator/planner.rs:570`, `:693`). Emitted by `emit_planner_metrics`
-(`:730`) from the same strings the planner just composed for the LLM call.
+(`orchestrator/planner.rs` `RegistryPlanner::plan` / `replan`). Emitted by
+`emit_planner_metrics` from the same strings the planner just composed for
+the LLM call, with the usage `PlannerLlm::call` returns (`TurnTelemetry`) —
+the same on every surface (webhook and eval planner turns reported zero
+tokens before 2026-10-22).
 
 **Approximate by design.** The layer measures only what the planner
 built — it does not see engine-side framing (Anthropic `<thinking>`
@@ -475,8 +501,8 @@ load-bearing surface.
 
 Subagent records cross the subprocess boundary in
 `AgentIpcOutput::{Ok,Failed}.metrics: Vec<MetricsRecord>` (new field
-added 2026-04-28). `run_agent_subprocess` records one per
-`run_single_engine_turn` and packs them into the IPC payload.
+added 2026-04-28). `run_agent_subprocess` records one per engine turn
+(`StepHooks::on_turn` in chat's loop) and packs them into the IPC payload.
 `SubprocessRunner::run_step` re-emits each via `metrics::forward()`
 on the parent's global sink (bus only — the child's own `record()` line
 already reached the parent log through forwarded stderr) — so the TUI sees
@@ -515,12 +541,12 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 5 | 1 | `max_tokens_per_flow` hard stop | application/chat/service.rs:337 | 100 000 |
 | 6 | 2 | `compute_total_input_budget` | prompt_budget.rs:82 | derived |
 | 7 | 2 | `assemble_recent_history` | prompt_budget.rs:8 | 20 msgs |
-| 8 | 2 | memory recall block (chat) | application/chat/service.rs:352 | top-5 (`max_recall_tokens` not enforced) |
+| 8 | 2 | memory recall block (chat) | application/chat/service.rs | top-5, ≤ `max_recall_tokens` (600), in the user turn |
 | 9 | 2 | `cross_session_msg_top_k` | orchestrator/planner.rs:332 (planner side) | 0 (off) |
-| 10 | 2 | `<memory-context>` fencing | application/memory/fencing.rs | no live caller |
-| 11 | 2 | grounding nudge / suppress | application/chat/service.rs:255 · :349 | trigger words (whole) |
+| 10 | 2 | untrusted fence | domain/untrusted.rs · application/memory/fencing.rs | wraps #8, planner recall, step inputs, webhook bodies, escalations, outside tool text; fixpoint cleaner |
+| 11 | 2 | grounding nudge (chat only) | application/chat/service.rs:250 · :395 | trigger words (whole) |
 | 12 | 2 | identity / skill / prompt caps | application/skills/registry.rs:1253 | 2K / 16K / 32K |
-| 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |
+| 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | byte cap (char boundary) |
 | 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | application/chat/tool_loop.rs:406 | 300 000 chars (local: window / 8 × 4) |
 | 15 | 3 | `compact_tool_result` | application/chat/tool_loop.rs:458 (caller :226) | 200 chars |
 | 16 | 3 | `[OUTPUT_TRUNCATED]` continue | application/chat/tool_loop.rs:135 | sentinel |

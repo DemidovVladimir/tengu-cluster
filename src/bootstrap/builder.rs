@@ -4,7 +4,7 @@
 //!
 //! | Helper | Builds |
 //! |---|---|
-//! | [`facts`] | every catalog tool `config::builder::palette::offered` keeps (name, description, JSON schema, opt-in, needs memory) · every skill found from the working directory (`skills/`, `~/.tengu/skills/`) · whether this build knows `[keys]` |
+//! | [`facts`] | every catalog tool `config::builder::palette::offered` keeps (name, description, JSON schema, opt-in, needs memory) · every skill found from the working directory (`skills/`, `<TENGU_HOME>/skills/`) · whether this build knows `[keys]` |
 //! | [`drafts`] | `FsDrafts` over `./sandboxes` (name rule + containment on every op), busy = a fresh `tengu run` heartbeat (`run-<sandbox>.json` in the sandbox's runtime state dir) |
 //! | [`builder`] | the `Builder` of one sandbox (a bad name: 400, nothing read) |
 

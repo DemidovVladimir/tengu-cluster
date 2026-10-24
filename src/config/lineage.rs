@@ -8,7 +8,7 @@
 //! | dirs | `families/ variants/ experiments/ episodes/ incidents/ capabilities/ generations/ evidence/ rankings/` — each optional; another dir is refused |
 //! | files | `<id>.toml` per record, the file stem = its `id`; `locks.toml` at the root; `*.md` and dotfiles skipped; another file refused |
 //! | parse | every table `deny_unknown_fields`; each error names the file |
-//! | digest | `pins::toml_digest` of each record file (what `locks.toml` pins) |
+//! | digest | `canonical::toml_digest` of each record file (what `locks.toml` pins) |
 //!
 //! ```toml
 //! [generation]               # in sandboxes/<name>/config.toml
@@ -38,8 +38,9 @@ use serde::{Deserialize, Serialize};
 use super::paths;
 use super::sections::DEFAULT_SANDBOX;
 use super::Config;
+use crate::domain::canonical::toml_digest;
 use crate::domain::lineage::generation::{GenerationScope, GenerationStatus};
-use crate::domain::lineage::pins::{config_pin, spec_pin, toml_digest};
+use crate::domain::lineage::pins::{config_pin, spec_pin};
 use crate::domain::lineage::registry::label;
 use crate::domain::lineage::value::{PinTarget, RecordKind};
 use crate::domain::lineage::{Registry, Severity};

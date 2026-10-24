@@ -477,34 +477,6 @@ impl StockSplit {
     }
 }
 
-/// Epoch ms, RFC 3339 (`2026-10-02T20:00:00-04:00`) or a UTC date
-/// (`2026-10-02` = its midnight UTC).
-pub fn parse_time(s: &str) -> Result<i64, String> {
-    let s = s.trim();
-    if let Ok(ms) = s.parse::<i64>() {
-        return Ok(ms);
-    }
-    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(t.timestamp_millis());
-    }
-    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        if let Some(t) = d.and_hms_opt(0, 0, 0) {
-            return Ok(t.and_utc().timestamp_millis());
-        }
-    }
-    Err(format!(
-        "`{s}` is not epoch ms, RFC 3339 (2026-10-02T20:00:00-04:00) or a date (2026-10-02)"
-    ))
-}
-
-/// RFC 3339 in UTC with seconds (`2026-10-03T00:00:00Z`) — how reports show
-/// instants.
-pub fn fmt_time(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-        .unwrap_or_else(|| ms.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,19 +808,5 @@ mod tests {
         let s = CtxSeries::new("x", vec![c]);
         assert!(s.last_at(59_999).is_none());
         assert_eq!(s.last_at(60_000).map(|p| p.t_ms), Some(60_000));
-    }
-
-    #[test]
-    fn times_parse_and_format() {
-        assert_eq!(parse_time("1759449600000").unwrap(), 1_759_449_600_000);
-        assert_eq!(
-            parse_time("2026-10-02T20:00:00-04:00").unwrap(),
-            parse_time("2026-10-03").unwrap()
-        );
-        assert_eq!(
-            fmt_time(parse_time("2026-10-03").unwrap()),
-            "2026-10-03T00:00:00Z"
-        );
-        assert!(parse_time("friday").is_err());
     }
 }

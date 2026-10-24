@@ -13,16 +13,6 @@
 # Then: tengu secret set OPENROUTER_API_KEY sk-or-...
 # Or set TENGU_MASTER_PASSWORD env var to skip interactive prompts.
 
-# Runtime profile: "auto" | "cloud" | "desktop" | "minimal"
-runtime_profile = "auto"
-
-[hub]
-bind = "127.0.0.1"
-port = 7070
-auth_mode = "token"
-
-[hub.reload]
-mode = "hybrid"
 
 # --- Local model (Unsloth / Ollama / llama.cpp / vLLM) ---
 # engine = "local" talks to any OpenAI-compatible server on this machine.
@@ -49,8 +39,12 @@ mode = "hybrid"
 default = true
 engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
+# Explicit: an empty `tools` = every default tool, `write_file`, `run_command` and
+# the Privy signing tools included. Add one on purpose — a reader of outside text
+# (`http_request`) that also writes or runs a shell warns at load (docs/tools.md
+# § Untrusted input).
+tools = ["read_file", "list_directory", "http_request", "memory_search", "memory_ingest", "view_skill", "skill_resource"]
 # workspace = "~/projects/my-app"
-default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
 # workspace_tools = ["shared_cache", "skill_distill"]  # opt-in tools: only names in src/domain/tools.rs::WORKSPACE_TOOLS (memory, skill lifecycle — and the families below)
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide
@@ -93,15 +87,16 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # context_window = 200000           # model's real window (default 1_000_000)
 # max_output_tokens_per_turn = 4096  # optional; unset omits max_tokens (model/provider default)
 # request_timeout_secs = 600         # total budget for one non-streaming HTTP call (default 600)
-# max_cost_per_flow = 5.0           # USD cost limit (optional)
-# warn_at_cost = 4.0                # USD cost warning threshold (must be <= max_cost_per_flow)
+
 # max_tool_rounds = 70              # per chat turn / plan step (tool calls on claude_code)
 # step_timeout_secs = 600           # wall clock of one plan step as a `tengu run-agent` subprocess
 
 # --- Tool scopes (default-deny per field; docs/configuration.md § Scopes) ---
 # [default_scopes.<tool>] is the fallback for every agent; an agent's own
 # [agents.<name>.scopes.<tool>] replaces it wholesale. A tool with neither runs
-# on a permissive fallback (no shell in a [risk] / signer sandbox).
+# on the fallback: the workspace, any host, any binary, no env var (a `$VAR`,
+# a Privy / RPC / A2A credential needs env_reads here); in a [risk] / [soe] /
+# signer sandbox it gets nothing (`tengu doctor` lists such tools).
 # [default_scopes.http_request]
 # net_hosts = ["api.example.com"]   # exact, "*.suffix" or "*"
 # env_reads = ["EXAMPLE_API_KEY"]   # env vars the tool may read ($VAR headers)
@@ -119,7 +114,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # embedding_model = "text-embedding-3-small"  # must be 1536-dim (Postgres schema hardcodes vector(1536))
 # max_recall_entries = 5
 # max_recall_tokens = 600
-# store_path = "~/.tengu/memory/"
+# store_path = "~/tengu-memory/"             # agents without a workspace; unset = <TENGU_HOME>/memory/
 # session_recent_n = 10                       # last-N messages reloaded each orchestrator turn for dialogue coherence
 # cross_plan_top_k = 5                        # fuzzy recall breadth during replan (recall over agentic_memory step outputs)
 # cross_session_msg_top_k = 0                 # prior user messages recalled across sessions (0 = off)
@@ -144,7 +139,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # allowed_users = ["123456789"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 # --- Webhooks (inbound HTTP) ---
-# Run with: tengu webhooks --sandbox <name>   (build with --features webhooks)
+# Run with: tengu webhooks --sandbox <name>
 # Listens on [webhooks].port (default 7080). See docs/webhooks-2026-05-11.md.
 
 # [webhooks]
@@ -430,6 +425,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # exec_reserve = 0                          # weight reads leave for order calls
 # [rate_limits.geckoterminal]               # GeckoTerminal pool OHLCV (`tengu history backfill --source gecko`): weight 1 per request
 # per_minute = 25                           # the free API allows ~30 calls / min
+# [rate_limits.solana_rpc]                  # Solana JSON-RPC (the Solana tools): weight 1 per request, ≤ 10 s wait
+# per_minute = 600                          # set it to your RPC plan (Helius free: 10 req / s)
 #
 # Hyperliquid tools (opt-in: list them in the agent's `tools`; args, keys,
 # weights: docs/typed-observations-2026-09-24.md § Hyperliquid tools). Each
@@ -448,7 +445,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- tengu run (docs/runtime-2026-09-30.md) ---
 # `tengu run --sandbox <name>`: one long-running process per sandbox (lease
 # runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
-# once + the [webhooks] routes (build with --features webhooks). All optional.
+# once + the [webhooks] routes. All optional.
 # [runtime]
 # shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events + planner turns (webhook, escalation) get this long, then abort
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
@@ -725,7 +722,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [orchestrator]
 # agent = "main"                        # Name of the agent (in `[agents.*]`) that runs the planner LLM call
-# engine = "rag"                        # optional, defaults to "rag" — the only supported value (historical name; file-registry planner). Any other value fails the config load.
+
 # max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
 # max_replans = 2                       # Tier 2: how many times the planner is re-invoked to replan before bailing out
 # route_explicit_agents = false         # true = `@role:` messages also go through the planner
@@ -795,7 +792,6 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # --- Claude Code Backend ---
 # Run agents powered by your Claude Code subscription instead of API tokens.
-# Requires: cargo build --features claude_code
 # Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
 # Claude loads your CLAUDE.md and skills from the workspace. MCP: only the tengu
 # bridge (--strict-mcp-config) — Tengu-native tools (http_request, crypto,
@@ -814,7 +810,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | research | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md; "research" = Read/Glob/Grep + WebSearch, run at Anthropic on the subscription, never WebFetch — pages go through http_request)
+# builtin_tools_profile = "editor_shell"  # none (default) | read_only | research | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; every profile runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md; "research" = WebSearch only, run at Anthropic on the subscription, no Read/Glob/Grep, never WebFetch — files and pages go through bridged tools)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"
@@ -824,9 +820,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_tokens_per_flow = 5_000_000
 
 # --- Codex Backend (OpenAI, ChatGPT subscription) ---
-# Run agents on your ChatGPT subscription through the OpenAI Codex CLI
-# (feature `codex`, on by default). Requires: `npm i -g @openai/codex` and
-# `codex login` (ChatGPT). Tengu tools reach Codex through `tengu mcp-bridge`;
+# Run agents on your ChatGPT subscription through the OpenAI Codex CLI.
+# Requires: `npm i -g @openai/codex` and `codex login` (ChatGPT). Tengu tools
+# reach Codex through `tengu mcp-bridge`;
 # your ~/.codex/config.toml (MCP servers, profiles, hooks, model, effort) is
 # not loaded, and Codex's apps, plugins and browser / computer use are off;
 # its web search is off unless `web_search` below says otherwise.

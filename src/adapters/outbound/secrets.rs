@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
+use crate::adapters::outbound::fs_atomic::{write_atomic, Mode};
 use crate::domain::message::ToolCall;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
@@ -147,9 +148,7 @@ pub(crate) fn init_secrets_file(path: &Path) -> Result<()> {
     let password = prompt_new_password()?;
     let encrypted = encrypt_vault(b"", &password)?;
 
-    std::fs::write(path, &encrypted)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
-    enforce_permissions(path)?;
+    write_atomic(path, &encrypted, Mode::OwnerOnly)?;
 
     println!("  created: {}", path.display());
     println!("  permissions: 600");
@@ -178,8 +177,7 @@ pub(crate) fn set_secret(path: &Path, key: &str, value: &str) -> Result<()> {
 
     let plaintext = serialize_lines(&lines);
     let encrypted = encrypt_vault(plaintext.as_bytes(), &password)?;
-    write_atomic(path, &encrypted)?;
-    enforce_permissions(path)?;
+    write_atomic(path, &encrypted, Mode::OwnerOnly)?;
 
     println!("  set: {}", key);
     Ok(())
@@ -197,8 +195,7 @@ pub(crate) fn remove_secret(path: &Path, key: &str) -> Result<()> {
 
     let plaintext = serialize_lines(&filtered);
     let encrypted = encrypt_vault(plaintext.as_bytes(), &password)?;
-    write_atomic(path, &encrypted)?;
-    enforce_permissions(path)?;
+    write_atomic(path, &encrypted, Mode::OwnerOnly)?;
 
     println!("  removed: {}", key);
     Ok(())
@@ -389,23 +386,9 @@ pub(crate) fn change_password(path: &Path) -> Result<()> {
 
     let plaintext = serialize_lines(&lines);
     let encrypted = encrypt_vault(plaintext.as_bytes(), &new_password)?;
-    write_atomic(path, &encrypted)?;
-    enforce_permissions(path)?;
+    write_atomic(path, &encrypted, Mode::OwnerOnly)?;
 
     println!("  Master password changed successfully.");
-    Ok(())
-}
-
-/// Enforce `chmod 600` on Unix.
-pub(crate) fn enforce_permissions(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, perms)
-            .with_context(|| format!("Failed to chmod 600 {}", path.display()))?;
-    }
-    let _ = path; // suppress unused warning on non-unix
     Ok(())
 }
 
@@ -461,15 +444,6 @@ fn serialize_lines(lines: &[String]) -> String {
         content.push('\n');
     }
     content
-}
-
-fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, data)
-        .with_context(|| format!("Failed to write temp file {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("Failed to rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
 }
 
 /// Decorator that redacts registered secret values from all tool output.

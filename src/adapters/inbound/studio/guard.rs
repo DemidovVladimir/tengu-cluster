@@ -50,7 +50,7 @@ impl Token {
         let mut b = [0u8; 32];
         getrandom::getrandom(&mut b)
             .map_err(|e| anyhow::anyhow!("studio token: no randomness: {e}"))?;
-        Ok(Self(b.iter().map(|x| format!("{x:02x}")).collect()))
+        Ok(Self(crate::domain::canonical::hex(&b)))
     }
 
     pub(crate) fn as_str(&self) -> &str {

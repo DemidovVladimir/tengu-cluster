@@ -32,16 +32,16 @@ tengu chat                                     # or: tengu chat --sandbox lping
 
 | Key | Struct (`src/config/`) | Absent = | Unknown keys inside |
 |---|---|---|---|
-| `runtime_profile` | `Config` (`mod.rs`) | `"auto"` | — |
-| `[hub]` | `HubConfig` | defaults | ignored |
-| `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.lens`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
-| `[orchestrator]` | `OrchestratorConfig` | single-agent dispatch | ignored |
+
+
+| `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
+| `[orchestrator]` | `OrchestratorConfig` | single-agent dispatch | **error** |
 | `[memory]` | `MemoryConfig` | `enabled = false` | ignored |
 | `[telegram]` · `[webhooks]` | `TelegramConfig` · `WebhookConfig` | off | ignored |
 | `[decision_loops.<n>]` | `DecisionLoopConfig` (`decision_loop.rs`) | none | **error** |
 | `[scaffold]` | `ScaffoldConfig` | none | ignored |
 | `[claude_code]` | `ClaudeCodeConfig` | defaults | ignored |
-| `[default_scopes.<tool>]` | `ToolScope` (`domain/scope.rs`) | permissive fallback per tool | ignored |
+| `[default_scopes.<tool>]` | `ToolScope` (`domain/scope.rs`) | the fallback per tool: workspace, any host, any binary, no env var (deny-all when hardened) | ignored |
 | `[egress]` | `EgressConfig` (`egress.rs`) | Tor | **error** |
 | `[[mcp_servers]]` | `McpServerConfig` | none | ignored |
 | `[solana]` | `SolanaConfig` (`solana.rs`) | write tools simulate only | **error** |
@@ -78,7 +78,7 @@ example_queries = ["what is the BTC price?"]
 
 | Field | Default | Notes |
 |---|---|---|
-| `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI + `--features claude_code`), `codex` (`codex` CLI signed in with ChatGPT, default feature; `[agents.<a>.codex] sandbox`; refused in hardened sandboxes) — `docs/engine-backends.md`; the Studio builder (`tengu sandbox new`) writes these blocks from a canvas — `docs/studio-builder-2026-10-10.md` |
+| `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI), `codex` (`codex` CLI signed in with ChatGPT; `[agents.<a>.codex] sandbox`; refused in hardened sandboxes); all four in every build — `docs/engine-backends.md`; the Studio builder (`tengu sandbox new`) writes these blocks from a canvas — `docs/studio-builder-2026-10-10.md` |
 | `model` | required | non-empty; slug format per engine |
 | `default` | `false` | at most one agent |
 | `description` | none | present ⇒ in `TENGU_PLANNER_REGISTRY.md`, runnable as a plan step (`tengu run-agent`); absent ⇒ in-process only (planner role, `@role:` chat). No `description` and not `default` = a **private** agent: never reachable from Telegram, the only kind that may hold exec tools or a Solana wallet grant. Non-empty when set |
@@ -87,10 +87,10 @@ example_queries = ["what is the BTC price?"]
 | `workspace_tools` | `[]` | older opt-in list, merged with `tools`; only `src/domain/tools.rs::WORKSPACE_TOOLS` names |
 | `workspace` | none | `~` expanded. Without it a plan step / webhook turn runs in a temp dir removed after it (load warns when the agent's tools write files or skills) |
 | `skill_packages` (`skills`) | `[]` | skills loaded (`docs/skills.md`) |
-| `default_lens` | `"eco"` | `eco` \| `standard` \| `precise` |
+
 | `role` | none | free-form; non-empty when set |
 | `scopes.<tool>` | `{}` | `ToolScope` — § Scopes |
-| `claude_code.builtin_tools_profile` | `"editor_shell"` | `none` \| `read_only` \| `research` \| `editor` \| `editor_shell` (`config::CLAUDE_CODE_PROFILES`; read trimmed; unknown = error); `research` = Read / Glob / Grep + WebSearch (runs at Anthropic on the subscription; no WebFetch — pages via `http_request`); `none` required in a hardened sandbox |
+| `claude_code.builtin_tools_profile` | `"none"` | `none` \| `read_only` \| `research` \| `editor` \| `editor_shell` (`config::CLAUDE_CODE_PROFILES`; read trimmed; unknown = error); `research` = WebSearch only (runs at Anthropic on the subscription; no Read / Glob / Grep, no WebFetch — files and pages via bridged tools); every profile runs without settings files, hooks, plugins, skills, CLAUDE.md and auto-memory; `none` required in a hardened sandbox |
 | `local.base_url` · `local.api_key_env` | `http://127.0.0.1:8888` · `UNSLOTH_API_KEY` | `engine = "local"` only; a trailing `/v1` is dropped; unset / empty env = no `Authorization` header |
 | `codex.sandbox` · `codex.web_search` · `codex.cli_path` · `codex.forward_env` | `"read-only"` · `"disabled"` · `"codex"` · `[]` | `engine = "codex"` only; `sandbox` = the Codex CLI's own shell / patch policy: `read-only` \| `workspace-write` (read trimmed; anything else = error; never network); `web_search` = OpenAI's hosted search: `disabled` \| `cached` \| `live` (`config::CODEX_WEB_SEARCH`, read trimmed; anything else = error; runs at OpenAI on the subscription, not from this machine); `cli_path` non-empty (`PATH` lookup unless absolute). `model` = a bare OpenAI id the login serves (a ChatGPT login refuses some, e.g. `gpt-5.5` on 2026-10-14; `~/.codex/config.toml` model / effort never apply: `--ignore-user-config`); billing = the `codex login` ChatGPT subscription. The CLI starts from an EMPTY env + the base set (`engines/codex.rs::BASE_ENV`: `PATH`, `HOME`, locale, temp, TLS certs, `CODEX_HOME`, non-secret `TENGU_*`); `forward_env` = extra env names it (and its bridge) get — readable by the CLI's built-in shell, so list only what the agent's bridged tools must read; refused at load: `TENGU_MASTER_PASSWORD`, `TENGU_KEYS_*`, every `[keys.env]` name, `OPENAI_API_KEY`, `CODEX_*` |
 
@@ -98,8 +98,8 @@ example_queries = ["what is the BTC price?"]
 |---|---|---|
 | `.identity` | `name`, `instructions` (none) | `instructions` go into the system prompt |
 | `.flow` | `scope` (`per-sender`: `main` \| `per-group` \| `per-pipe-sender` \| `per-sender`), `reset_mode` (`idle`: `idle` \| `manual` \| `time`), `idle_timeout_minutes` (30), `max_history_turns`, `compaction_threshold_ratio`, `compaction_keep_turns`, `compaction_summary_max_tokens` (none) | ratio within (0, 1]; the others > 0 when set |
-| `.limits` | `max_tokens_per_flow` (100 000), `max_cost_per_flow`, `warn_at_cost` (none, USD), `context_window` (1 000 000), `max_output_tokens_per_turn` (none = model default), `max_tool_rounds` (70), `max_tool_result_chars` (300 000), `stream_event_timeout_secs` (120; a `codex` CLI is killed only after max(it, 900) s of silence — it keeps the caller alive every 30 s while it reasons), `request_timeout_secs` (600), `compact_result_limit` (200), `max_mcp_result_chars` (50 000), `step_timeout_secs` (600) | `max_tokens_per_flow`, `step_timeout_secs` > 0; costs > 0, `warn_at_cost` ≤ `max_cost_per_flow`; `max_output_tokens_per_turn` ≤ `context_window`; a `local` agent on the default window warns — set the server's real one |
-| `.lens` | `eco_max_tokens` (100), `standard_threshold` (0.7), `precise_budget` (0.5) | > 0; both within [0, 1] |
+| `.limits` | `max_tokens_per_flow` (100 000), `context_window` (1 000 000), `max_output_tokens_per_turn` (none = model default), `max_tool_rounds` (70), `max_tool_result_chars` (300 000), `stream_event_timeout_secs` (120; a `codex` CLI is killed only after max(it, 900) s of silence — it keeps the caller alive every 30 s while it reasons), `request_timeout_secs` (600), `compact_result_limit` (200), `max_mcp_result_chars` (50 000), `step_timeout_secs` (600) | `max_tokens_per_flow`, `step_timeout_secs` > 0; costs > 0, `warn_at_cost` ≤ `max_cost_per_flow`; `max_output_tokens_per_turn` ≤ `context_window`; a `local` agent on the default window warns — set the server's real one |
+
 | `.prompt_budget` | `max_file_tokens` (2 000), `max_skill_context_tokens` (16 000), `max_total_tokens` (32 000) | > 0; each ≤ `max_total_tokens` |
 
 | Limit | Meaning |
@@ -113,14 +113,14 @@ example_queries = ["what is the BTC price?"]
 | Field | Grants (empty = none) |
 |---|---|
 | `fs_roots` | filesystem roots (`~` expanded; paths resolved, symlinks followed) |
-| `net_hosts` | hosts: exact, `*.suffix` (subdomains only), `*` |
-| `env_reads` | env vars a tool may read (`$VAR` headers, `HL_API_URL`, `SOLANA_RPC_URL`, …); `*` = any |
+| `net_hosts` | hosts: exact, `*.suffix` (subdomains only), `*` — which never matches `localhost`, `*.localhost`, `*.local` or a loopback / private / CGNAT / link-local / unique-local IP literal (`domain::scope::is_local_host`, 2026-10-22: name such a host to reach it; written hosts only, not DNS answers) |
+| `env_reads` | env vars a tool may read (`$VAR` headers, `HL_API_URL`, `SOLANA_RPC_URL`, …); `*` = any. An `http_request` carrying one (`$VAR` in the URL or a header, `auth_*_env`) goes only to a host `net_hosts` names without `*` |
 | `shell_bins` | `run_command` / shell skills: the command's first word only (leading `NAME=value` skipped) — a guard rail, not a sandbox |
 | `wallets` | Privy wallet labels; Solana write tools: full pubkeys |
 
 | Rule | Effect |
 |---|---|
-| Precedence | an agent's own `scopes.<tool>` replaces `[default_scopes.<tool>]` wholesale (never field-merged); a tool with neither gets the permissive fallback (no shell in a hardened sandbox) |
+| Precedence | an agent's own `scopes.<tool>` replaces `[default_scopes.<tool>]` wholesale (never field-merged); a tool with neither gets the fallback (workspace, any host, any binary, no env var; deny-all in a hardened sandbox); `tengu doctor` lists, per agent, the tools on it |
 | Plan steps | `run-agent` (and its bridge) add the step workspace to every configured scope's `fs_roots` — except a deny-all scope (every field empty), which stays a deny |
 | Writers | `write_file` refuses `.tengu/`, `.claude/`, `.git/`, `skills/` at any depth and `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `.mcp.json`; a hardened sandbox also `MEMORY.md` / `USER.md` / `IDENTITY.md` / `PROFILE.md` / `CONTEXT.md` |
 | Per-family needs | `docs/tools.md` § Give it to an agent |
@@ -129,8 +129,7 @@ example_queries = ["what is the BTC price?"]
 
 ```toml
 [orchestrator]
-agent = "lping"                # the [agents.*] block that runs the planner LLM call (use an OpenRouter agent)
-engine = "rag"                 # the only accepted value (historical name; file-registry planner)
+agent = "lping"                # the [agents.*] block whose engine + model run the planner LLM call
 max_attempts_per_step = 3      # Tier 1: retries per step before escalation
 max_replans = 2                # Tier 2: replans before bailing out
 route_explicit_agents = false  # true = `@role:` messages also go through the planner
@@ -141,7 +140,7 @@ route_explicit_agents = false  # true = `@role:` messages also go through the pl
 | Presence turns orchestration on; `engine` defaults to `"rag"`, anything else fails validation | `config/mod.rs::OrchestratorConfig` |
 | Planner prompt = `skills/orchestrator/SKILL.md` read from the cwd (inline fallback when missing) | `application/orchestrator/planner.rs` |
 | Subagents = the `[agents.*]` blocks with a `description`; registry regenerated each planner turn | `orchestrator/shared_files.rs::routable_agents` |
-| The child re-loads the same config and takes `[agents.<step.agent>]`; the accepted plan arrives as IPC `plan_state` (`TENGU_PLAN.md` = debug copy) | `cli/run_agent.rs`, `orchestrator/replan.rs` |
+| The child re-loads the same config and takes `[agents.<step.agent>]`; the plan the step belongs to arrives as IPC `plan_state` | `cli/run_agent.rs`, `outbound/subprocess_runner.rs` |
 
 ## Memory — `[memory]`
 
@@ -150,7 +149,7 @@ route_explicit_agents = false  # true = `@role:` messages also go through the pl
 | `enabled` | `false` | disk vector store + `memory_ingest` / `memory_search`; embeddings need `OPENROUTER_API_KEY` |
 | `embedding_model` | `text-embedding-3-small` | must stay 1536-dim (Postgres `vector(1536)`) |
 | `max_recall_entries` · `max_recall_tokens` | 5 · 600 | |
-| `store_path` | `~/.tengu/memory/` | store dir (`vectors.bin`) of an agent without `workspace` — else `<workspace>/memory/`; the disk bincode store is the only built-in backend (no `backend` key; one set is ignored) |
+| `store_path` | `<TENGU_HOME>/memory/` | store dir (`vectors.bin`) of an agent without `workspace` — else `<workspace>/memory/`; the disk bincode store is the only built-in backend (no `backend` key; one set is ignored) |
 | `persistent_store_chunk_size` · `_overlap` | 1000 · 200 | characters |
 | `session_recent_n` | 10 | last messages reloaded per orchestrator turn |
 | `cross_plan_top_k` | 5 | replan recall over `agentic_memory` step outputs |
@@ -165,7 +164,7 @@ Durable memory is the Postgres `agentic_memory` plugin: `--features postgres_mem
 |---|---|---|
 | `enabled` | `false` | |
 | `allowed_users` | `[]` | merged with `TENGU_TELEGRAM_ALLOWED_USERS`; both empty = `tengu telegram` refuses to start; an unlisted sender gets "Unauthorized." |
-| `tool_approvals` · `approve_only` | `false` · `[]` | **not implemented** — parsed, gate nothing on any engine or surface; `Config::load` warns while set. Gate tools with `tools` and scopes |
+| `tool_approvals` · `approve_only` | — | **removed** 2026-10-23 (they gated nothing): `[telegram]` refuses unknown keys, so either fails the load. No tool call waits for an approval; gate tools with `tools` and scopes |
 
 Private agents (no `description`, not `default`) are never `@`-routable from Telegram nor its default.
 
@@ -211,7 +210,7 @@ Jev picks, existing tools run (`docs/decision-loop-plan-2026-09-24.md`). Trigger
 | Section | Fields (default) | Notes |
 |---|---|---|
 | `[scaffold]` | `root` (required), `directories` (`[]`), `files` (`[{path, content}]`), `project.directories` · `project.files` | created when `tengu telegram` starts (files never overwritten); `project` = template of Telegram's `/project <name>`; soft `tengu prune --sandbox` clears `project.directories` |
-| `[hub]` | `bind` (`127.0.0.1`), `port` (7070), `auth_mode` (`token` \| `open`), `auth_token`, `reload.mode` (`hybrid` \| `hot` \| `restart` \| `off`), `reload.debounce_ms` (300) | config-only: validated, shown by `tengu status`; nothing listens |
+
 | `[claude_code]` | `cli_path` (`claude`), `timeout_secs` (120) | per-agent `builtin_tools_profile` in `[agents.<a>.claude_code]` |
 | `[[mcp_servers]]` | `name`, `transport` (`stdio` \| `http`), `command` (stdio), `url` (http), `env` (`$VAR` resolved at spawn), `auth = { type = "bearer", token = "$VAR" }` | tools `<name>__<tool>`; a schema outside the engine subset is dropped with a warn; refused in a hardened sandbox — `docs/tools.md` § MCP servers |
 
@@ -253,7 +252,7 @@ Provider keys live only as secrets of the `tengu-seal` Cloudflare Worker; tengu 
 | Load rule | |
 |---|---|
 | `PRIVY_API_URL` in `[keys.env]` needs `PRIVY_APP_SECRET` in `strip` (`FALLBACK_KEYS`: no session never falls back to a local secret) | `config/keys.rs` |
-| a failed session at startup unsets every `[keys.env]` var and the session vars (warn); `tengu telegram` with `TELEGRAM_API_URL` routed and no session refuses to start | `outbound/keys`, `inbound/telegram.rs` |
+| a failed session at startup unsets every `[keys.env]` var and the session vars (warn); `tengu telegram` with `TELEGRAM_API_URL` routed and no session refuses to start | `outbound/keys`, `inbound/telegram/` |
 
 ## A2A — `[a2a]`
 
@@ -552,7 +551,7 @@ Every one and `config.example.toml` must load (`config::risk::tests::every_sandb
 
 ```bash
 tengu chat --sandbox lping
-cargo run --features claude_code -- chat --sandbox xlab   # xlab's agents use engine = "claude_code"
+cargo run -- chat --sandbox xlab                          # xlab's agents use engine = "claude_code"
 tengu run --sandbox xmarket                               # long-running: feeds, loops, webhooks
 tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 tengu sources --sandbox soe list                          # the source registry; fetch needs an enabled, reviewed row
@@ -566,8 +565,8 @@ tengu sources --sandbox soe list                          # the source registry;
 | `OPENROUTER_BASE_URL` | `engines/mod.rs`, `outbound/decisions.rs`, `tools/agentic_memory/` | `https://openrouter.ai/api` | API base |
 | `OPENROUTER_REFERER` · `OPENROUTER_TITLE` | `engines/openrouter.rs` | unset | `HTTP-Referer` · `X-OpenRouter-Title` headers |
 | `UNSLOTH_API_KEY` | `engines/local.rs` (the default `[agents.<a>.local] api_key_env`) | unset = no auth header | local server key |
-| `TELEGRAM_BOT_TOKEN` | `inbound/telegram.rs` | — (required for `telegram`) | bot token |
-| `TENGU_TELEGRAM_ALLOWED_USERS` | `inbound/telegram.rs` | unset | comma-separated ids merged with `[telegram] allowed_users` |
+| `TELEGRAM_BOT_TOKEN` | `inbound/telegram/` | — (required for `telegram`) | bot token |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | `inbound/telegram/` | unset | comma-separated ids merged with `[telegram] allowed_users` |
 | `TENGU_HOME` | `config/paths.rs::resolve_tengu_home` | `~/.tengu` (`~/` expanded) | state root: config, vault, logs, `state/` |
 | `TENGU_CONFIG` | `config/paths.rs::default_config_path` | `<TENGU_HOME>/config.toml` | config file; `-c` wins; pinned for children by the CLI |
 | `TENGU_MASTER_PASSWORD` | `outbound/secrets.rs` | unset (prompt) | vault password; always redacted |
@@ -591,51 +590,49 @@ tengu sources --sandbox soe list                          # the source registry;
 | `SSH_AUTH_SOCK` | `outbound/keys/mod.rs` | — | the SSH agent that signs the session request (`[keys] agent_socket` overrides) |
 | `TENGU_BRIDGE_*` (`AGENT`, `TOOLS`, `WORKSPACE`, `GRANT_WORKSPACE`, `SCOPES`, `MCP_SERVERS`, `SUMMARY_FILE`, `TRANSCRIPT_FILE`, `MAX_RESULT_CHARS`) | `inbound/mcp_bridge.rs` (names: `outbound/bridge_env.rs`) | set by the Claude Code and Codex engines | engine → bridge contract — `docs/mcp-bridge.md` |
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE` · `_OVERLAP` | forwarded by `engines/claude_code.rs` | unset | read by nothing — the bridge takes `[memory]` from its config |
-| `TENGU_TUI_METRICS` · `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | metrics line · planner recall hits as System bubbles |
-| `TENGU_GPU_HINT` · `CUDA_VISIBLE_DEVICES` | `config/mod.rs::detect_gpu` | auto-detect | `none\|cpu\|off\|false` or `gpu\|cuda\|metal\|mps\|on\|true` for `runtime_profile = "auto"` |
+| `TENGU_TUI_METRICS` | `tui/mod.rs` | off | metrics line as a System bubble |
+
 | `NO_COLOR` | `inbound/eval.rs` | unset | plain eval table |
-| `RUST_LOG` | `cli/mod.rs` (`tracing_subscriber::EnvFilter`) | `tengu=info` | log filter; one `metrics` line per LLM call at info |
+| `RUST_LOG` | `cli/mod.rs::init_logging` | `tengu=info` (`tengu sandbox`: `tengu=warn`) | log filter, replaces the default whole (`tengu=debug` works); one `metrics` line per LLM call at info. Sinks: TUI → `tengu.log`; telegram / webhooks / run / studio / `a2a serve` → `tengu.log` + stderr; protocol and data commands → stderr; the rest → stdout. Colours only on a terminal; an unopenable `tengu.log` → stderr (TUI: no log) with one line saying why |
 | Claude CLI child env | `engines/claude_code.rs` | — | strips a parent Claude Code session's vars (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_*` but auth / provider) and `ANTHROPIC_API_KEY` |
 | Codex CLI child env | `engines/codex.rs::child_env` | `[agents.<a>.codex] forward_env` | an EMPTY env + `BASE_ENV` + the `forward_env` names (vault secrets, `.env` keys, the master password and the seal-proxy session never reach it; a value equal to the session token is dropped); never `OPENAI_API_KEY` / `CODEX_API_KEY` (the ChatGPT login bills, never an API key); adds `[egress]` `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when the LLM API is proxied |
 | `LYREBIRD_RS_DIR` · `NETWORK` · `SANDBOX` | `Makefile` | `../lyrebird-rs` · the config's `[egress] network` · none | Tor image source · compose network · sandbox config to mount |
-| `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `openrouter,telegram` · 7080 | image features · host port |
+| `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `telegram` · 7080 | image features · host port |
 | Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_REGEN_SOURCE_EVAL` (the source eval set), `TENGU_REGEN_GOLDEN` (Studio graph goldens), `TENGU_REGEN_SOE_STATE` (the SOE fixture state root), `SOE_CASE` (one synthetic SOE cycle case), `TENGU_CAPTURE_FIXTURES` |
 
 ## Feature flags
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `openrouter` | on | marker only — no code is gated on it; OpenRouter and `local` engines are always built |
 | `telegram` | on | Telegram bot channel |
 | `studio` | on | the `tengu studio` local server (loopback; `web/studio/` embedded) incl. the builder (`--allow-edit`); `tengu studio graph` and `tengu sandbox compile` work without it |
-| `codex` | on | `engine = "codex"` (the Codex CLI is spawned only when an agent names the engine) |
+| `webhooks` | on | `tengu webhooks`; webhook routes and decision-loop escalation under `tengu run` |
 | `a2a` | on | the `tengu a2a serve` server; the `a2a` tool and `tengu a2a send` need no feature |
-| `claude_code` | off | Claude Code CLI backend |
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `tengu agentic-memory-server` |
-| `webhooks` | off | `tengu webhooks`, webhook routes under `tengu run` |
+| `openrouter` · `claude_code` · `codex` | off | no-ops: every engine (`openrouter`, `local`, `claude_code`, `codex`) is always built, its CLI spawned only when an agent names it; kept so old build commands still work |
 
 ## Validation summary
 
 | Errors (load fails) | Warnings (load continues) |
 |---|---|
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
-| no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
-| `workspace_tools` outside `WORKSPACE_TOOLS` | `[telegram] tool_approvals` / `approve_only` set (not implemented) |
+| no agent; more than one `default`; engine / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
+| `workspace_tools` outside `WORKSPACE_TOOLS`; an unknown `[telegram]` key (`tool_approvals` / `approve_only` were removed) | an agent that reads outside text and holds a side effect (`docs/tools.md` § Untrusted input) |
 | `[egress]`, `[keys]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[generation]`, `[strategy_ranking]`, `[sources]`, `[soe]`, `[studio]`, `[a2a]`, `[feeds]`, `[decision_loops]` rules (sections above) | an unset `${VAR}` (stays literal) · an agent holding `a2a` with no `[a2a.remotes.*]` |
 
 ## Reset
 
 ```bash
-tengu prune                              # <TENGU_HOME>/state/flows, memory/, logs/ (keeps config, secrets, skills)
-tengu prune --sandbox <name>             # + each workspace's memory/, .tengu-tasks/, .tengu-attachments/, storage/, scaffold project dirs
-tengu prune --sandbox <name> --hard      # empties each workspace root (every child), keeps the root
+tengu prune                              # the shared <TENGU_HOME>/memory/ and logs/ (every sandbox's traces, the audit logs)
+tengu prune --sandbox <name>             # only <name>: logs/trace/<name>/, each workspace's memory/, .tengu-attachments/, .tengu/storage/, scaffold project dirs, the vectors.bin of its own [memory] store_path
+tengu prune --sandbox <name> --hard      # the same, each workspace root emptied (every child) instead, the root kept
 ```
 
 | Fact | Detail |
 |---|---|
-| Never pruned | `<TENGU_HOME>/state` beyond `state/flows` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`, `strategy-rankings/`), the `[sources]` state dir (`sources.db`; with `[soe]` the SOE state root: `operator.toml`, `cycles/`, `replays/`, the state logs) and `solana-writes.db`; the sandbox config, secrets, managed skills |
+| Never pruned | `<TENGU_HOME>/state` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`, `strategy-rankings/`), the `[sources]` state dir (`sources.db`; with `[soe]` the SOE state root: `operator.toml`, `cycles/`, `replays/`, the state logs) and `solana-writes.db`; the sandbox config, secrets, managed skills |
 | `--hard` | needs `--sandbox` (without it: global state only, with a note); the workspaces are the agents' `workspace` dirs — an xmarket workspace loses its `.tengu/observations.db`; does not clear the Postgres `agentic_memory` store — `make clean` does (global, destructive) |
-| Logs | every prune deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts —, `maps/`, the execution traces `trace/<sandbox>/`) |
+| Logs | `tengu prune` deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts —, `maps/`, every sandbox's traces `trace/<sandbox>/`); `--sandbox <s>` deletes only `trace/<s>/` |
 | Manual | `rm -rf ~/.tengu` wipes everything, the paper ledgers and `market.db` included |
 
 ## Related

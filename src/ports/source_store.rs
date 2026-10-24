@@ -17,9 +17,9 @@
 //! | `purge` | raw retention: `response` bodies fetched before `raw_before_ms` dropped (sha256, size and metadata kept; `terms` bodies never); record retention: records read before `records_before_ms` deleted; a purge that removed something leaves a tombstone ([`Purge`]) in the same transaction |
 //! | `set_switch` · `switches` | the runtime kill switch of a source (critic U10, `tengu sources disable` / `enable`): rows appended, never updated; the last appended per source wins ([`switched_off`]: append order, never the clock) — off refuses every fetch whatever the registry says; on lifts only a runtime off (a row with `enabled = false` stays off) |
 
+use crate::domain::canonical::sha256_hex;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::domain::source::{Coverage, Purge, SourceRecord};
 
@@ -74,11 +74,6 @@ pub(crate) struct Snapshot {
     pub purged_ms: Option<i64>,
 }
 
-/// sha256 of `bytes`, 64 lowercase hex.
-pub(crate) fn body_sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
 impl Snapshot {
     /// A body read at `fetched_ms`; `keep` = store the bytes (the registry
     /// row's `store_raw`), else only its sha256 and size.
@@ -95,7 +90,7 @@ impl Snapshot {
         keep: bool,
     ) -> Self {
         Self {
-            sha256: body_sha256(body),
+            sha256: sha256_hex(body),
             kind,
             source_id: source_id.to_string(),
             request_key: request_key.to_string(),

@@ -75,7 +75,7 @@
   <ul class="facts">
     <li><b>5</b> fields per scope</li>
     <li>empty field = <b>deny</b></li>
-    <li>no entry = <b>permissive fallback</b></li>
+    <li>no entry = <b>fallback</b> (no env; hardened: nothing)</li>
     <li>check within <b>30</b> lines of <code>execute</code></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
@@ -154,7 +154,7 @@
         <g class="n hands" data-at="5">
           <rect x="20" y="244" width="200" height="56" rx="8"/>
           <text x="120" y="267" text-anchor="middle" class="t-title">Fallback scope</text>
-          <text x="120" y="285" text-anchor="middle" class="t-small">workspace · * · default</text>
+          <text x="120" y="285" text-anchor="middle" class="t-small">workspace · any host · no env</text>
         </g>
         <g class="n heart" data-at="6">
           <rect x="20" y="352" width="160" height="56" rx="8"/>
@@ -186,7 +186,7 @@
         <g class="pop badge" data-at="2"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">shell_bins → load error</text></g>
         <g class="pop badge" data-at="3"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">no field-merge</text></g>
         <g class="pop badge" data-at="4"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">deny-all stays deny</text></g>
-        <g class="pop badge" data-at="5"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">hardened: no shell</text></g>
+        <g class="pop badge" data-at="5"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">hardened: deny-all</text></g>
         <g class="pop badge" data-at="6"><rect x="20" y="452" width="196" height="22" rx="11"/><text x="118" y="467" text-anchor="middle">new/../../x → outside</text></g>
         <g class="pop badge" data-at="7"><rect x="650" y="452" width="196" height="22" rx="11"/><text x="748" y="467" text-anchor="middle">lint: check in 30 lines</text></g>
         <g class="pop badge" data-at="8"><rect x="650" y="452" width="196" height="22" rx="11"/><text x="748" y="467" text-anchor="middle">same map in the bridge</text></g>
@@ -213,7 +213,7 @@
         <li>A <code>[risk]</code> or <code>[soe]</code> section or a Solana signer hardens the sandbox: Claude Code built-ins off, no Codex agent, no <code>[[mcp_servers]]</code>, no <code>shell_bins</code>, state and config out of reach. Any break fails the load.</li>
         <li><code>fold_default_scopes</code> copies each default into every agent with no entry for that tool. An agent's own entry wins whole, never field-merged. <code>~</code> in <code>fs_roots</code> expands.</li>
         <li>A <code>run-agent</code> step, and its CLI bridge (Claude Code, Codex), adds the step workspace to every configured scope. A deny-all scope (every field empty) stays a deny.</li>
-        <li>Each tool gets its configured scope. A tool with none gets the fallback: the workspace, any host, env var and binary, the <code>default</code> wallet. Hardened: no shell.</li>
+        <li>Each tool gets its configured scope. A tool with none gets the fallback: the workspace, any host and binary, the <code>default</code> wallet, no env var. Hardened: nothing at all.</li>
         <li>A writer resolves the path first: symlinks followed, <code>..</code> applied. It must stay in the workspace; <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code> are refused.</li>
         <li>Then the tool calls <code>ctx.scope.check_*</code>: path under <code>fs_roots</code>, host in <code>net_hosts</code>, var in <code>env_reads</code>, first word in <code>shell_bins</code>, label in <code>wallets</code>.</li>
         <li>Allowed: the tool runs. The MCP bridge builds the same scope map, so Claude Code and Codex agents meet the same fences.</li>
@@ -231,7 +231,7 @@
   </div>
   <div class="fields" data-inview>
     <div class="fld"><b>fs_roots</b><code class="fn">check_fs_read · check_fs_write</code><small>The resolved path (symlinks, <code>..</code>) must sit under a root.</small><span class="wild">no wildcard</span></div>
-    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>.</small><span class="wild">"*" = any host</span></div>
+    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>, which skips loopback, LAN, link-local and <code>localhost</code> / <code>.local</code> hosts. A request carrying an env value needs a host named without <code>*</code> (<code>check_named_host</code>).</small><span class="wild">"*" = any host</span></div>
     <div class="fld"><b>env_reads</b><code class="fn">check_env_read</code><small>Exact var name. Gates <code>$VAR</code> in <code>http_request</code>, <code>SOLANA_RPC_URL</code>, <code>HL_API_URL</code>, <code>PRIVY_API_URL</code>.</small><span class="wild">"*" = any var</span></div>
     <div class="fld"><b>shell_bins</b><code class="fn">check_shell_bin</code><small>Basename of the command's first word. <code>run_command</code> and shell skills.</small><span class="wild">"*" = any binary</span></div>
     <div class="fld"><b>wallets</b><code class="fn">check_wallet</code><small>Exact label. Privy tools; Solana writes use the full pubkey.</small><span class="wild">no wildcard</span></div>
@@ -337,7 +337,7 @@
   </div>
   <ul class="states">
     <li><span class="chip hands">run</span><span><b>allowed</b>Every check passed; the tool runs with its resolved path.</span></li>
-    <li><span class="chip bad">no</span><span><b>scope denied</b><code>… not in allowed net_hosts [...]</code>, or <code>no fs_roots configured (default-deny)</code>.</span></li>
+    <li><span class="chip bad">no</span><span><b>scope denied</b><code>… not in allowed net_hosts [...]</code>, <code>… gets an env value only when net_hosts names it</code>, or <code>no fs_roots configured (default-deny)</code>.</span></li>
     <li><span class="chip bad">out</span><span><b>escapes workspace</b>The resolved path is not under the workspace: <code>Path escapes workspace</code>.</span></li>
     <li><span class="chip guard">name</span><span><b>protected</b><code>Writing '…' is not allowed</code>, or <code>Writing to skill directories is not allowed</code>.</span></li>
     <li><span class="chip bad">link</span><span><b>cannot resolve</b>A dangling symlink: writing through it would create its target.</span></li>
@@ -354,12 +354,14 @@
     <li><span><b>Empty means no.</b> Each <code>check_*</code> refuses when its list has no match; a scope with every field empty denies everything.</span></li>
     <li><span><b>No field-merge.</b> An agent's entry for a tool replaces the default for that tool whole.</span></li>
     <li><span><b>Every tool checks.</b> <code>tests/scope_lint.rs</code> fails when an <code>execute</code> in <code>tools/</code> or <code>mcp_client/</code> has no <code>scope.check_</code> (or <code>// scope: pure-compute</code>) within 30 lines.</span></li>
-    <li><span><b>Both ends checked.</b> <code>persistent_store store</code> checks read access on the source file as well as write access on the workspace; <code>manage_skill</code> and <code>apply_improver_proposal</code> check write access on the skill dir they change, so the managed tier <code>~/.tengu/skills</code> needs its own grant.</span></li>
+    <li><span><b>Both ends checked.</b> <code>persistent_store store</code> checks read access on the source file as well as write access on the workspace; <code>manage_skill</code> and <code>apply_improver_proposal</code> check write access on the skill dir they change, so the managed tier <code>&lt;TENGU_HOME&gt;/skills</code> needs its own grant.</span></li>
     <li><span><b>Paths are resolved first.</b> File tools follow symlinks and apply <code>..</code> before comparing, so <code>new/../../x</code> cannot land outside; a dangling symlink is refused.</span></li>
     <li><span><b>Agent state is off-limits to writers.</b> <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>CLAUDE.local.md</code>, <code>AGENTS.md</code>, <code>.mcp.json</code>: any depth, any case. Hardened: also <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code>, <code>CONTEXT.md</code>.</span></li>
     <li><span><b>A deny stays a deny.</b> The <code>run-agent</code> workspace grant skips deny-all scopes.</span></li>
     <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>codex</code> agent, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file. With a Solana signer, no scope's <code>env_reads</code> may name the seal-proxy session (<code>TENGU_KEYS_SESSION_TOKEN</code>, an <code>@session</code> var) or <code>"*"</code>.</span></li>
-    <li><span><b>Hardened fallback has no shell.</b> Tools without a scope get no <code>shell_bins</code>, and no shell skill loads.</span></li>
+    <li><span><b>Readers are warned off actors.</b> <code>Config::load</code> warns when an agent that reads text tengu did not write (Claude Code <code>research</code>, Codex <code>web_search</code>, <code>http_request</code> on no scope or to <code>"*"</code>, <code>a2a</code>, an <code>[[mcp_servers]]</code> tool) also holds <code>write_file</code>, <code>run_command</code>, a signing, exec or Solana write tool on a scope that is not deny-all, an <code>env_reads</code> entry on a scope that reaches <code>"*"</code>, Claude Code <code>editor</code> / <code>editor_shell</code> or Codex <code>workspace-write</code>. The <code>[orchestrator]</code> agent on <code>claude_code</code> must run profile <code>"none"</code> (a load error).</span></li>
+    <li><span><b>The fallback reads no env var.</b> A <code>$VAR</code> in a URL, a Privy, RPC or A2A credential needs <code>env_reads</code> in a configured scope. <code>tengu doctor</code> lists, per agent, the tools on the fallback.</span></li>
+    <li><span><b>Hardened fallback is deny-all.</b> Tools without a scope can touch nothing, and no shell skill loads.</span></li>
     <li><span><b>Inside the generation.</b> A sandbox bound with <code>[generation]</code> never registers a tool its generation refuses: in-process and in the bridge, even if the agent lists it (<a href="lineage.html">Lineage</a>).</span></li>
   </ul>
   <p class="note warn"><b>Not a sandbox.</b> <code>shell_bins</code> gates only the first command word: what runs after <code>;</code>, <code>|</code> or <code>&amp;&amp;</code>, inside <code>$( )</code>, or in <code>node -e</code> is not checked. Write-path protection does not cover <code>run_command</code> or Claude Code built-ins (profiles other than <code>"none"</code>).</p>
@@ -392,9 +394,10 @@
       <tbody>
         <tr><td><code>src/domain/scope.rs</code></td><td><code>ToolScope</code>, every <code>check_*</code>, <code>host_matches</code>, <code>resolve_path</code>, protected names, <code>shell_command_binary</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td><code>validate_path</code>, <code>validate_write_path</code> (workspace, names, <code>skills/</code>)</td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>default_scopes</code>, <code>fold_default_scopes</code>, <code>AgentConfig::hardened</code></td></tr>
+        <tr><td><code>src/config/{load,agent}.rs</code></td><td><code>default_scopes</code>, <code>fold_default_scopes</code> (<code>load.rs</code>), <code>AgentConfig::hardened</code> (<code>agent.rs</code>)</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>hardened-sandbox load rules and path reach checks</td></tr>
-        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code>, <code>within_generation</code></td></tr>
+        <tr><td><code>src/config/readers.rs</code></td><td>readers of outside text vs. side effects (load warning); the planner's profile <code>"none"</code> (load error)</td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>assemble_executor</code> (one scope map for every surface), <code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code>, <code>within_generation</code></td></tr>
         <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>the same scope map for Claude Code and Codex agents</td></tr>
         <tr><td><code>src/adapters/outbound/tools/workspace/</code></td><td><code>read_file</code>, <code>write_file</code>, <code>list_directory</code>, <code>run_command</code>: the checks in use</td></tr>
         <tr><td><code>tests/scope_lint.rs</code></td><td>fails a tool whose <code>execute</code> skips the scope check</td></tr>
@@ -404,7 +407,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -412,7 +415,7 @@
 <script>
 /* page-only: scope tester, fold + grant, hardening check — rules ported from
    src/domain/scope.rs, src/adapters/outbound/tools/args.rs,
-   src/config/mod.rs (fold_default_scopes), src/bootstrap/tools.rs,
+   src/config/load.rs (fold_default_scopes), src/bootstrap/tools.rs,
    src/config/hardening.rs. Example home: /Users/op. */
 (function () {
   var HOME = "/Users/op";
@@ -505,8 +508,20 @@
     return words;
   }
   function isAssignment(w) { var k = w.indexOf("="); return k > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(w.slice(0, k)); }
+  /* domain::scope::is_local_host: "*" never matches these (2026-10-22) */
+  function isLocalHost(host) {
+    var h = host.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+    if (h === "localhost" || /\.localhost$/.test(h) || /\.local$/.test(h)) return true;
+    var m = h.replace(/^::ffff:/, "").match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (m) {
+      var a = +m[1], b = +m[2];
+      return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b < 128);
+    }
+    return h === "::1" || h === "::" || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]?:/.test(h);
+  }
   function hostMatches(pat, host) {
-    if (pat === "*" || pat === host) return true;
+    if (pat === "*") return !isLocalHost(host);
+    if (pat === host) return true;
     if (pat.indexOf("*.") !== 0) return false;
     var suf = pat.slice(2);
     if (host.length < suf.length || host.slice(host.length - suf.length) !== suf) return false;
@@ -522,14 +537,14 @@
     { id: "xm-read", label: "xmarket · [default_scopes.read_file]", toml: "[default_scopes.read_file]\nfs_roots = [\"~/xmarket-workspace\"]", s: sc({ fs_roots: [WS] }) },
     { id: "xm-hl", label: "xmarket · [default_scopes.hl_ctx]", toml: "[default_scopes.hl_ctx]\nfs_roots  = [\"~/xmarket-workspace\"]\nnet_hosts = [\"api.hyperliquid.xyz\"]\nenv_reads = [\"HL_API_URL\"]", s: sc({ fs_roots: [WS], net_hosts: ["api.hyperliquid.xyz"], env_reads: ["HL_API_URL"] }) },
     { id: "st-http", label: "storage-test · [default_scopes.http_request]", toml: "[default_scopes.http_request]\nnet_hosts = [\"*\"]", s: sc({ net_hosts: ["*"] }) },
-    { id: "fallback", label: "no entry → permissive fallback", toml: "", s: null },
+    { id: "fallback", label: "no entry → fallback", toml: "", s: null },
     { id: "ex-shell", label: "example · run_command shell_bins", toml: "[agents.dev.scopes.run_command]   # example\nshell_bins = [\"git\", \"node\", \"echo\"]", s: sc({ shell_bins: ["git", "node", "echo"] }) },
     { id: "ex-wild", label: "example · wildcard host", toml: "[agents.dev.scopes.http_request]  # example\nnet_hosts = [\"*.anthropic.com\"]", s: sc({ net_hosts: ["*.anthropic.com"] }) }
   ];
   var EX = {
     write: ["out/report.md", "new/../../outside.txt", "notes/../.tengu/cache.db", "state/observations.db", "Skills/evil/SKILL.md", "docs/claude.md", "MEMORY.md", "inbox/x.txt", "dangling"],
     read: ["notes/today.md", "../secrets.txt", "inbox/report.pdf", "state/observations.db", "dangling"],
-    host: ["api.hyperliquid.xyz", "api.anthropic.com", "anthropic.com", "evil.example"],
+    host: ["api.hyperliquid.xyz", "api.anthropic.com", "anthropic.com", "evil.example", "127.0.0.1", "192.168.1.20", "localhost"],
     env: ["HL_API_URL", "OPENROUTER_API_KEY", "SOLANA_RPC_URL"],
     cmd: ["git status", "/usr/bin/git log", "DEK='k' node -e 1", "NOW=$(date +%s) && echo $NOW", "PY=1 python3 -c 1", "echo hi; rm -rf x", "'node' -e 1"],
     wallet: ["default", "research-wallet"]
@@ -541,8 +556,9 @@
   function preset() {
     var p = PRESETS.filter(function (x) { return x.id === selS.value; })[0];
     if (p.id !== "fallback") return p;
-    var s = sc({ fs_roots: [WS], net_hosts: ["*"], env_reads: ["*"], shell_bins: hard.checked ? [] : ["*"], wallets: ["default"] });
-    return { id: p.id, s: s, toml: "# permissive_scope(workspace), bootstrap/tools.rs\nfs_roots   = [\"" + WS + "\"]\nnet_hosts  = [\"*\"]\nenv_reads  = [\"*\"]\nshell_bins = [" + (hard.checked ? "" : "\"*\"") + "]" + (hard.checked ? "   # hardened: cleared" : "") + "\nwallets    = [\"default\"]" };
+    if (hard.checked) return { id: p.id, s: empty(), toml: "# hardened: resolve_tool_scopes gives ToolScope::default()\n# every field empty: deny-all" };
+    var s = sc({ fs_roots: [WS], net_hosts: ["*"], env_reads: [], shell_bins: ["*"], wallets: ["default"] });
+    return { id: p.id, s: s, toml: "# permissive_scope(workspace), bootstrap/tools.rs\nfs_roots   = [\"" + WS + "\"]\nnet_hosts  = [\"*\"]\nenv_reads  = []   # none since 2026-10-22\nshell_bins = [\"*\"]\nwallets    = [\"default\"]" };
   }
   function examples() {
     exBox.innerHTML = "";
@@ -603,7 +619,7 @@
       var host = v.trim(); try { if (/^[a-z]+:\/\//i.test(host)) host = new URL(host).hostname; } catch (x) {}
       var hit = s.net_hosts.filter(function (pt) { return hostMatches(pt, host); })[0];
       if (hit !== undefined) row("ok", "scope", "<b>check_net_host</b>: matches <code>" + esc(JSON.stringify(hit)) + "</code>");
-      else { fail = "host '" + host + "' not in allowed net_hosts " + dbg(s.net_hosts); row("no", "scope", "<b>check_net_host</b>: no pattern matches <code>" + esc(host) + "</code>"); }
+      else { var local = isLocalHost(host) && s.net_hosts.indexOf("*") >= 0; fail = "host '" + host + "' not in allowed net_hosts " + dbg(s.net_hosts) + (local ? ' ("*" never matches a loopback / LAN / link-local host: name it)' : ""); row("no", "scope", "<b>check_net_host</b>: no pattern matches <code>" + esc(host) + "</code>" + (local ? " (a local host: <code>*</code> skips it)" : "")); }
       note = "http_request also checks [egress] first, on every redirect hop: see egress.";
     } else if (kind === "env") {
       var name = v.trim();
@@ -660,7 +676,7 @@
     var tools = ["read_file", "write_file", "http_request", "run_command"];
     var out = tools.map(function (t) {
       var s = agent[t], tag, cls = "";
-      if (!s) { s = sc({ fs_roots: [AWS], net_hosts: ["*"], env_reads: ["*"], shell_bins: fHard.checked ? [] : ["*"], wallets: ["default"] }); tag = '<span class="chip hands">fallback</span>'; cls = " fall"; }
+      if (!s) { s = fHard.checked ? empty() : sc({ fs_roots: [AWS], net_hosts: ["*"], shell_bins: ["*"], wallets: ["default"] }); tag = '<span class="chip hands">fallback</span>'; cls = " fall"; }
       else tag = '<span class="chip ' + (src[t] === "agent entry" ? "jev" : "data") + '">' + src[t] + "</span>";
       var deny = ["fs_roots", "net_hosts", "env_reads", "shell_bins", "wallets"].every(function (k) { return !s[k].length; });
       if (deny) { cls = " deny"; tag += ' <span class="chip bad">deny-all</span>'; }
@@ -673,7 +689,7 @@
     document.getElementById("f-out").innerHTML = out.join("");
     document.getElementById("f-note").innerHTML = fStep.checked
       ? "Step workspace (example) <code>" + AWS + "</code> joins every configured scope that is not deny-all."
-      : "In-process chat: no grant. The fallback is still rooted in the agent's workspace.";
+      : "In-process chat: no grant. The fallback is still rooted in the agent's workspace (deny-all when hardened).";
   }
   [fOwn, fStep, fHard].forEach(function (e) { e.addEventListener("change", fold); });
   fold();
@@ -687,7 +703,7 @@
     if (!hardened) {
       head.textContent = "Not hardened";
       out.className = "errs ok";
-      out.innerHTML = "<li>None of these rules apply: the sandbox loads. Tools without a scope keep a shell in their fallback.</li>";
+      out.innerHTML = "<li>None of these rules apply: the sandbox loads. Tools without a scope keep the fallback: the workspace, any host, a shell, no env var.</li>";
       return;
     }
     var prof = H.prof.value;
@@ -711,7 +727,7 @@
     if (!errs.length) {
       head.textContent = "Loads (hardened)";
       out.className = "errs ok";
-      out.innerHTML = "<li>✓ Every agent gets <code>no_shell_fallback</code>: tools without a scope run no shell, no shell skill loads, and writers also refuse the five prompt files.</li>";
+      out.innerHTML = "<li>✓ Every agent gets <code>no_shell_fallback</code>: tools without a scope get deny-all, no shell skill loads, and writers also refuse the five prompt files.</li>";
       return;
     }
     head.textContent = "Config validation failed (" + errs.length + " issue" + (errs.length === 1 ? "" : "s") + ")";

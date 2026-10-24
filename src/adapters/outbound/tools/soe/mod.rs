@@ -42,7 +42,7 @@ use serde_json::{Map, Value};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::soe::runner::{skill_sha256_of, SKILL_SHA256_ENV};
 use crate::adapters::outbound::soe::store::FsCycleStore;
-use crate::adapters::outbound::tools::xlab::{field, object_args, opt_str};
+use crate::adapters::outbound::tools::args::{field, object_args, opt_str};
 use crate::application::soe::submit::UNBOUND;
 use crate::config::paths::expand_tilde;
 use crate::config::sections::SandboxSections;

@@ -21,16 +21,17 @@ mod tool;
 mod trace;
 
 use clap::{Parser, Subcommand};
+use tracing::Instrument;
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use crate::adapters::outbound::secrets;
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::paths::{default_config_path, resolve_tengu_home};
-use crate::config::{Config, RuntimeProfile};
-use doctor::{print_status, run_doctor};
+use crate::config::Config;
+use doctor::run_doctor;
 use run_agent::run_agent_subprocess;
 use skill::run_skill_command;
 
@@ -54,8 +55,7 @@ enum Commands {
         #[arg(long)]
         sandbox: Option<String>,
     },
-    /// Print static runtime status snapshot.
-    Status,
+
     /// Run runtime/environment diagnostics.
     Doctor {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
@@ -86,10 +86,11 @@ enum Commands {
         sandbox: Option<String>,
     },
     /// Run the inbound webhook listener (`[webhooks.endpoints.<name>]` blocks
-    /// in the sandbox config bind URL paths to agents). Returns 202 Accepted
-    /// on every authenticated POST and dispatches a one-shot orchestrator
-    /// turn in the background. Takes the leases `tengu run` takes (never
-    /// beside it); SIGINT / SIGTERM drain it. Build with `--features webhooks`.
+    /// in the sandbox config bind URL paths to agents or loops). Returns 202
+    /// Accepted on every authenticated POST and dispatches a one-shot
+    /// orchestrator turn or a loop event in the background. It is `tengu
+    /// run` with no feeds and only the endpoints' loops: the same leases
+    /// (never beside it), heartbeat and drain. Feature `webhooks` (default).
     Webhooks {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
@@ -291,7 +292,7 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         max_runs: u32,
     },
-    /// Manage encrypted secrets vault in ~/.tengu/secrets.vault
+    /// Manage encrypted secrets vault in <TENGU_HOME>/secrets.vault
     Secret {
         #[command(subcommand)]
         action: SecretAction,
@@ -302,19 +303,23 @@ enum Commands {
         #[command(subcommand)]
         action: keys::KeysAction,
     },
-    /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
+    /// Remove cached/ephemeral state. Without --sandbox: the shared
+    /// <TENGU_HOME>/memory and <TENGU_HOME>/logs (every sandbox's traces and
+    /// the audit logs). <TENGU_HOME>/state, the vault, the config and the
+    /// skills always stay.
     Prune {
-        /// Also prune workspace-local state for this sandbox
+        /// Prune only this sandbox: its execution traces, its workspaces'
+        /// state and the vectors of its own `[memory] store_path`; the shared
+        /// logs and memory stay
         #[arg(long)]
         sandbox: Option<String>,
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
-        /// Hard reset: empty each workspace root — every file and directory in
-        /// it (its `.tengu/` cache and workspace skills, agent output, anything
-        /// else) — plus the top-level scaffold directories and the root
-        /// TENGU_PLAN.md / TENGU_PLANNER_REGISTRY.md. The workspace roots, the
-        /// sandbox config and `<TENGU_HOME>/state` stay. Requires --sandbox.
+        /// Hard reset: empty each workspace root of the sandbox — every file
+        /// and directory in it (its `.tengu/` cache and workspace skills,
+        /// agent output, anything else). The workspace roots, the sandbox
+        /// config and `<TENGU_HOME>/state` stay. Requires --sandbox.
         #[arg(long)]
         hard: bool,
     },
@@ -454,6 +459,89 @@ enum SkillAction {
     },
 }
 
+/// Where a command's tracing lines go ([`init_logging`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LogSink {
+    /// stderr only: stdout carries a protocol (MCP, the `run-agent` IPC
+    /// JSON) or data.
+    Stderr,
+    /// `<TENGU_HOME>/logs/tengu.log` only: the TUI owns the terminal.
+    File,
+    /// `tengu.log` and stderr: the long-running servers (`telegram`,
+    /// `webhooks`, `run`, `studio`, `a2a serve`), so `tail -f tengu.log`
+    /// works next to the console. Never stdout: the Studio server prints its
+    /// URL there alone.
+    FileAndStderr,
+    /// stdout: every other command.
+    Stdout,
+}
+
+/// Install the process's one tracing subscriber.
+///
+/// | Rule | Why |
+/// |---|---|
+/// | filter = `RUST_LOG` when set, else `default` | an added `tengu=info` used to replace `RUST_LOG`'s own `tengu=` level, so `RUST_LOG=tengu=debug` logged at info |
+/// | ANSI colours only on a terminal | a `run-agent` child's stderr is a pipe its parent copies into `tengu.log` |
+/// | a `tengu.log` that cannot open → stderr (the TUI: no log), one line says why | the TUI and Telegram used to panic on an unwritable log dir |
+fn init_logging(sink: LogSink, default: &str) {
+    use std::io::IsTerminal;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
+    let file = match sink {
+        LogSink::File | LogSink::FileAndStderr => {
+            let path = resolve_tengu_home().join("logs").join("tengu.log");
+            let opened = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                });
+            match opened {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    let instead = if sink == LogSink::File {
+                        "logging off"
+                    } else {
+                        "logging to stderr only"
+                    };
+                    eprintln!("tengu: cannot open {}: {e}; {instead}", path.display());
+                    None
+                }
+            }
+        }
+        LogSink::Stderr | LogSink::Stdout => None,
+    };
+    let file_layer = file.map(|f| {
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+    });
+    let stderr_layer = matches!(sink, LogSink::Stderr | LogSink::FileAndStderr).then(|| {
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(std::io::stderr().is_terminal())
+            .with_writer(std::io::stderr)
+    });
+    let stdout_layer = (sink == LogSink::Stdout).then(|| {
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(std::io::stdout().is_terminal())
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
+        .with(stderr_layer)
+        .with(stdout_layer)
+        .init();
+}
+
 pub(crate) async fn run() -> Result<()> {
     // Load .env first (highest priority after shell env), then parse CLI so we can
     // special-case subprocess modes that must keep stdout protocol-clean.
@@ -469,14 +557,7 @@ pub(crate) async fn run() -> Result<()> {
         if !matches!(action, sandbox::SandboxAction::New { no_open: false, .. }) {
             // Quiet by default (skill discovery logs a line per skill);
             // RUST_LOG=tengu=info shows every step.
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=warn")),
-                )
-                .compact()
-                .with_writer(std::io::stderr)
-                .init();
+            init_logging(LogSink::Stderr, "tengu=warn");
         }
         match tokio::task::block_in_place(|| sandbox::run_sandbox(action))? {
             Some(open) => {
@@ -491,108 +572,58 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     if matches!(cli.command, Some(Commands::McpBridge)) {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
-        return crate::adapters::inbound::mcp_bridge::run_mcp_bridge().await;
+        init_logging(LogSink::Stderr, "tengu=info");
+        let session = std::env::var("TENGU_SESSION_ID").ok();
+        return crate::adapters::inbound::mcp_bridge::run_mcp_bridge()
+            .instrument(crate::bootstrap::trace::turn_span(session.as_deref()))
+            .await;
     }
 
     #[cfg(feature = "postgres_memory")]
     if matches!(cli.command, Some(Commands::AgenticMemoryServer)) {
         // Stdout carries the JSON-RPC protocol — route tracing to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return crate::adapters::inbound::mcp_bridge::run_agentic_memory_mcp_server().await;
     }
 
     if matches!(cli.command, Some(Commands::RunAgent)) {
         // Subprocess mode — stdout is JSON only, everything else goes to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
-        return run_agent_subprocess().await;
+        init_logging(LogSink::Stderr, "tengu=info");
+        // Its ids are known once the IPC input is read (`run_agent.rs`).
+        return run_agent_subprocess()
+            .instrument(crate::bootstrap::trace::turn_span(None))
+            .await;
     }
 
     if let Some(Commands::Tool { action }) = cli.command {
         // stdout is one JSON value; logs go to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return tool::run_tool_command(cli.config, action).await;
     }
 
     if let Some(Commands::Evidence { action }) = cli.command {
         // No config, secrets or egress: read-only files + the new vault.
         // stdout carries the report; logs go to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return tokio::task::block_in_place(|| evidence::run_evidence(action));
     }
 
     if let Some(Commands::Lineage(args)) = cli.command {
         // Registry only — no config, no secrets; stdout carries the view.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return lineage::run_lineage(args);
     }
 
     if let Some(Commands::Soe(args)) = cli.command {
         // Profile + record files only — no config, secrets or egress; stdout
         // carries the report.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return soe::run_soe(args, cli.config).await;
     }
 
     if let Some(Commands::Trace { sandbox, action }) = cli.command {
         // Trace files only — no config, no secrets; stdout carries JSON lines.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return trace::run_trace(sandbox, action).await;
     }
 
@@ -626,67 +657,18 @@ pub(crate) async fn run() -> Result<()> {
                 }
         )
     );
-    if is_tui {
-        let log_dir = resolve_tengu_home().join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("tengu.log"))
-            .expect("Failed to open log file");
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::sync::Mutex::new(log_file))
-            .with_ansi(false)
-            .init();
+    let sink = if is_tui {
+        LogSink::File
     } else if is_telegram || is_webhooks {
-        use tracing_subscriber::layer::SubscriberExt;
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=info"));
-        let log_dir = resolve_tengu_home().join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("tengu.log"))
-            .expect("Failed to open log file");
-        let file_layer = tracing_subscriber::fmt::layer()
-            .compact()
-            .with_ansi(false)
-            .with_writer(std::sync::Mutex::new(log_file));
-        let stderr_layer = tracing_subscriber::fmt::layer()
-            .compact()
-            .with_writer(std::io::stderr);
-        let subscriber = tracing_subscriber::registry()
-            .with(filter)
-            .with(file_layer)
-            .with(stderr_layer);
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("Failed to set tracing subscriber");
+        LogSink::FileAndStderr
     } else if stdout_is_data(&cli.command) {
         // stdout carries JSON (lines) / the operator's report; logs go to
         // stderr, so `tengu decide … | jq` reads the JSON alone.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        LogSink::Stderr
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .init();
-    }
+        LogSink::Stdout
+    };
+    init_logging(sink, "tengu=info");
 
     let config_path = cli.config.unwrap_or_else(default_config_path);
     // `run-agent` children and the MCP bridge resolve the config through
@@ -730,19 +712,12 @@ pub(crate) async fn run() -> Result<()> {
     // `load_sandbox_or` re-installs from the sandbox config.
     crate::adapters::outbound::egress::install(&config.egress)?;
 
-    let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
-
     match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
         Commands::Chat { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             tokio::task::block_in_place(|| {
-                crate::adapters::inbound::tui::run_tui(config, profile, secret_registry)
+                crate::adapters::inbound::tui::run_tui(config, secret_registry)
             })
-        }
-        Commands::Status => {
-            print_status(&config, profile);
-            Ok(())
         }
         Commands::Doctor {
             sandbox,
@@ -755,8 +730,7 @@ pub(crate) async fn run() -> Result<()> {
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             crate::adapters::inbound::telegram::run_telegram(config, secret_registry)
         }),
         #[cfg(not(feature = "telegram"))]
@@ -765,21 +739,19 @@ pub(crate) async fn run() -> Result<()> {
         }
         #[cfg(feature = "webhooks")]
         Commands::Webhooks { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
-            crate::adapters::inbound::webhooks::run_webhooks(config, secret_registry).await
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
+            crate::adapters::inbound::run::run_webhooks(config, secret_registry).await
         }
         #[cfg(not(feature = "webhooks"))]
         Commands::Webhooks { .. } => {
             anyhow::bail!("webhook listener requires: cargo build --features webhooks")
         }
         Commands::Run { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             crate::adapters::inbound::run::run_runtime(config, secret_registry).await
         }
         Commands::A2a { sandbox, action } => {
-            let config = load_sandbox_or(sandbox, config)?;
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             a2a::run_a2a(config, action, secret_registry).await
         }
         Commands::Decide {
@@ -788,8 +760,7 @@ pub(crate) async fn run() -> Result<()> {
             event,
             map,
         } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             decide::run_decide(
                 &config,
                 loop_name.as_deref(),
@@ -804,8 +775,7 @@ pub(crate) async fn run() -> Result<()> {
             serve,
             action,
         } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             studio::run_studio(config, serve, action, secret_registry).await
         }
         Commands::History { sandbox, action } => {
@@ -863,9 +833,20 @@ pub(crate) async fn run() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Prune { sandbox, yes, hard } => {
+            // `--sandbox`: that sandbox's workspaces, scaffold dirs, trace dir
+            // name and own `[memory] store_path` (`prune.rs` module table).
+            let mut scope: Option<(String, Option<PathBuf>)> = None;
             let (workspaces, project_dirs): (Vec<PathBuf>, Vec<String>) =
                 if let Some(ref name) = sandbox {
                     let config = load_sandbox_or(Some(name.clone()), config)?;
+                    scope = Some((
+                        crate::bootstrap::runtime::runner_name(&config),
+                        config
+                            .memory
+                            .store_path
+                            .as_deref()
+                            .map(|p| crate::config::paths::expand_tilde(Path::new(p))),
+                    ));
                     let ws = config
                         .agents
                         .values()
@@ -896,8 +877,10 @@ pub(crate) async fn run() -> Result<()> {
             let targets = crate::adapters::outbound::prune::plan_prune(
                 &crate::adapters::outbound::prune::PruneOptions {
                     tengu_home: &tengu_home,
+                    sandbox: scope.as_ref().map(|(name, _)| name.as_str()),
                     workspaces: &workspaces,
                     project_dirs: &project_dirs,
+                    memory_store: scope.as_ref().and_then(|(_, store)| store.as_deref()),
                     hard,
                 },
             );
@@ -1031,6 +1014,23 @@ fn stdout_is_data(command: &Option<Commands>) -> bool {
     )
 }
 
+/// Load the sandbox (`load_sandbox_or`) and the redaction registry that
+/// goes with it (`registry_after_keys`) in one call: every command that
+/// takes a registry uses this, so none can skip the extension (`tengu a2a
+/// serve` did, 2026-10-22: its seal-proxy session token went unmasked).
+fn sandbox_ctx(
+    sandbox: Option<String>,
+    config: Config,
+    registry: std::sync::Arc<crate::domain::secrets::SecretRegistry>,
+) -> Result<(
+    Config,
+    std::sync::Arc<crate::domain::secrets::SecretRegistry>,
+)> {
+    let config = load_sandbox_or(sandbox, config)?;
+    let registry = registry_after_keys(registry, &config);
+    Ok((config, registry))
+}
+
 /// The startup redaction registry, extended when `[keys]` exported a
 /// seal-proxy session after it was made (`load_sandbox_or` runs later), so
 /// the session token is masked on this process's surfaces too. Extended,
@@ -1063,6 +1063,31 @@ fn loads_vault_at_startup(command: &Option<Commands>) -> bool {
 mod tests {
     use super::*;
 
+    /// S12: an arm that loads a sandbox with `load_sandbox_or` and then
+    /// hands `secret_registry` on skipped the `[keys]` extension (`tengu a2a
+    /// serve`); such arms must use `sandbox_ctx`.
+    #[test]
+    fn registry_commands_load_through_sandbox_ctx() {
+        let src = include_str!("mod.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.contains("load_sandbox_or(sandbox, config)") {
+                continue;
+            }
+            let next = lines[i + 1..]
+                .iter()
+                .take(4)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !next.contains("secret_registry"),
+                "line {}: use sandbox_ctx so the registry gets the [keys] session\n{next}",
+                i + 1
+            );
+        }
+    }
+
     fn command(args: &[&str]) -> Option<Commands> {
         Cli::try_parse_from(args).expect("parse").command
     }
@@ -1093,7 +1118,11 @@ mod tests {
             Some("xlab-w2")
         );
         assert_eq!(replacing_sandbox(&command(&["tengu", "chat"])), None);
-        assert_eq!(replacing_sandbox(&command(&["tengu", "status"])), None);
+        assert_eq!(replacing_sandbox(&command(&["tengu", "doctor"])), None);
+        assert!(
+            Cli::try_parse_from(["tengu", "status"]).is_err(),
+            "status is gone"
+        );
         assert_eq!(replacing_sandbox(&command(&["tengu"])), None);
     }
 

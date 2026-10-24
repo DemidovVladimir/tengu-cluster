@@ -47,9 +47,7 @@ impl MetricKind for ToolAssertionKind {
 
         // If all ToolCtx fields are present, dispatch live; otherwise degrade to
         // registration-only check (backwards-compatible with pre-Task-12 evals).
-        let (Some(http), Some(secret_registry), Some(activity)) =
-            (ctx.http, ctx.secret_registry, ctx.activity)
-        else {
+        let (Some(http), Some(secret_registry)) = (ctx.http, ctx.secret_registry) else {
             // Degraded path: just check registration.
             let registered = registry.definitions().iter().any(|d| d.name == tool_name);
             if !registered {
@@ -83,9 +81,7 @@ impl MetricKind for ToolAssertionKind {
             scope,
             shell: ctx.shell,
             http,
-            memory_manager: ctx.memory_manager,
             secret_registry,
-            activity,
             conversation: crate::ports::tool::ConversationView::empty(),
             // Eval-time tool dispatch: no calling-agent context to thread.
             agent_config: None,

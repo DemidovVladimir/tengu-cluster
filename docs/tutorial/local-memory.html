@@ -130,7 +130,7 @@
           <rect x="210" y="140" width="150" height="100" rx="10"/>
           <text x="285" y="167" text-anchor="middle" class="t-kanji k">心</text>
           <text x="285" y="189" text-anchor="middle" class="t-title">Chat turn</text>
-          <text x="285" y="207" text-anchor="middle" class="t-small">[Relevant memories]</text>
+          <text x="285" y="207" text-anchor="middle" class="t-small">fenced memories in user turn</text>
           <text x="285" y="222" text-anchor="middle" class="t-small">+ recent history</text>
         </g>
         <g class="n brain" data-at="1,4-7,9">
@@ -196,15 +196,15 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>~/.tengu/memory/</code>. No key: memory stays off, with a warning.</li>
+        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>[memory] store_path</code> or <code>&lt;TENGU_HOME&gt;/memory/</code>. No key: memory stays off, with a warning.</li>
         <li>The system prompt loads <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code> from the agent's workspace: up to 2000 tokens each, 32000 in total.</li>
         <li>A message about the last, latest, newest, previous or most recent thing skips recall. A system note tells the model to verify instead.</li>
-        <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>) join the prompt as <code>[Relevant memories]</code>.</li>
-        <li><code>memory_ingest</code>: secrets are redacted, the text embedded, one entry appended. Under a lock file the store re-reads the file, applies the change and rewrites it through a temp file and a rename, so two processes keep each other's rows.</li>
+        <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>), capped at <code>max_recall_tokens</code> (600), join the head of the user message after a system note, inside one <code>&lt;untrusted origin="memory"&gt;</code> fence, never as a system message and never stored in history.</li>
+        <li><code>memory_ingest</code>: secrets are redacted, the text embedded, one entry appended. Under a lock file the store re-reads the file, applies the change and rewrites it whole (a 0600 temp file, fsync, rename), so two processes keep each other's rows.</li>
         <li><code>memory_search</code>: a query plus optional <code>agent</code>, <code>source</code> or <code>kind</code> filters. Returns JSON hits with text, score and metadata.</li>
         <li><code>persistent_store</code> (opt-in): the source path must pass the tool's read scope; the file is copied under <code>.tengu/storage/</code>, its text extracted (PDF, docx, xlsx or UTF-8), chunked, one entry per chunk.</li>
         <li><code>shared_cache</code> (opt-in): <code>get</code>, <code>put</code>, <code>delete</code>, <code>list</code> by namespace and key in <code>.tengu/cache.db</code>. Non-JSON values are stored as JSON strings.</li>
-        <li>Planner calls are not saved here: their prompt is the whole assembled planner context, which recall would hand back as a memory. Cross-plan recall reads Postgres <code>agentic_memory</code> (<a href="memory.html">memory</a>).</li>
+        <li>Planner calls never touch this store: the planner's engine gets one message and no memory manager. Cross-plan recall reads Postgres <code>agentic_memory</code> (<a href="memory.html">memory</a>).</li>
       </ol>
     </div>
   </figure>
@@ -224,7 +224,6 @@
     <div class="brain"><span><b>PROFILE.md</b><small>Same rule. Empty files are skipped.</small></span><em>≤ 2000 tok</em></div>
     <div class="brain"><span><b>CONTEXT.md</b><small>Same rule. Over 32000 in total: this and later files are left out.</small></span><em>≤ 2000 tok</em></div>
     <div class="hands"><span><b>Skill contexts</b><small>Each skill's text; one over the total is dropped with a warning.</small></span><em>≤ 16000 tok</em></div>
-    <div><span><b># Tools</b><small>A name(required args) list, when tools are advertised and the agent has a workspace.</small></span><em>+10% slack</em></div>
   </div>
   <p class="note">Plan steps (<code>tengu run-agent</code>) build their own prompt from skills and the plan; they do not load profile files. In a hardened sandbox, file writers refuse <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code>.</p>
 </section>
@@ -233,7 +232,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: type a message</span>
     <h2 id="s-ground">Will this turn recall?</h2>
-    <p>The check looks for seven markers as whole words, case ignored. It runs on every in-process chat turn; the planner turns it off.</p>
+    <p>The check looks for seven markers as whole words, case ignored. It runs on every in-process chat turn; the planner's call never reaches it.</p>
   </div>
   <div class="widget">
     <label for="gq">message <input id="gq" type="text" value="Summarize my LP notes" spellcheck="false" autocomplete="off"></label>
@@ -283,15 +282,15 @@
       <h3>memory/vectors.bin</h3>
       <dl class="kv"><dt>holds</dt><dd>every entry: id, text, 1536 floats, metadata</dd>
       <dt>writers</dt><dd><code>memory_ingest</code>, <code>persistent_store</code></dd>
-      <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>~/.tengu/memory/</code></dd>
-      <dt>cleared by</dt><dd><code>/purge</code>, <code>tengu prune</code></dd></dl>
+      <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>&lt;TENGU_HOME&gt;/memory/</code></dd>
+      <dt>cleared by</dt><dd><code>/purge</code>, <code>tengu prune --sandbox &lt;s&gt;</code> (a workspace's, or its own <code>store_path</code>), <code>tengu prune</code> (the shared one)</dd></dl>
     </div>
     <div class="card data">
       <h3>.tengu/storage/&lt;file_id&gt;/</h3>
       <dl class="kv"><dt>holds</dt><dd>the raw file + <code>manifest.json</code> with its chunk ids</dd>
       <dt>writer</dt><dd><code>persistent_store</code> <code>store</code></dd>
       <dt>search</dt><dd>kind <code>persistent_store</code> only, one hit per file</dd>
-      <dt>cleared by</dt><dd><code>delete</code> (its vectors too), <code>tengu prune</code></dd></dl>
+      <dt>cleared by</dt><dd><code>delete</code> (its vectors too), <code>tengu prune --sandbox &lt;s&gt;</code></dd></dl>
     </div>
     <div class="card data">
       <h3>.tengu/cache.db</h3>
@@ -301,7 +300,7 @@
       <dt>cleared by</dt><dd><code>delete</code> per key, <code>tengu prune --hard</code></dd></dl>
     </div>
   </div>
-  <p class="note warn"><b>Present in code, not wired.</b> The builtin provider can also load <code>AGENTS.md</code>, <code>MEMORY.md</code>, <code>USER.md</code> and daily logs (<code>.tengu/memory/&lt;date&gt;.md</code>), and a <code>&lt;memory-context&gt;</code> fence exists. No live path calls either, and nothing writes daily logs.</p>
+  <p class="note warn"><b>Not loaded anywhere.</b> No prompt reads <code>AGENTS.md</code>, <code>MEMORY.md</code>, <code>USER.md</code> or daily logs; their unwired loader was deleted on 2026-10-22. Chat recall reaches the model in one <code>&lt;untrusted origin="memory"&gt;</code> fence after a system note (<code>application/memory/fencing.rs</code>).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -324,7 +323,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Store, list, purge</h2>
-    <p><code>storage-test</code> turns memory on with 5000-char chunks; its agent runs on Claude Code (build with <code>--features claude_code</code>). Durable cross-session memory is <a href="memory.html">Open Brain</a>.</p>
+    <p><code>storage-test</code> turns memory on with 5000-char chunks; its agent runs on Claude Code (<code>claude</code> logged in). Durable cross-session memory is <a href="memory.html">Open Brain</a>.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>export OPENROUTER_API_KEY=&lt;your key&gt;</span>
@@ -347,14 +346,13 @@
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/bootstrap/memory.rs</code></td><td>store path, <code>MemoryManager</code> build, key check</td></tr>
-        <tr><td><code>src/application/memory/manager.rs</code></td><td>one builtin + one external provider; ingest, search, delete, purge</td></tr>
-        <tr><td><code>src/application/memory/injector.rs</code>, <code>writer.rs</code>, <code>fencing.rs</code></td><td>pre-turn fence, post-turn Q/A write</td></tr>
+        <tr><td><code>src/application/memory/manager.rs</code></td><td>the vector backend (embedder + store): ingest, search, delete, purge</td></tr>
+        <tr><td><code>src/application/memory/fencing.rs</code></td><td>the chat recall block: a note + one <code>domain::untrusted</code> fence (its cleaner runs to a fixpoint)</td></tr>
         <tr><td><code>src/adapters/outbound/memory/disk_vector.rs</code></td><td><code>vectors.bin</code>, cosine scan, metadata filters</td></tr>
         <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>OpenRouter embeddings client (<code>{OPENROUTER_BASE_URL}/v1/embeddings</code>)</td></tr>
-        <tr><td><code>src/adapters/outbound/memory/builtin.rs</code></td><td>the builtin provider: prefetch, Q/A sync, file loader</td></tr>
         <tr><td><code>src/adapters/outbound/tools/memory/</code></td><td><code>memory_ingest</code>, <code>memory_search</code>, <code>persistent_store</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/cache/</code></td><td><code>shared_cache</code> and <code>cache.db</code></td></tr>
-        <tr><td><code>src/ports/memory.rs</code></td><td><code>MemoryProvider</code>, <code>VectorStore</code>, <code>Embedding</code>, <code>MemoryService</code></td></tr>
+        <tr><td><code>src/ports/memory.rs</code></td><td><code>VectorStore</code>, <code>Embedding</code>, <code>MemoryService</code>, <code>RecallStore</code></td></tr>
         <tr><td><code>src/application/chat/service.rs</code></td><td><code>[Relevant memories]</code> recall, grounding check</td></tr>
         <tr><td><code>src/application/skills/registry.rs</code></td><td>system prompt with profile files</td></tr>
       </tbody>
@@ -363,7 +361,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -401,7 +399,7 @@
       gd.innerHTML = "Marker <code>" + esc(hits[0]) + "</code> found as a whole word. No memory search; a system note asks the model to verify against the conversation and tools.";
     } else {
       gv.className = "verdict ok"; gv.textContent = "recall runs";
-      gd.innerHTML = "The last message is embedded; the 5 nearest entries (<code>max_recall_entries</code>) join as <code>[Relevant memories]</code>." + (inside ? " A marker sits inside a longer word only, which does not count." : "");
+      gd.innerHTML = "The last message is embedded; the 5 nearest entries (<code>max_recall_entries</code>) join the user message, capped and fenced in <code>&lt;untrusted origin=\"memory\"&gt;</code>." + (inside ? " A marker sits inside a longer word only, which does not count." : "");
     }
   }
   gq.addEventListener("input", ground);

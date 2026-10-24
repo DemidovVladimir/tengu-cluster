@@ -29,7 +29,7 @@
 > | 1 — legacy vector facade | ✅ done → removed | `src/adapters/rag/` + `tengu registry` CLI deleted in Phase 6 (2026-05-14) |
 > | 2 — agents + orchestrator skill | ✅ done → revised | `agents/*.toml` replaced by `[agents.<name>]` in `sandboxes/<name>/config.toml` (2026-09-18); `skills/orchestrator/` |
 > | 3 — runner subprocess | ✅ done | `adapters/outbound/subprocess_runner.rs` (was `runner.rs`), run-agent subcommand, IPC |
-> | 4 — dual-mode planner | ✅ done | `RagPlanner`, build_orchestrator branch |
+> | 4 — dual-mode planner | ✅ done | `RegistryPlanner`, build_orchestrator branch |
 > | 4b — SubprocessRunner cutover | ✅ done | impl WorkerHandle for subprocess |
 > | 4c — SKILL.md as planner prompt | ✅ done | run_*_with_system + tool stripping |
 > | 5a — real LLM in subprocess | ✅ done | One-turn LLM call, no tools |
@@ -37,11 +37,11 @@
 > | 5c — protocol enforcement | ✅ done | Failed iff no compress AND no text |
 > | 6.1 (lite) — planner tracing | ✅ done | tracing::info per plan/replan |
 > | 6.5 — cross-plan recall | ✅ done | replan queries prior step outputs; `postgres_memory` uses Postgres |
-> | 6.4 (lite) — session history buffer | ✅ done | In-memory ring buffer of last-N user messages in RagPlanner; injected as "Recent user messages" block in plan/replan |
-> | 6.1 (full) — RagQueried event | ✅ done | `RagPlanner` fires `OrchestratorEvent::RagQueried` on every plan/replan; TUI panel via `TENGU_TUI_RAG_DEBUG=1` |
+> | 6.4 (lite) — session history buffer | ✅ done | In-memory ring buffer of last-N user messages in RegistryPlanner; injected as "Recent user messages" block in plan/replan |
+> | 6.1 (full) — RagQueried event | removed 2026-10-22 | the registry is a file: every entry had score 1.0, so the event, its INFO line and the `TENGU_TUI_RAG_DEBUG` panel were dropped (R3) |
 > | 6.2 — content-hash dedup | — moot | No indexer: the registry is re-rendered to `TENGU_PLANNER_REGISTRY.md` each planner turn (Phase 6) |
 > | 6.3 — filter-based TTL purge | — moot | `ttl_days` removed with Qdrant (ignored if present) |
-> | 6.4 (full) — Open Brain user-event persistence | ✅ done | `RagPlanner::persist_user_message` → Postgres `agentic_memory`; recall via `[memory] cross_session_msg_top_k` |
+> | 6.4 (full) — Open Brain user-event persistence | ✅ done | `RegistryPlanner::persist_user_message` → Postgres `agentic_memory`; recall via `[memory] cross_session_msg_top_k` |
 > | 6.6 — MCP tool indexing | ✅ done | MCP tools rendered into the registry by `shared_files::render_registry(workspace, agents, mcp_tools)` |
 > | 6.7 — C→B fallback (B half) | ✅ done | `Step.compose` / `AgentIpcInput.compose` override the base agent's skills/tools wholesale |
 > | 7.1 — delete legacy | ✅ done | `roster.rs`, `ChatWorker`, `engine = "static"` removed; `wiring.rs` kept for the planner LLM port |
@@ -163,7 +163,7 @@ not create a parallel block.
 > Today (2026-09-18): `ttl_days`, `qdrant_*`, `backend`, `vector_size` are gone
 > (ignored if present — `memory_config_ignores_removed_qdrant_keys`);
 > `session_recent_n` / `cross_plan_top_k` remain; there is no `[rag]` block;
-> `[orchestrator] engine` accepts only `"rag"`.
+> `[orchestrator] engine` is gone (2026-10-23): the planner runs on its `agent`'s engine.
 
 ```toml
 [memory]

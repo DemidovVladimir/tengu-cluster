@@ -32,9 +32,6 @@
 //! | a `WIDEN` field that is not an input of the target · a value that does not parse as the field's type · no end and no reason | `unknown_field` · `invalid_field` (`invalid_amount`, `invalid_bps`) · `invalid_field` |
 //! | an empty claim | `invalid_field` |
 
-// Consumers land with the `soe_challenge` tool and the cycle.
-#![allow(dead_code)]
-
 use std::fmt;
 use std::str::FromStr;
 

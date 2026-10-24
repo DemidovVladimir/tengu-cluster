@@ -11,29 +11,20 @@
 //! registry before they leave (the vault values, `*_TOKEN` … env values).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::application::a2a::{A2aService, Limits};
-use crate::application::chat::tool_loop::collect_engine_response;
-use crate::application::memory::manager::MemoryManager;
-use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::a2a::A2aServerConfig;
 use crate::config::Config;
 use crate::domain::a2a::card::{self, CardSpec};
 use crate::domain::a2a::model::AgentCard;
-use crate::domain::message::{Message, Role};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::a2a::{A2aRunner, A2aTarget, A2aTurn};
-use crate::ports::engine::{Engine, EngineContext, ToolExecutor};
-use crate::ports::orchestration::ChatServiceFactory;
-use crate::ports::tool_activity::ToolActivityPort;
 
 /// Longest earlier turn text handed back to the planner (chars).
 const HISTORY_TURN_CHARS: usize = 4_000;
@@ -150,7 +141,6 @@ pub(crate) fn build_service(config: &Config, secrets: Arc<SecretRegistry>) -> Re
     let server = server_config(config)?;
     let runner = Arc::new(TurnRunner {
         config: Arc::new(config.clone()),
-        memory: Arc::new(MemoryManager::new()),
         secrets,
     });
     Ok(A2aService::new(
@@ -168,19 +158,24 @@ pub(crate) fn build_service(config: &Config, secrets: Arc<SecretRegistry>) -> Re
 /// Answers an inbound turn (module table).
 struct TurnRunner {
     config: Arc<Config>,
-    memory: Arc<MemoryManager>,
     secrets: Arc<SecretRegistry>,
 }
 
 #[async_trait]
 impl A2aRunner for TurnRunner {
     async fn run(&self, target: &A2aTarget, turn: A2aTurn) -> Result<String> {
-        let out = match target {
-            A2aTarget::Planner => self.planner_turn(&turn).await,
-            A2aTarget::Agent(name) => {
-                agent_turn(&self.config, name, None, &turn.history, &turn.text).await
+        let session = format!("a2a-{}", turn.context_id);
+        let span = crate::bootstrap::trace::turn_span(Some(&session));
+        let out = async {
+            match target {
+                A2aTarget::Planner => self.planner_turn(&turn).await,
+                A2aTarget::Agent(name) => {
+                    agent_turn(&self.config, name, &session, &turn, &self.secrets).await
+                }
             }
-        };
+        }
+        .instrument(span)
+        .await;
         out.map(|text| self.secrets.redact(&text))
             .map_err(|e| anyhow!(self.secrets.redact(&format!("{e:#}"))))
     }
@@ -188,20 +183,14 @@ impl A2aRunner for TurnRunner {
 
 impl TurnRunner {
     async fn planner_turn(&self, turn: &A2aTurn) -> Result<String> {
-        let factory: Arc<dyn ChatServiceFactory> = Arc::new(A2aChatServiceFactory {
-            cfg: Arc::clone(&self.config),
-        });
+        // The planner calls its own engine (no tools); steps are
+        // `run-agent` children.
+        let llm = crate::bootstrap::orchestrator::planner_llm(&self.config)?
+            .ok_or_else(|| anyhow!("the planner is not available (no [orchestrator])"))?;
         let session_id = format!("a2a-{}", turn.context_id);
-        let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
-            &self.config,
-            factory,
-            Arc::clone(&self.memory),
-            session_id,
-            None,
-        )
-        .ok_or_else(|| {
-            anyhow!("the planner is not available ([orchestrator] engine must be \"rag\")")
-        })?;
+        let orchestrator =
+            crate::bootstrap::orchestrator::build_orchestrator(&self.config, llm, session_id, None)
+                .ok_or_else(|| anyhow!("the planner is not available (no [orchestrator])"))?;
         Ok(orchestrator.handle(planner_message(turn)).await)
     }
 }
@@ -236,151 +225,32 @@ fn planner_message(turn: &A2aTurn) -> String {
     out
 }
 
-/// The planner's `ChatServiceFactory`: the planner call (a system prompt
-/// override: no tools) and any agent turn it asks for.
-struct A2aChatServiceFactory {
-    cfg: Arc<Config>,
-}
-
-#[async_trait]
-impl ChatServiceFactory for A2aChatServiceFactory {
-    async fn run_turn(&self, agent: &str, text: &str) -> Result<String> {
-        agent_turn(&self.cfg, agent, None, &[], text).await
-    }
-
-    async fn run_turn_with_system(
-        &self,
-        agent: &str,
-        system_prompt: &str,
-        text: &str,
-    ) -> Result<String> {
-        agent_turn(&self.cfg, agent, Some(system_prompt), &[], text).await
-    }
-}
-
-/// One in-process turn of `agent_name`: its engine, workspace (or a temp
-/// dir for the turn), tools, skills and scopes — or, with
-/// `system_override` (the planner call) or for the `[orchestrator]` agent,
-/// no tools. `history` = earlier `(user, assistant)` pairs.
-pub(crate) async fn agent_turn(
+/// One in-process turn of `agent_name` (`bootstrap::turn::run_once`): its
+/// engine, workspace (or a temp dir for the turn), tools, skills and scopes —
+/// or, for the `[orchestrator]` agent, no tools. The turn's history =
+/// earlier `(user, assistant)` pairs; tool output redacted with `secrets`;
+/// metrics records under `session`.
+async fn agent_turn(
     cfg: &Config,
     agent_name: &str,
-    system_override: Option<&str>,
-    history: &[(String, String)],
-    text: &str,
+    session: &str,
+    turn: &A2aTurn,
+    secrets: &Arc<SecretRegistry>,
 ) -> Result<String> {
-    let agent = cfg
-        .agents
-        .get(agent_name)
-        .ok_or_else(|| anyhow!("unknown agent in an A2A turn: {agent_name}"))?;
-    let engine: Arc<dyn Engine> =
-        Arc::from(build_engine(agent_name, agent, cfg.claude_code.as_ref())?);
-    let (workspace_path, _turn_dir): (PathBuf, _) =
-        crate::bootstrap::tools::workspace_or_temp(agent.workspace.as_deref(), "tengu-a2a-")?;
-    let secret_registry = Arc::new(crate::adapters::outbound::secrets::process_secret_registry(
-        None,
-    ));
-    let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
-    let no_tools = system_override.is_some()
-        || cfg
-            .orchestrator
-            .as_ref()
-            .is_some_and(|o| o.agent == agent_name);
-    let base_tools = if no_tools {
-        Vec::new()
-    } else {
-        crate::bootstrap::tools::agent_base_tools(agent, true, false)
+    let no_tools = cfg
+        .orchestrator
+        .as_ref()
+        .is_some_and(|o| o.agent == agent_name);
+    let opts = crate::bootstrap::turn::TurnOpts {
+        system: None,
+        history: &turn.history,
+        no_tools,
+        memory: false,
+        temp_prefix: "tengu-a2a-",
+        session,
     };
-    let skill_source = FileSystemSkillSource::new(workspace_path.clone());
-    let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-    let mut skill_registry = SkillRegistry::new(base_reserved)
-        .with_allowlist(Some(agent.skill_packages.clone()))
-        .with_shell_skills(!agent.no_shell_fallback);
-    skill_registry.reload(&skill_source);
-    let current_tools = if no_tools {
-        Vec::new()
-    } else {
-        crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry)
-    };
-    let system_prompt = match system_override {
-        Some(s) => s.to_string(),
-        None => crate::bootstrap::tools::rebuild_system_prompt(
-            agent,
-            true,
-            &skill_registry,
-            &current_tools,
-        ),
-    };
-    let mut tool_defs = current_tools.clone();
-    let executor: Option<Arc<dyn ToolExecutor>> = if no_tools {
-        None
-    } else {
-        Some(
-            match crate::bootstrap::tools::build_tool_executor(
-                &workspace_path,
-                &current_tools,
-                &skill_registry,
-                &None,
-                &secret_registry,
-                log_activity,
-                None,
-                Some(&cfg.memory),
-                agent,
-                &cfg.mcp_servers,
-            ) {
-                Some(executor) => {
-                    tool_defs.extend(executor.additional_tool_defs(&tool_defs));
-                    Arc::new(
-                        crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-                            Arc::new(executor),
-                            Arc::clone(&secret_registry),
-                        ),
-                    ) as Arc<dyn ToolExecutor>
-                }
-                None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
-            },
-        )
-    };
-    let message = |role: Role, content: &str| Message {
-        role,
-        content: content.to_string(),
-        tool_call_id: None,
-        tool_calls: None,
-    };
-    let mut messages = vec![message(Role::System, &system_prompt)];
-    for (q, a) in history {
-        messages.push(message(Role::User, q));
-        messages.push(message(Role::Assistant, a));
-    }
-    messages.push(message(Role::User, text));
-    let (bridge_tools, mcp_servers) = crate::bootstrap::tools::bridge_inputs(
-        engine.manages_own_workspace(),
-        &tool_defs,
-        &cfg.mcp_servers,
-    );
-    let engine_context = EngineContext {
-        workspace: Some(workspace_path.clone()),
-        system_prompt: Some(system_prompt),
-        bridge_tools,
-        max_tool_rounds: Some(agent.limits.max_tool_rounds),
-        max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
-        mcp_servers,
-    };
-    let response = collect_engine_response(
-        &*engine,
-        &messages,
-        &tool_defs,
-        &engine_context,
-        executor.as_deref(),
-        None,
-        None,
-        None,
-        agent.limits.max_tool_rounds,
-        agent.limits.max_tool_result_chars,
-        agent.limits.stream_event_timeout_secs,
-        agent.limits.compact_result_limit,
-    )
-    .await?;
+    let response =
+        crate::bootstrap::turn::run_once(cfg, agent_name, &turn.text, secrets, opts).await?;
     Ok(response.text)
 }
 

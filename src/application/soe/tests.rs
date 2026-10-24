@@ -248,12 +248,6 @@ pub(crate) struct MemSourceStore {
 }
 
 impl MemSourceStore {
-    pub(crate) fn with(records: Vec<SourceRecord>) -> Self {
-        Self {
-            records: Mutex::new(records),
-        }
-    }
-
     pub(crate) fn add(&self, more: &[SourceRecord]) {
         self.records.lock().unwrap().extend_from_slice(more);
     }
@@ -391,20 +385,16 @@ impl StageRunner for ScriptedRunner {
             error: (!ok).then(|| "the synthetic child exited 1".to_string()),
             latency_ms: self.latency_ms,
             metrics: vec![MetricsRecord {
-                ts_unix: 0,
-                session_id: req.cycle_id.clone(),
-                kind: MetricsKind::Subagent,
-                agent: req.agent.clone(),
-                model: "synthetic-model".into(),
                 prompt_tokens: 12_000,
                 completion_tokens: 900,
                 total_tokens: 12_900,
-                prompt_chars: 0,
-                prompt_bytes: 0,
-                response_chars: 0,
                 latency_ms: self.latency_ms,
-                layers: Vec::new(),
-                step_id: None,
+                ..MetricsRecord::call(
+                    MetricsKind::Subagent,
+                    req.cycle_id.clone(),
+                    req.agent.clone(),
+                    "synthetic-model",
+                )
             }],
         })
     }
@@ -689,7 +679,7 @@ impl Bench {
             (hours, tranche.parse().unwrap()),
             "budget lines not found"
         );
-        self.profile.sha256 = crate::domain::lineage::pins::toml_digest(&text).unwrap();
+        self.profile.sha256 = crate::domain::canonical::toml_digest(&text).unwrap();
         self.text = text;
         self
     }
@@ -960,7 +950,7 @@ async fn acceptance_cases() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Fixture authoring aid: `SOE_CASE=<id> cargo test --bin tengu
+/// Fixture authoring aid: `SOE_CASE=<id> cargo test --lib
 /// application::soe::tests::print_case -- --ignored --nocapture` prints the
 /// case's portfolio, its diffs and the memo.
 #[tokio::test]

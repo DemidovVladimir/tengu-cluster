@@ -39,10 +39,6 @@
 //! | Ids | full, in every detail (`hyperliquid:xyz:TSLA`) — never shortened |
 //! | Shadow ledger ([`evaluate_shadow`], [`GateKind::Shadow`]) | a measurement account (the weekend fade's): `intent`, `account`, `kill_switch`, `halted`, `reduce_only`, `venue`, `book_age` as above; `market_status` only for an unknown OI-cap state (`missing:at_oi_cap`, as above); every other rule skipped (`shadow: measurement only`); no trips |
 
-// Consumers land in wave W1 (`risk-paper-ledger-store`, `risk-kill-switch`,
-// `risk-gate-enforcement`).
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -690,14 +686,6 @@ impl LossState {
             daily_loss_usd,
             total_loss_usd,
         }
-    }
-
-    /// Smallest room under the daily and total loss limits; `None` when
-    /// either loss is unknown.
-    pub fn headroom_usd(&self, limits: &RiskLimits) -> Option<f64> {
-        let d = limits.daily_loss_limit_usd - self.daily_loss_usd.value()?;
-        let t = limits.total_loss_limit_usd - self.total_loss_usd.value()?;
-        Some(d.min(t))
     }
 
     /// Halts the current losses call for (total first).
@@ -3274,7 +3262,6 @@ mod tests {
         assert_eq!(v.headroom.daily_loss_usd, Some(-5.0));
         assert_eq!(v.headroom.total_loss_usd, Some(10.0));
         let loss = LossState::of(&c.ctx.account);
-        assert_eq!(loss.headroom_usd(&c.limits), Some(-5.0));
         assert_eq!(loss.breaches(&c.limits), vec![HaltReason::DailyLoss]);
     }
 

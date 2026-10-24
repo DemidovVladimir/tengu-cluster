@@ -13,8 +13,6 @@
 //! to maximise server compatibility — many reference MCP servers reject
 //! `tools/list` before `initialize`.
 
-#![allow(dead_code)]
-
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

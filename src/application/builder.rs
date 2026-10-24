@@ -22,13 +22,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::config::builder::compile::{compile, SecretUse};
 use crate::config::builder::palette::{palette, Palette};
 use crate::config::builder::template::template;
 use crate::config::builder::{editable, sandbox_name_error, Facts, LoadReport};
 use crate::domain::blueprint::{Blueprint, Issue, Status};
+use crate::domain::canonical::sha256_hex;
 use crate::ports::builder::{SandboxDrafts, SecretState};
 
 /// Why a request was refused, by HTTP meaning.
@@ -111,13 +111,6 @@ pub(crate) struct Builder {
     store: Arc<dyn SandboxDrafts>,
 }
 
-pub(crate) fn sha256_hex(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 /// (command to run, where the value then lives) — the command alone, so
 /// the page can copy it.
 fn how(env: &str, backend: &str) -> (String, &'static str) {
@@ -132,7 +125,7 @@ fn how(env: &str, backend: &str) -> (String, &'static str) {
         ),
         _ => (
             format!("tengu secret set {env} <value>"),
-            "the encrypted vault ~/.tengu/secrets.vault",
+            "the encrypted vault <TENGU_HOME>/secrets.vault",
         ),
     }
 }

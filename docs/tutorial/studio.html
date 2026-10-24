@@ -487,10 +487,10 @@
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> and <code>TraceReader</code></td></tr>
         <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow</td></tr>
         <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + run ids) for each loop</td></tr>
-        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>DraftBuffer</code> / <code>replay_child</code>: a <code>run-agent</code> child's tool events, written by the parent</td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>child_draft</code> / <code>replay_child</code>: a <code>run-agent</code> step's tool events, from its journal, written by the parent</td></tr>
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request; <code>tengu webhooks</code>' own recording (<code>run.closed</code>, after every turn it owns has ended)</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request, in the runtime's recording (<code>tengu webhooks</code> = the runtime with no feeds)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code> · <code>events.rs</code></td><td>the bridge: each <code>OrchestratorEvent</code> written as <code>plan.*</code> / <code>step.*</code> / <code>metrics.recorded</code> when the bus sends it; a step's cause for its <code>run-agent</code> child</td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
         <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (feature <code>studio</code>, default): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
@@ -511,7 +511,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
