@@ -55,7 +55,7 @@ travels back to the parent over IPC.
 
 ### Phase 5c — middle-ground protocol *(graceful degradation)*
 
-`adapters/inbound/cli/run_agent.rs:684` decides the IPC verdict; `step_output`
+`adapters/inbound/cli/run_agent.rs::run_agent_subprocess` decides the IPC verdict; `step_output`
 picks the IPC `output` (what the DAG forwards to later steps and the plan's answer):
 
 | `compress_and_store` called? | final_text non-empty? | Verdict | `output` |

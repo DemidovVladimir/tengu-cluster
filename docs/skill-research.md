@@ -68,7 +68,7 @@ Concrete scenario driving every batch below:
 | Scratch git-worktree with stale-sweep | Shipped | `src/application/skills/lifecycle/scratch_worktree.rs` |
 | Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_names` (planner registry) |
 | Planner registry regenerated on every planner turn (no reindex step) | Shipped | `shared_files::ensure_planner_registry` |
-| Cache-discipline invariant (`loaded_in_current_conversation: false`) | Shipped | `distill.rs:226` |
+| Cache-discipline invariant (`loaded_in_current_conversation: false`) | Shipped | `skill_lifecycle/distill.rs` (`execute` result) |
 | `[skill_lifecycle]` config block | Sample only | commented sample in `config.example.toml` (no sandbox ships one) |
 | `tengu skill remove / list / install / export / doctor / seed` | Shipped | `src/adapters/inbound/cli/skill.rs` (`SkillAction::*`, defined in `cli/mod.rs`) |
 | Description-triggering eval | Shipped | `src/application/skills/lifecycle/metric_kinds/description_trigger.rs` |
@@ -128,7 +128,7 @@ D1 = pure TOML/SKILL.md edit. D2 = additive Rust edit. D3 = new abstraction (non
 | Update with origin-hash detection | — | ✓ `.bundled_manifest` | — |
 | Conditional activation | — | ✓ `SkillReadinessStatus` | partial (frontmatter gates loading since 2026-10-08; not surfaced to the planner) |
 | Persistent audit log | — | partial (no log) | — |
-| Atomic writes | ✓ | ✓ | ✓ (`distill.rs:218`) |
+| Atomic writes | ✓ | ✓ | ✓ (`skill_lifecycle/distill.rs`, temp dir + rename) |
 | Three-tier loading (metadata → body → linked) | ✓ | ✓ | ✓ |
 | Cache discipline | ✓ | ✓ | ✓ |
 | Rolling pass rates | — | — | ✓ |
@@ -266,7 +266,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 
 | # | Action | File / shape |
 |---|---|---|
-| 27 | **Sidecar state writer/reader** (per A1). Schema: `{learner_id, topics_covered: [...], topics_weak: [...], mastery_scores: {topic: 0..1}, last_session_ts}`. Module: none yet (an unwired draft was deleted 2026-10-24, audit R4). Atomic write via temp + rename, same as `distill.rs:218`. | `skills/<name>/state/<learner>.json` |
+| 27 | **Sidecar state writer/reader** (per A1). Schema: `{learner_id, topics_covered: [...], topics_weak: [...], mastery_scores: {topic: 0..1}, last_session_ts}`. Module: none yet (an unwired draft was deleted 2026-10-24, audit R4). Atomic write via temp + rename, same as `skill_lifecycle/distill.rs`. | `skills/<name>/state/<learner>.json` |
 | 28 | **`resource-finder` agent** (per A2). New `[agents.resource-finder]` block with `tools = ["http_request"]`. Identity: "Given a topic + learner gap description, find 2–5 high-quality web resources, return JSON `[{url, title, why_relevant, length}]`". Superseded — `learning-agent` calls `http_request` itself. | `[agents.learning-agent]` |
 | 29 | **Frontmatter flags** (per A3). Extend SKILL.md schema with `editable_by_learner: bool` (default `false`). `skill_lifecycle/evolve.rs` checks the flag; refuses to apply diffs from learner-mode chats unless set. | `skills/skill-creator/SKILL.md` doc + `skill_lifecycle/metrics.rs` parser |
 | 30 | **`adjust yourself` planner block.** Extend `skills/orchestrator/SKILL.md` with the trigger. Plan shape: 3 sequential steps — `skill-evaluator` (DialogReplay + load state) → `resource-finder` (only if eval reports gaps) → `skill-improver-inline` (proposal updates SKILL.md + state JSON + cites new resources). One approval gate at the end. | `skills/orchestrator/SKILL.md` |
@@ -347,7 +347,7 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 | No-scripts policy | `Script` + `ShellCheck` metric kinds keep their shell-out for now (decision #3). Cowork's Python pipeline scripts (`run_loop.py` etc.) are NOT ported — patterns re-expressed as Rust metric kinds. |
 | TOML/SKILL.md preferred over Rust | All new metric kinds extend the existing `MetricSpec` enum + frontmatter. Configuration via TOML where possible. |
 | Cache discipline | New skills don't hot-load. `skill_distill` / `manage_skill` return `loaded_in_current_conversation: false`. Planner registry regenerated on the next planner turn. |
-| Composition over wholesale | Per-skill `metrics:` frontmatter. Per-cycle proposals replace whole body (`evolve.rs:115`), not surgical patches. |
+| Composition over wholesale | Per-skill `metrics:` frontmatter. Per-cycle proposals replace whole body (`skills/lifecycle/evolve.rs::proposed_skill_md`), not surgical patches. |
 | Fail-soft vs hard | Memory ops fail-soft. Plan-shape errors hard. Scanner findings printed, not gating (decision #2). |
 
 ---

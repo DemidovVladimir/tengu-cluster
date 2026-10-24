@@ -87,7 +87,7 @@
     <rect class="panel" width="1320" height="120"/>
     <rect class="panelH" x="14" y="14" width="270" height="22"/>
     <text x="22" y="30" class="tag">CHILD  tengu run-agent  (adapters/inbound/cli/run_agent.rs::run_agent_subprocess)</text>
-    <text x="24" y="60" font-size="13" class="mono">build_subprocess_tool_executor(agent, config, ...)  →  bootstrap/tools.rs:536</text>
+    <text x="24" y="60" font-size="13" class="mono">build_subprocess_tool_executor(agent, config, ...)  →  bootstrap/tools.rs</text>
     <text x="24" y="82" font-size="13">effective_tools = agent_base_tools (agent.tools) <tspan font-weight="700" class="accent">∪ {compress_and_store}</tspan> ∪ shell skills ∪ [[mcp_servers]]   <tspan class="muted">// compress_and_store: always-on, definition only</tspan></text>
     <text x="24" y="100" class="small">System prompt = base + each skill body + mandatory <tspan class="mono">"...your FINAL action MUST be the compress_and_store tool with a concise summary..."</tspan></text>
   </g>
@@ -186,7 +186,7 @@
   <g transform="translate(40,1180)">
     <rect class="panel" width="1320" height="160"/>
     <rect class="panelH" x="14" y="14" width="380" height="22"/>
-    <text x="22" y="30" class="tag">PHASE 5c — MIDDLE-GROUND PROTOCOL  (run_agent.rs:642)</text>
+    <text x="22" y="30" class="tag">PHASE 5c — MIDDLE-GROUND PROTOCOL  (run_agent.rs::run_agent_subprocess)</text>
 
     <g transform="translate(30,55)">
       <rect width="410" height="80" rx="8" fill="#1e1e2e" stroke="#a6e3a1"/>

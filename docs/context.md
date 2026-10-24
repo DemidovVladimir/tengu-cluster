@@ -90,7 +90,7 @@ starts with empty messages and a zero `flow_token_usage`. Each new user
 message runs through three flow-level guards **before** the per-turn
 assembly:
 
-### 3. `enforce_history_turn_limit` (`application/chat/flow.rs:62`)
+### 3. `enforce_history_turn_limit` (`application/chat/flow.rs::enforce_history_turn_limit`)
 
 Counts back N user turns from the end and drains everything before. Per-scope defaults:
 
@@ -104,7 +104,7 @@ Counts back N user turns from the end and drains everything before. Per-scope de
 Override: `[agents.<name>.flow] max_history_turns = N` in `sandboxes/<name>/config.toml`
 (`0` counts as 1 — `flow.rs::resolve_history_turn_limit`).
 
-### 4. `maybe_compact_flow` (`application/chat/flow.rs:165`)  — *the auto-compact*
+### 4. `maybe_compact_flow` (`application/chat/flow.rs::maybe_compact_flow`)  — *the auto-compact*
 
 Runs after every push (`phase=pre-engine` after the user message,
 `post-engine` after the reply). If `flow_token_usage >= threshold_tokens`
@@ -132,20 +132,20 @@ is a deliberate choice — Layer 2's sliding window catches whatever Layer
 below it (a set value too): the history limit drops older turns first, so a
 larger value left nothing to fold.
 
-`compaction_summary_max_tokens` default (`flow.rs:139`): `15%` of the max
+`compaction_summary_max_tokens` default (`flow.rs::default_compaction_summary_max_tokens`): `15%` of the max
 input budget, clamped to `[128, clamp(max_input_budget/3, 256, 4096)]`.
 
 ### 5. Hard stop on `max_tokens_per_flow`
 
-`application/chat/service.rs:337` — if `state.flow_token_usage >= max_tokens_per_flow`
+`application/chat/service.rs::process_user_text` — if `state.flow_token_usage >= max_tokens_per_flow`
 (default 100 000) **after** Layer 1 compaction, the turn returns immediately
 with a system notice: *"Flow token limit reached. Use /reset to start a
 new session."*
 
-Two more notices, same file: an empty assembled prompt returns *"Context
-budget exhausted. Use /reset to continue."* (`:418`); at ≥ 80 % of
+Two more notices, same function: an empty assembled prompt returns *"Context
+budget exhausted. Use /reset to continue."*; at ≥ 80 % of
 `max_tokens_per_flow` after the reply, the turn carries *"⚠️ Token budget:
-N% used …"* (`:479`).
+N% used …"*.
 
 ---
 
@@ -154,7 +154,7 @@ N% used …"* (`:479`).
 `application/chat/service.rs::process_user_text` (continued) +
 `prompt_budget.rs`.
 
-### 6. Budget arithmetic (`prompt_budget.rs:53-91`)
+### 6. Budget arithmetic (`prompt_budget.rs::{reserved_output_tokens, compute_total_input_budget, compute_base_input_budget}`)
 
 ```
 out              = min(max(output_cap, 1), ctx_window)
@@ -168,7 +168,7 @@ history_budget   = base_input - estimate(memory_block)
 else `context_window / 8` clamped to `[256, 16 384]`). This is what makes the
 model's input fit — it's a chain of subtractions from the model's context window.
 
-### 7. `assemble_recent_history` (`prompt_budget.rs:8`)
+### 7. `assemble_recent_history` (`prompt_budget.rs::assemble_recent_history`)
 
 Newest contiguous suffix of `state.messages` whose token estimate fits
 `history_budget`. Hard ceiling of **20 messages** even if budget allows
@@ -176,7 +176,7 @@ more (`MAX_HISTORY_MESSAGES = 20`).
 
 ### 8. Memory recall block (+ #9, #10)
 
-Two sides, different knobs (`[memory]`, `MemoryConfig`, `config/mod.rs:1042`):
+Two sides, different knobs (`[memory]`, `config/memory.rs::MemoryConfig`):
 
 | Side | field | default | what |
 |---|---|---|---|
@@ -215,7 +215,7 @@ on the same tag stripper.
 
 ### 11. Grounding nudge
 
-`application/chat/service.rs:250` (`needs_fresh_history_grounding`) and `:395`.
+`application/chat/service.rs::needs_fresh_history_grounding`, called from `process_user_text`.
 When the user message contains *"last", "latest", "most recent", "newest",
 "previous", "recently", "before that"* (whole words — "Elasticsearch" no
 longer counts), the chat layer prepends a system message:
@@ -238,15 +238,15 @@ path that set it were deleted 2026-10-22.)
 
 ### 12. Skill body assembly (+ #13)
 
-`application/skills/registry.rs::build_system_prompt` (`:1242-1320`; no tool list since 2026-10-23 — the engine gets the tool definitions).
-Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1152`):
+`application/skills/registry.rs::build_system_prompt` (no tool list since 2026-10-23 — the engine gets the tool definitions).
+Knobs `[agents.<name>.prompt_budget]` (`config/memory.rs::PromptBudgetConfig`):
 
 | knob | default | what |
 |---|---|---|
 | `max_file_tokens` | 2 000 | `identity.instructions` and each workspace identity file (`IDENTITY.md`, `PROFILE.md`, `CONTEXT.md`) |
 | `max_skill_context_tokens` | 16 000 | each skill context fragment |
-| `max_total_tokens` | 32 000 | whole system prompt: an identity file past it ends the file list; a skill fragment past it is dropped with a warn (`Skill context DROPPED`); the tool listing gets 10 % slack |
-| (#13 each cut) | `truncate_to_token_budget` (`prompt_budget.rs:41`) | cuts at `tokens × 4` bytes on a char boundary, appends `\n\n[truncated]` |
+| `max_total_tokens` | 32 000 | whole system prompt: an identity file past it ends the file list; a skill fragment past it is dropped with a warn (`Skill context DROPPED`) |
+| (#13 each cut) | `prompt_budget.rs::truncate_to_token_budget` | cuts at `tokens × 4` bytes on a char boundary, appends `\n\n[truncated]` |
 
 No dedup or per-skill-count cap — selection happens upstream.
 
@@ -258,7 +258,7 @@ No dedup or per-skill-count cap — selection happens upstream.
 context-cutting layer. See `tutorial/tool-loop.html` for
 the animated walkthrough.
 
-### 14. `truncate_tool_result` (`application/chat/tool_loop.rs:481`, via `tool_result_content` `:406`)
+### 14. `truncate_tool_result` (`application/chat/tool_loop.rs::truncate_tool_result`, via `tool_result_content`)
 
 Each tool result char-capped at `max_tool_result_chars` (default
 **300 000**) when first inserted into messages. Footer:
@@ -279,13 +279,13 @@ A tool that returns outside text (`domain::untrusted::tool_origin`: `http_reques
 the cut inside one `untrusted` fence (#10); `compact_tool_result` keeps the fence
 around the compacted text.
 
-### 15. `compact_tool_result` mid-loop (`application/chat/tool_loop.rs:458`, caller `compact_older_tool_results` `:389`, called at `:226`)  — *the closest to /compact*
+### 15. `compact_tool_result` mid-loop (`application/chat/tool_loop.rs::compact_tool_result`, caller `compact_older_tool_results`, called from `collect_engine_response`)  — *the closest to /compact*
 
 After `round >= 1`, walks `messages[..compact_cutoff]`. Every
 `Role::Tool` message in that prefix gets rewritten in place to its first
 line, capped at `compact_result_limit` (default **200 chars**; `0` does not
-disable it — every older result becomes `…`). `run-agent` calls the same
-function from turn 1 on.
+disable it — every older result becomes `…`). `run-agent` steps run the same
+loop (2026-10-22), so the same rule applies there.
 
 ```rust
 if content.len() <= limit { return content }
@@ -298,27 +298,26 @@ Rationale (from the inline comment): tool results "typically put key
 info on the first line" — tx hashes, IDs, status — so keeping the first
 line preserves working memory cheaply.
 
-### 16. `[OUTPUT_TRUNCATED]` auto-continue (`application/chat/tool_loop.rs:135`)
+### 16. `[OUTPUT_TRUNCATED]` auto-continue (`application/chat/tool_loop.rs::collect_engine_response`)
 
 The OpenRouter and local engines end the text with the sentinel on a
-`finish_reason = length` cut (`openrouter.rs:308`, `local.rs:140`). When a
+`finish_reason = length` / `max_tokens` cut (`engines/openai_compat.rs::ChatResponse::events`). When a
 response with no tool calls ends with it — tools offered, rounds left — the
 loop appends `"Your output was truncated. Continue from where you left off."`
-as a user turn and re-rolls. Extends, doesn't cut. `run-agent` has no
-auto-continue.
+as a user turn and re-rolls. Extends, doesn't cut. `run-agent` steps run the
+same loop (2026-10-22), so they continue too.
 
 ### 17. `max_tool_rounds` hard stop (default **70**)
 
 After 70 rounds the loop exits and forces one final `tools=[]` engine
-turn (`application/chat/tool_loop.rs:231`). Claude Code and Codex count tool
+turn (`application/chat/tool_loop.rs::collect_engine_response`). Claude Code and Codex count tool
 calls instead and kill the CLI past the cap (`claude_code.rs`, `codex.rs`).
 
-### 18. `token_budget` mid-loop early-exit (`application/chat/tool_loop.rs:114`)
+### 18. `token_budget` mid-loop early-exit — removed 2026-10-22
 
-If a token budget is passed in and `total_input_delta + total_output_delta > budget`,
-the loop exits with a warn log. Every caller passes `None` today (chat,
-eval, webhooks, `tengu tool turn`, `doctor`) — the chat runtime enforces its
-own flow budget (#5).
+Every caller passed `None`; it went with the positional arguments when the
+loop took `LoopOpts`. The chat runtime enforces its own flow budget (#5); a
+step is bounded by `max_tool_rounds` (#17, #23) and its wall clock.
 
 ---
 
@@ -326,7 +325,7 @@ own flow budget (#5).
 
 `adapters/outbound/engines/{claude_code,codex}.rs` (set it, through `outbound/bridge_env.rs`) · `adapters/inbound/mcp_bridge.rs` (cuts).
 
-### 19. `max_mcp_result_chars` (`config/mod.rs:641` → `claude_code.rs:835` / `codex.rs:624` → `bridge_env.rs:112` → `mcp_bridge.rs:252`, cut by `tool_result_content`)
+### 19. `max_mcp_result_chars` (`config/agent.rs::LimitsConfig` → `ports/engine.rs::EngineContext` → `claude_code.rs::build_mcp_config_json` / `codex.rs` `run` → `bridge_env.rs::bridge_env` → `mcp_bridge.rs::max_result_chars_from_env`, cut by `tool_result_content`)
 
 Caps tool results returned to the Claude Code and Codex CLIs through the MCP
 bridge. Default **50 000 chars / ~12.5K tokens**. The knob is
@@ -349,7 +348,7 @@ leak unbounded context into the CLI's model. Layer 3's `truncate_tool_result` an
 `compress_and_store` protocol. See `compression-flow.svg` for
 the picture.
 
-### 20. Subprocess gets fresh context (`subprocess_runner.rs:26`)
+### 20. Subprocess gets fresh context (`subprocess_runner.rs::AgentIpcInput`)
 
 The child `tengu run-agent` process starts with **empty `messages`** —
 it never inherits the parent's chat history. The IPC payload
@@ -373,9 +372,9 @@ with embeddings when available and text-only fallback otherwise
 
 | Path | Trigger |
 |---|---|
-| **A — Out-of-band** | OpenRouter / local subagents — `run_agent.rs:534` intercepts the call before the executor runs (answers `stored`), then ends the loop after that round |
-| **B — Bridge** | Claude Code and Codex subagents — the step's bridge (`mcp_bridge.rs::StepSummary`) writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary (`:619`) |
-| **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` (`:648`) |
+| **A — Out-of-band** | OpenRouter / local subagents — `run_agent.rs::StepHooks` (`LoopHooks::intercept`) intercepts the call before the executor runs (answers `stored`), then ends the loop after that round |
+| **B — Bridge** | Claude Code and Codex subagents — the step's bridge (`mcp_bridge.rs::StepSummary`) writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary (`run_agent_subprocess`) |
+| **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` |
 
 **Read side** — cross-plan recall: `RegistryPlanner::replan` (legacy planner type
 name) surfaces past step summaries to the planner LLM. With
@@ -385,7 +384,7 @@ Without that feature, planner memory lanes are empty. Capped by
 `cross_plan_top_k` (default 5; `0` = off). `plan()` reads this session's
 step outputs too when `within_session_output_top_k > 0`.
 
-### 22. Phase 5c middle-ground protocol (`adapters/inbound/cli/run_agent.rs:678`)
+### 22. Phase 5c middle-ground protocol (`adapters/inbound/cli/run_agent.rs::run_agent_subprocess`)
 
 | compress_called? | final_text non-empty? | Verdict |
 |---|---|---|
@@ -395,14 +394,14 @@ step outputs too when `within_session_output_top_k > 0`.
 
 ### 23. Subprocess `max_turns` (= `limits.max_tool_rounds`, default **70**)
 
-`AgentIpcInput.max_turns` (`subprocess_runner.rs:43`), set by
-`SubprocessRunner::run_step` (`:355`) from the agent block's
+`AgentIpcInput.max_turns` (`subprocess_runner.rs::AgentIpcInput`), set by
+`SubprocessRunner::run_step` from the agent block's
 `limits.max_tool_rounds` (the serde default 20 only applies to payloads
 without the field). Hard cap on the subagent's mini-loop; hits the
 `compress_and_store` warn path on exhaust. It counts engine turns on
 OpenRouter / local, but **tool calls** of the one CLI run on Claude Code and Codex
 (`EngineContext.max_tool_rounds`: the CLI is killed past it). Wall clock per step:
-`limits.step_timeout_secs` (default **600**), enforced by `run_with_timeout` (`:191`).
+`limits.step_timeout_secs` (default **600**), enforced by `subprocess_runner.rs::run_with_timeout`.
 
 ---
 
@@ -431,7 +430,7 @@ is compiled into `.tengu/agentic-memory/wiki/*.md`.
 
 `outbound/tools/memory/persistent_store.rs::chunk_text`.
 
-### 26. Char-window splitter (`persistent_store.rs:54`)
+### 26. Char-window splitter (`persistent_store.rs::chunk_text`)
 
 Defaults: `[memory] persistent_store_chunk_size = 1000`,
 `persistent_store_chunk_overlap = 200`. Used when an agent
@@ -490,7 +489,7 @@ this turn") not as a byte-perfect tokeniser. Subagent records leave
 | Surface | Trigger | Use |
 |---|---|---|
 | Tracing baseline | Always on. Emitted by `metrics::record()` | `RUST_LOG=tengu=info` for the info line, `=debug` to also see per-layer breakdown |
-| In-process broadcast bus | `OnceLock<broadcast::Sender<MetricsRecord>>` installed by `build_orchestrator` (`install_global_sink`, `bootstrap/orchestrator.rs:384`) | Subscribers — TUI aggregator, eval recorder |
+| In-process broadcast bus | `OnceLock<broadcast::Sender<MetricsRecord>>` installed by `build_orchestrator` through `application/metrics.rs::forward_sink` | Subscribers — TUI aggregator, eval recorder |
 | Orchestrator event bus | Bridge task in `build_orchestrator` republishes records as `OrchestratorEvent::MetricsRecorded` | Anything already subscribed to the orchestrator bus (TUI, Telegram channel) sees metrics with no extra wiring |
 
 `record()` is fail-soft — `tx.send()` returns Err only when zero
@@ -534,37 +533,37 @@ the chat-pane bottom (a true status bar) is on the open list.
 
 | # | Layer | Mechanism | File | Default knob |
 |---:|---|---|---|---|
-| 1 | 0 | `estimate_tokens_approx` | domain/token.rs:11 | `~4 chars/token` |
-| 2 | 0 | `truncate_at_boundary` | domain/token.rs:38 | UTF-8 safe |
-| 3 | 1 | `enforce_history_turn_limit` | application/chat/flow.rs:62 | 20-40 turns / scope |
-| 4 | 1 | `maybe_compact_flow` | application/chat/flow.rs:165 | ratio 0.82-0.88 |
-| 5 | 1 | `max_tokens_per_flow` hard stop | application/chat/service.rs:337 | 100 000 |
-| 6 | 2 | `compute_total_input_budget` | prompt_budget.rs:82 | derived |
-| 7 | 2 | `assemble_recent_history` | prompt_budget.rs:8 | 20 msgs |
+| 1 | 0 | `estimate_tokens_approx` | `domain/token.rs::estimate_tokens_approx` | `~4 chars/token` |
+| 2 | 0 | `truncate_at_boundary` | `domain/token.rs::truncate_at_boundary` | UTF-8 safe |
+| 3 | 1 | `enforce_history_turn_limit` | `application/chat/flow.rs` | 20-40 turns / scope |
+| 4 | 1 | `maybe_compact_flow` | `application/chat/flow.rs` | ratio 0.82-0.88 |
+| 5 | 1 | `max_tokens_per_flow` hard stop | `application/chat/service.rs::process_user_text` | 100 000 |
+| 6 | 2 | `compute_total_input_budget` | `application/chat/prompt_budget.rs` | derived |
+| 7 | 2 | `assemble_recent_history` | `application/chat/prompt_budget.rs` | 20 msgs |
 | 8 | 2 | memory recall block (chat) | application/chat/service.rs | top-5, ≤ `max_recall_tokens` (600), in the user turn |
-| 9 | 2 | `cross_session_msg_top_k` | orchestrator/planner.rs:332 (planner side) | 0 (off) |
+| 9 | 2 | `cross_session_msg_top_k` | `orchestrator/planner.rs::RegistryPlanner::cross_session_recall_block` (planner side) | 0 (off) |
 | 10 | 2 | untrusted fence | domain/untrusted.rs · application/memory/fencing.rs | wraps #8, planner recall, step inputs, webhook bodies, escalations, outside tool text; fixpoint cleaner |
-| 11 | 2 | grounding nudge (chat only) | application/chat/service.rs:250 · :395 | trigger words (whole) |
-| 12 | 2 | identity / skill / prompt caps | application/skills/registry.rs:1253 | 2K / 16K / 32K |
-| 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | byte cap (char boundary) |
-| 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | application/chat/tool_loop.rs:406 | 300 000 chars (local: window / 8 × 4) |
-| 15 | 3 | `compact_tool_result` | application/chat/tool_loop.rs:458 (caller :226) | 200 chars |
-| 16 | 3 | `[OUTPUT_TRUNCATED]` continue | application/chat/tool_loop.rs:135 | sentinel |
-| 17 | 3 | `max_tool_rounds` | config/mod.rs:622 · tool_loop.rs:231 | 70 |
-| 18 | 3 | `token_budget` early-exit | application/chat/tool_loop.rs:114 | `None` on every caller |
-| 19 | 4 | `max_mcp_result_chars` | config/mod.rs:641 · claude_code.rs:835 · codex.rs:624 · bridge_env.rs:112 · inbound/mcp_bridge.rs:252 | 50 000 |
-| 20 | 5 | subprocess fresh ctx | subprocess_runner.rs:26 | by design |
-| 21 | 5 | `compress_and_store` (+ cross-plan read) | outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs:534 (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge) | implicit append · `cross_plan_top_k` 5 |
-| 22 | 5 | Phase 5c protocol | inbound/cli/run_agent.rs:678 | three rows |
-| 23 | 5 | subprocess `max_turns` / step wall clock | subprocess_runner.rs:43 · `run_step` :355 | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
+| 11 | 2 | grounding nudge (chat only) | `application/chat/service.rs::needs_fresh_history_grounding` | trigger words (whole) |
+| 12 | 2 | identity / skill / prompt caps | `application/skills/registry.rs::build_system_prompt` | 2K / 16K / 32K |
+| 13 | 2 | `truncate_to_token_budget` | `application/chat/prompt_budget.rs` | byte cap (char boundary) |
+| 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | `application/chat/tool_loop.rs::tool_result_content` | 300 000 chars (local: window / 8 × 4) |
+| 15 | 3 | `compact_tool_result` | `application/chat/tool_loop.rs` (caller `compact_older_tool_results`) | 200 chars |
+| 16 | 3 | `[OUTPUT_TRUNCATED]` continue | `application/chat/tool_loop.rs::collect_engine_response` | sentinel |
+| 17 | 3 | `max_tool_rounds` | `config/agent.rs::LimitsConfig` · `tool_loop.rs::LoopOpts` | 70 |
+| 18 | 3 | `token_budget` early-exit | removed 2026-10-22 | — |
+| 19 | 4 | `max_mcp_result_chars` | `config/agent.rs::LimitsConfig` · `bridge_env.rs::bridge_env` · `inbound/mcp_bridge.rs::max_result_chars_from_env` | 50 000 |
+| 20 | 5 | subprocess fresh ctx | `subprocess_runner.rs::AgentIpcInput` | by design |
+| 21 | 5 | `compress_and_store` (+ cross-plan read) | outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs::StepHooks (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge) | implicit append · `cross_plan_top_k` 5 |
+| 22 | 5 | Phase 5c protocol | `inbound/cli/run_agent.rs::run_agent_subprocess` | three rows |
+| 23 | 5 | subprocess `max_turns` / step wall clock | `subprocess_runner.rs::AgentIpcInput` · `SubprocessRunner::run_step` · `run_with_timeout` | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
 | 24 | 6 | Open Brain memory | outbound/tools/agentic_memory | Postgres |
 | 25 | 6 | LLM Wiki + planner files | `.tengu/agentic-memory/wiki`, `TENGU_PLANNER_REGISTRY.md` | Markdown/root files |
-| 26 | 7 | `chunk_text` | persistent_store.rs:54 | 1000/200 |
-| 27 | 8 | `MetricsRecord` (Planner/Subagent/Embedding/WikiCompiler/Decision) | domain/metrics.rs:43 | always-on |
+| 26 | 7 | `chunk_text` | `persistent_store.rs::chunk_text` | 1000/200 |
+| 27 | 8 | `MetricsRecord` (Planner/Subagent/Embedding/WikiCompiler/Decision) | `domain/metrics.rs::MetricsRecord` | always-on |
 | 28 | 8 | Per-context-layer attribution | orchestrator/planner.rs::emit_planner_metrics | approximate |
 | 29 | 8 | Three surfaces (trace + bus + TUI bubble) | application/metrics.rs + inbound/tui/mod.rs | `TENGU_TUI_METRICS=1` |
 | 30 | 8 | `AgentIpcOutput.metrics` IPC plumbing | subprocess_runner.rs + cli/run_agent.rs | skip-if-empty |
-| 31 | 8 | `AggregatorState` rollup (overall + by-agent + by-kind) | domain/metrics.rs:180 | in-memory only |
+| 31 | 8 | `AggregatorState` rollup (overall + by-agent + by-kind) | `domain/metrics.rs::AggregatorState` | in-memory only |
 
 ---
 
@@ -625,7 +624,7 @@ Comparison points for future sessions:
 - **[`tutorial/tool-loop.html`](./tutorial/tool-loop.html)** — focused view: Layer 3 (the inner tool loop), animated. Most useful when debugging something inside `collect_engine_response`.
 - **[`compression-flow.{md,svg}`](./compression-flow.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
 
-*Last updated 2026-10-08 (checked against the code: line refs, headings
+*Last updated 2026-10-24 (citations are `path::symbol`, never `:line`; #16 and #15 hold for `run-agent` steps, #18 removed, #12 has no tool-list slack). Before that 2026-10-08 (checked against the code: line refs, headings
 numbered as the summary table, recall / fencing / skill-cap / bridge-cap
 facts). If you change any of the mechanisms above, update this doc in the
 same commit.*
