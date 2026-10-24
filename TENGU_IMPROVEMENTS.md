@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `2ec1511bc5287e3378d3ed0dda158bbbec6af49b` (O9) · PR #59 open, not merged |
+| Last code commit | `34f2d2cc7fbcf2be513819562e8e2bd4b27cc43f` (O10) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -62,6 +62,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | O5 | done: `docs/SESSION_HANDOFF.md` 137 → 15 KB (resume + Open gates + last 3 sessions + local data + gotchas), older sessions in `docs/archive/handoffs/`; CLAUDE / AGENTS point to § Open gates. Kept: `handoff_for_check.md` history (operator rule: prepend, never overwrite) | `bd2df0d53d2c4b830df4ac4afc480efe5af58a3b` |
 | O7 | done: five steps on top of `docs/index.html` (README Quickstart · tutorial big-picture · code-map § 2 · the area doc · SESSION_HANDOFF § Open gates); README's doc table and hand module map → pointers | `4f9b29ecbf5108c52e19aa9bc90507cbfb60eea8` |
 | O9 | done: `tests/tutorial_map.rs::living_docs_link_only_to_files_that_exist` (README, AGENTS, CLAUDE, tracked `docs/**` but the archive); its one find (`sandboxes/unlimited/BENCH.md`) dropped | `2ec1511bc5287e3378d3ed0dda158bbbec6af49b` |
+| O10 | done: `docs/context.{md,svg}`, `compression-flow.{md,svg}`, `skill-research.md` cite `path::symbol`; context.md's facts re-checked (token_budget gone, run-agent = chat's loop, config moves, sentinel in `openai_compat.rs`). Left as snapshots: `docs/plans/TENGU_STUDIO_PLAN.md`, xmarket-tracker finding rows | `34f2d2cc7fbcf2be513819562e8e2bd4b27cc43f` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -102,7 +103,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | O10, O11, O3 svg |
+| 2 · everything else (current) | O11, O3 svg |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
