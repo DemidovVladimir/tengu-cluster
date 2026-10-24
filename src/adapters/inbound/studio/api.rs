@@ -212,15 +212,13 @@ pub(super) async fn runs(State(st): St) -> Response {
     .into_response()
 }
 
-/// Every event of `run_id` (`seq` order), read off the async workers — the
-/// reader's shared copy (`TraceReader::run_events`: the JSONL reader keeps
-/// the last runs parsed, so paging a run never parses it again).
-async fn read_run(st: &Arc<AppState>, run_id: &str) -> Result<Arc<Vec<ExecutionEvent>>, Response> {
+/// Every event of `run_id` (`seq` order), read off the async workers.
+async fn read_run(st: &Arc<AppState>, run_id: &str) -> Result<Vec<ExecutionEvent>, Response> {
     if let Err(e) = check_run_id(run_id) {
         return Err(error(StatusCode::BAD_REQUEST, format!("{e:#}")));
     }
     let (st2, id) = (Arc::clone(st), run_id.to_string());
-    match tokio::task::spawn_blocking(move || st2.ctx.reader.run_events(&id)).await {
+    match tokio::task::spawn_blocking(move || st2.ctx.reader.events(&id, 0, usize::MAX)).await {
         Ok(Ok(evs)) => Ok(evs),
         Ok(Err(e)) => Err(read_error(&e)),
         Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),

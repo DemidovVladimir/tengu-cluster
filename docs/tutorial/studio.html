@@ -485,7 +485,7 @@
         <tr><td><code>src/bootstrap/studio.rs</code></td><td>each agent's catalog tools; the redacted graph</td></tr>
         <tr><td><code>src/domain/trace.rs</code></td><td>the event envelope, statuses, <code>bound_payload</code>, order, run summary</td></tr>
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> and <code>TraceReader</code></td></tr>
-        <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow; the last 2 runs read stay parsed (a growing run parses only its new lines), a run list reads each file's ends only</td></tr>
+        <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow</td></tr>
         <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + run ids) for each loop</td></tr>
         <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>child_draft</code> / <code>replay_child</code>: a <code>run-agent</code> step's tool events, from its journal, written by the parent</td></tr>
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
