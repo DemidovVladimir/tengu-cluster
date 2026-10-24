@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `457d2f15e54ca61fcbf7b8525816a055ee7501fa` (B10) · PR #59 open, not merged |
+| Last code commit | `687212daa615fcb884d8aa38e89a7fd5cc17b27d` (W1) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -52,6 +52,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | B8 | done: `JsonlTraceReader` keeps the last 2 runs parsed (grown file = only new lines parsed), `TraceReader::run_events` shared to Studio pages; `runs` from each file's ends + line count; 62k-event run lists in 0.5 s CPU vs 45 s full parse (debug) | `217c3ecdadc1f09de36d737b7a4bd2f889210328` |
 | B9 | done: `domain::trace_stats::fold_stats` → `tengu trace stats --run <id>` + Studio `/board` `stats` drawn in the header (counts, error rate, p50 / p95 / max ms per kind family and tool, tokens, Jev cost); Studio evidence screenshots not retaken yet | `0c14d652cdf79ec1b064ee9818bd6ae1a5119ce5` |
 | B10 | done: trace schema 2 — only `run.opened` carries the run's constants; later lines drop them, `event_id`, null fields and an empty payload (`domain::trace::stored_line`), readers re-stamp (`LineReader`, schema 1 reads the same); feed.fired −76 %, tool.completed −48 % per line; feed `tool.started` still written | `457d2f15e54ca61fcbf7b8525816a055ee7501fa` |
+| W1 | done: `config::paths::Layout` (every `state/`, `logs/`, `skills/`, `memory/` join under the home; 20 hand joins replaced) + `load_dotenv` / `home_source`; `tengu paths [--sandbox <s>] [--json]` prints the home and its source (exported · the `.env` · default), config, state dirs, logs, skills, memory, each workspace's `.tengu/` stores, with sizes. Docs: the worktree gotcha, README, code map § 5 (the 32 docs' `<TENGU_HOME>/…` text kept) | `687212daa615fcb884d8aa38e89a7fd5cc17b27d` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -92,7 +93,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
