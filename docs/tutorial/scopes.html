@@ -397,7 +397,7 @@
         <tr><td><code>src/config/{load,agent}.rs</code></td><td><code>default_scopes</code>, <code>fold_default_scopes</code> (<code>load.rs</code>), <code>AgentConfig::hardened</code> (<code>agent.rs</code>)</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>hardened-sandbox load rules and path reach checks</td></tr>
         <tr><td><code>src/config/readers.rs</code></td><td>readers of outside text vs. side effects (load warning); the planner's profile <code>"none"</code> (load error)</td></tr>
-        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code>, <code>within_generation</code></td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>assemble_executor</code> (one scope map for every surface), <code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code>, <code>within_generation</code></td></tr>
         <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>the same scope map for Claude Code and Codex agents</td></tr>
         <tr><td><code>src/adapters/outbound/tools/workspace/</code></td><td><code>read_file</code>, <code>write_file</code>, <code>list_directory</code>, <code>run_command</code>: the checks in use</td></tr>
         <tr><td><code>tests/scope_lint.rs</code></td><td>fails a tool whose <code>execute</code> skips the scope check</td></tr>

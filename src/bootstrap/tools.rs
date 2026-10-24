@@ -57,25 +57,6 @@ pub(crate) fn rebuild_system_prompt(
 /// Register a plugin, logging failures as warnings. Returns `true` on
 /// success, `false` on failure.
 ///
-/// Used by `build_tool_executor` — wraps the `futures::executor::block_on`
-/// bridge until the channel chain is fully async.
-// TODO(Phase B): drop the block_on once build_tool_executor is async.
-fn register_plugin_safe(
-    registry: &mut ToolRegistry,
-    plugin: &dyn crate::ports::tool::ToolPlugin,
-    plugin_ctx: &PluginCtx<'_>,
-    allow_list: &[String],
-    failure_message: &str,
-) -> bool {
-    match futures::executor::block_on(registry.register_plugin(plugin, plugin_ctx, allow_list)) {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::warn!(error = %e, "{}", failure_message);
-            false
-        }
-    }
-}
-
 /// What [`build_tool_executor`] builds for one agent.
 pub(crate) struct ToolStack {
     /// The tools to advertise: the ones asked for (inside the bound
@@ -90,18 +71,10 @@ pub(crate) struct ToolStack {
     pub raw: Arc<PluginToolExecutor>,
 }
 
-/// Build an agent's tool stack: the plugin-backed executor (every tool a
-/// domain plugin — workspace, http, crypto, cache, memory, skill, mcp — in a
-/// `ToolRegistry`), wrapped in the secret redaction of `secret_registry`,
-/// and the tool list to advertise with it.
-///
-/// The `activity` port is channel-specific — each channel adapter provides its own
-/// implementation (TUI dialogs, Telegram inline keyboards, Slack messages, etc.).
-///
-/// The HTTP client comes from `egress::policy().tool_client` — proxied per
-/// `[egress]`, redirects off. There is deliberately no way to pass in a
-/// client: an unproxied one would bypass the egress policy. If the client
-/// can't be built the executor is not built (no tools, fail-closed).
+/// Build an agent's tool stack: [`assemble_executor`] for the agent as
+/// loaded (`subagent_config`), wrapped in the secret redaction of
+/// `secret_registry`, and the tool list to advertise with it. No tools, or
+/// no executor (no egress client), = `None`: no tools, fail-closed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_tool_executor(
     workspace: &Path,
@@ -116,18 +89,36 @@ pub(crate) fn build_tool_executor(
     mcp_servers: &[McpServerConfig],
 ) -> Option<ToolStack> {
     let mut tools = within_generation(agent_config, tools);
-    let raw = Arc::new(plugin_executor(
+    // `tools` is inside the bound generation: defense in depth,
+    // `Config::load` already refuses a config listing a tool outside it.
+    if tools.is_empty() {
+        return None;
+    }
+    // The workspace-tool opt-ins the agent lists in `tools` are on for its
+    // plugins too (`persistent_store` reads `workspace_tools`), on every
+    // surface — chat passes the config block as loaded.
+    let agent = subagent_config(agent_config);
+    let assembled = futures::executor::block_on(assemble_executor(ExecutorInputs {
         workspace,
-        &tools,
-        skill_registry,
-        memory_manager,
-        secret_registry,
+        tools: &tools,
+        agent: &agent,
+        skills: skill_registry,
+        memory: memory_manager.clone(),
+        memory_config,
+        secrets: secret_registry,
         activity,
         cancel,
-        memory_config,
-        agent_config,
         mcp_servers,
-    )?);
+        // Every server tool when the agent lists none, else the listed ones.
+        mcp_allow: &agent.tools,
+    }));
+    let raw = match assembled {
+        Ok(raw) => Arc::new(raw),
+        Err(e) => {
+            tracing::error!(error = %format!("{e:#}"), "tool executor not built — tools disabled");
+            return None;
+        }
+    };
     let extra = raw.additional_tool_defs(&tools);
     tools.extend(extra);
     let executor = Arc::new(SanitizedToolExecutor::new(
@@ -141,126 +132,115 @@ pub(crate) fn build_tool_executor(
     })
 }
 
-/// The unredacted `PluginToolExecutor` of [`build_tool_executor`].
-#[allow(clippy::too_many_arguments)]
-fn plugin_executor(
-    workspace: &Path,
-    tools: &[ToolDef],
-    skill_registry: &SkillRegistry,
-    memory_manager: &Option<Arc<crate::application::memory::manager::MemoryManager>>,
-    secret_registry: &Arc<SecretRegistry>,
-    activity: Arc<dyn ToolActivityPort>,
-    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    memory_config: Option<&crate::config::MemoryConfig>,
-    agent_config: &AgentConfig,
-    mcp_servers: &[McpServerConfig],
-) -> Option<PluginToolExecutor> {
-    // `tools` is inside the bound generation (`build_tool_executor`): defense
-    // in depth, `Config::load` already refuses a config listing a tool
-    // outside it.
-    if tools.is_empty() {
-        return None;
-    }
-    // The workspace-tool opt-ins the agent lists in `tools` are on for its
-    // plugins too (`persistent_store` reads `workspace_tools`), on every
-    // surface — chat passes the config block as loaded.
-    let agent_config = &subagent_config(agent_config);
+/// What [`assemble_executor`] builds from — each surface resolves these
+/// its own way (chat / `run-agent`: [`build_tool_executor`]; the MCP
+/// bridge: its env + the loaded config), the assembly is one.
+pub(crate) struct ExecutorInputs<'a> {
+    pub workspace: &'a Path,
+    /// The tools to register (inside the bound generation).
+    pub tools: &'a [ToolDef],
+    /// The agent the tools run as: scopes folded, workspace-tool opt-ins
+    /// merged (`subagent_config` / the bridge's agent).
+    pub agent: &'a AgentConfig,
+    /// Shell skills (`SkillPlugin`).
+    pub skills: &'a SkillRegistry,
+    pub memory: Option<Arc<crate::application::memory::manager::MemoryManager>>,
+    pub memory_config: Option<&'a crate::config::MemoryConfig>,
+    pub secrets: &'a Arc<SecretRegistry>,
+    /// Channel-specific (TUI dialogs, Telegram keyboards, the bridge's no-op).
+    pub activity: Arc<dyn ToolActivityPort>,
+    /// `/stop`: kills a running shell command.
+    pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub mcp_servers: &'a [McpServerConfig],
+    /// The `{server}__{tool}` names to register; empty = every one.
+    pub mcp_allow: &'a [String],
+}
 
-    let shell: Arc<dyn ShellExecutionPort> = Arc::new(match cancel {
+/// The unredacted `PluginToolExecutor` every surface runs tools through:
+/// the tool catalog (`outbound/tools/mod.rs`), shell skills,
+/// `[[mcp_servers]]`, the per-tool scope map (ENFORCED: the agent's folded
+/// scopes, else `permissive_scope` / deny-all under `no_shell_fallback`).
+///
+/// The HTTP client comes from `egress::policy().tool_client` — proxied per
+/// `[egress]`, redirects off. There is deliberately no way to pass in a
+/// client: an unproxied one would bypass the egress policy. No client = an
+/// error (the caller fails closed).
+pub(crate) async fn assemble_executor(
+    inp: ExecutorInputs<'_>,
+) -> anyhow::Result<PluginToolExecutor> {
+    let agent = inp.agent;
+    let shell: Arc<dyn ShellExecutionPort> = Arc::new(match inp.cancel {
         Some(ref flag) => LocalShellExecutor::new().with_cancel(Arc::clone(flag)),
         None => LocalShellExecutor::new(),
     });
-
-    let http_client = match crate::adapters::outbound::egress::policy()
+    let http = crate::adapters::outbound::egress::policy()
         .tool_client(std::time::Duration::from_secs(60))
-    {
-        Ok(client) => client,
-        Err(e) => {
-            tracing::error!(error = %format!("{e:#}"), "egress: tool http client unavailable — tools disabled");
-            return None;
-        }
-    };
+        .map_err(|e| e.context("egress: tool http client unavailable"))?;
 
-    let allowed_names: HashSet<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    let allowed_names: HashSet<String> = inp.tools.iter().map(|t| t.name.clone()).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
-
-    let mut registry = ToolRegistry::new();
-
-    // Workspace plugin (new-style). Registers read_file, list_directory, write_file, run_command.
     let plugin_ctx = PluginCtx {
-        workspace,
-        config: agent_config,
-        http: http_client.clone(),
-        memory_manager: memory_manager
+        workspace: inp.workspace,
+        config: agent,
+        http: http.clone(),
+        memory_manager: inp
+            .memory
             .clone()
             .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
     };
 
-    // Register the tool catalog (`outbound/tools/mod.rs`) — the same call
-    // the MCP bridge makes, so a new catalog row reaches both.
-    futures::executor::block_on(crate::adapters::outbound::tools::register_catalog(
+    let mut registry = ToolRegistry::new();
+    crate::adapters::outbound::tools::register_catalog(
         &mut registry,
         &plugin_ctx,
         &allowed_names,
         &allowed_list,
         crate::adapters::outbound::tools::CatalogOpts {
-            cancel: cancel.clone(),
-            memory_config,
+            cancel: inp.cancel.clone(),
+            memory_config: inp.memory_config,
         },
-    ));
+    )
+    .await;
 
-    // SkillPlugin — in-process only (the bridge has no skill registry).
-    // Registers one `SkillShellTool` per active shell skill. Doc/API skills
-    // stay in the system-prompt path and do not create tools.
-    let skill_plugin = SkillPlugin::from_registry(skill_registry);
-    register_plugin_safe(
-        &mut registry,
-        &skill_plugin,
-        &plugin_ctx,
-        &allowed_list,
-        "Failed to register skill plugin — shell skills unavailable",
-    );
-
-    // MCP plugin — connects to each configured external server and registers
-    // its tools as `{server_name}__{tool_name}`: all of them when the agent's
-    // `tools` is empty, else only the listed ones — the allow-list the Claude
-    // Code bridge applies to the servers its engine passes
-    // (`TENGU_BRIDGE_MCP_SERVERS`), so an unlisted server tool runs nowhere.
-    if !mcp_servers.is_empty() {
-        let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
-        register_plugin_safe(
-            &mut registry,
-            &mcp_plugin,
-            &plugin_ctx,
-            &agent_config.tools,
-            "Failed to register mcp plugin — external MCP tools unavailable",
-        );
+    // One `SkillShellTool` per active shell skill; doc / API skills stay in
+    // the system prompt and create no tool.
+    let skill_plugin = SkillPlugin::from_registry(inp.skills);
+    if let Err(e) = registry
+        .register_plugin(&skill_plugin, &plugin_ctx, &allowed_list)
+        .await
+    {
+        tracing::warn!(error = %e, "skill plugin failed — shell skills unavailable");
     }
 
-    // Per-tool scope map — ENFORCED. `agent_config.scopes` already has the
-    // parent's `[default_scopes]` folded in (`Config::fold_default_scopes`
-    // at `Config::load`; `run-agent` children load the same config and go
-    // through `subagent_config`). A tool with no configured entry falls
-    // back to `permissive_scope`.
-    let scopes = resolve_tool_scopes(
-        workspace,
-        &agent_config.scopes,
-        registry.tool_names(),
-        agent_config.no_shell_fallback,
-    );
+    // Each configured server's tools as `{server}__{tool}`, kept to
+    // `mcp_allow` — an unlisted server tool runs nowhere.
+    if !inp.mcp_servers.is_empty() {
+        let mcp_plugin = McpPlugin::new(inp.mcp_servers.to_vec());
+        if let Err(e) = registry
+            .register_plugin(&mcp_plugin, &plugin_ctx, inp.mcp_allow)
+            .await
+        {
+            tracing::warn!(error = %e, "mcp plugin failed — external MCP tools unavailable");
+        }
+    }
 
-    Some(PluginToolExecutor {
+    let scopes = resolve_tool_scopes(
+        inp.workspace,
+        &agent.scopes,
+        registry.tool_names(),
+        agent.no_shell_fallback,
+    );
+    Ok(PluginToolExecutor {
         registry,
-        workspace: workspace.to_path_buf(),
-        shell: Arc::clone(&shell),
-        http: http_client,
-        secret_registry: Arc::clone(secret_registry),
-        activity,
+        workspace: inp.workspace.to_path_buf(),
+        shell,
+        http,
+        secret_registry: Arc::clone(inp.secrets),
+        activity: inp.activity,
         scopes,
-        // Stream M — clone into the executor so tools (e.g. skill_distill)
-        // can read engine + model when seeding generated artefacts. The
-        // borrow into ToolCtx happens in PluginToolExecutor::execute.
-        agent_config: Some(agent_config.clone()),
+        // Borrowed into every `ToolCtx.agent_config` (e.g. `skill_distill`
+        // reads engine + model).
+        agent_config: Some(agent.clone()),
     })
 }
 
