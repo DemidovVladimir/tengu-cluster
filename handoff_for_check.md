@@ -2,6 +2,119 @@
 
 > For the operator's architecture agent. Newest session first; earlier sessions below, unchanged. Ids and hashes are full. Everything is verifiable from git, GitHub and the commands in each session's last section.
 
+# Session 2026-10-23 → 2026-10-24: audit fixes part 2 + the cut — PR #59 merged
+
+| What | Value |
+|---|---|
+| PR | https://github.com/DemidovVladimir/tengu-cluster/pull/59 — squash-merged on green CI (Quality) after the commit that adds this entry |
+| Branch | `fix/audit-bugs` on `origin` (never `mol`), from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
+| Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (clean) |
+| Tracker | top of `TENGU_IMPROVEMENTS.md` (each row, full commit hash) |
+
+| Done | Rows |
+|---|---|
+| Bugs / leaks / tokens | A1–A12, S1–S16, T1, T2, T4, T5, T7, T9 (part 1, below) |
+| Structure | R1–R8 (R7 stages 1–3: Cargo workspace, `tengu` lib — unit tests are `cargo test --lib`), D6 |
+| Shared code | Y1–Y6, Y8–Y10 |
+| Debugging | B1–B5, B7 |
+| Paths | W1 (`config::paths::Layout` only), W2, W3 (but `--older-than`) |
+| Docs | D3, D5, O1–O11 (living docs undated, shipped docs in `docs/archive/`, `docs/plans/`, `configuration.md` 59 → 22 KB, `architecture.svg` 90 → 40 KB) |
+| **Cut** (operator 2026-10-24: "keep things as simple as possible … never … duplicates") | B6 `--from-trace`, B8 trace reader cache, B9 `tengu trace stats` + Studio figures, B10 trace schema 2, `tengu paths`, W4 workspace dir move — reverted on the branch (commits below) |
+
+## Commits since part 1 (oldest first)
+
+- `f60969215ae018fde0c14115192db58e00c58ef7` handoff_for_check: audit fixes part 1 (PR #59) — commits, operator steps on merge, open rows
+- `f4639ad1aa904206fc245a0e83455aa7af50e543` R4: module-wide dead_code allows removed — delete what rustc flags
+- `c91f9da22ef8cf44f093a737959cfeb2f4aec611` TENGU_IMPROVEMENTS: tracker — R4 done
+- `28b063466d1d3c6eebd713bcdbd8339727bc5ea2` R5: application IO behind ports — planner prompt from bootstrap, script metric through the shell port, APPLICATION_IO lint
+- `ace9f30d1f368dc5a42dd9c466540db4b0e2bcac` TENGU_IMPROVEMENTS: tracker — R5 done
+- `51ff4536420ae97404c8e6d35d713c7438373f8c` R6 (1/4): split domain/lp/snapshot.rs by schema
+- `536ef2c25c918aa9bd1f91001da0052a1db9f4f5` R6 (2/4): split inbound/eval.rs — eval logic to application
+- `ccd45c2bff871c59adf1e5b9d4a4115aca9eebc9` R6 (3/4): split inbound/telegram.rs — pipe / session / turn / commands
+- `a8cbe7bca350f521b7468c985e2471bf0f6c8351` R6 (4/4): split config/mod.rs — agent / channels / memory / load
+- `a51b2be2f83d36932dd8436ba8668c7e5164f0f5` TENGU_IMPROVEMENTS: tracker — R6 done
+- `7f8d7c4210b9599269e8ec1555fdd2fcdebe30e7` R7 stage 1: one Cargo workspace (crates/tengu-seal a member)
+- `d59e4c7145a7df5a7c399a370e5c14674c19a72a` R7 stage 2 (1/5): base58 in its own core module
+- `985936fb150fab53779e57a60a614ca2ac77bf03` R7 stage 2 (2/5): time helpers in a core module
+- `8721b3ffb5171dfb374ade2f7bb0e7accac5eb03` R7 stage 2 (3/5): runtime.db path in core config
+- `9b711da7a68a358ffac213e6c9bce35319f7aea3` R7 stage 2 (4/5): TOML digest in domain::canonical
+- `88337a0cb8bb3621ed91f821864828825f45a962` R7 stage 2 (5/5): lint — core never imports a vertical
+- `cdd2cf5ed70b375d843dab5ae4d522aee35fdead` R7 stage 3: the `tengu` lib
+- `cdadcbf8f4288b0e8b38b35ce6bd1c7e461ab42d` TENGU_IMPROVEMENTS: tracker — R7 stages 1–3 done
+- `70f06744e7801f5090b5014fa04dfee8ead994c4` R8: one SKILL.md frontmatter split (domain::skill)
+- `59875882d5ac30a26705e01d8a6495a6cf5d8ebf` TENGU_IMPROVEMENTS: tracker — R8 done
+- `640c8410a1bf8938d4ae0831116adf43c2e5a2c2` Y1: one HTTP request pipeline (http_class::GatedHttp) + Retry
+- `0478e612dfe961219bf146527f4e6fc7ca251f22` TENGU_IMPROVEMENTS: tracker — Y1 done
+- `958749187bc1cc62f2e89daec459516ba8ec1c61` Y2: one executor assembly for chat, run-agent and the MCP bridge
+- `b35d1206e41772cb0207ecb0f6dfd6a1a54f4573` Y5: one OpenAI chat-completions wire layer (engines/openai_compat.rs)
+- `97e33c762c813ad5884b7442d6194bb92125a63a` TENGU_IMPROVEMENTS: tracker — Y2, Y5 done
+- `9512327797ec89143529c4562e69206876ce4936` Y6: one set of tool argument parsers in tools/args.rs
+- `735de7744e6e2c7b7cbb9002cffde2c233585798` Y9: one hex encoder, one sha256 digest, one char clip
+- `73c49d99afa33c259cd48518e99b539958cfa5e6` TENGU_IMPROVEMENTS: tracker — Y6, Y8, Y9 done
+- `46ab0a45ff8f0a3da5b933d88f397dab6ad5c8e2` B1: tengu.log gets only failed egress records, at WARN
+- `f6d483645044c54e089d774ec74b685056a8d654` B2: one turn findable across egress.jsonl, the trace and tengu.log
+- `7fdebe072c64d08804202b8678bb4a5aae2316cd` B3: a step's tool events and metrics survive any exit — the step journal
+- `42d89bdfff1442b77ff43e690cd70ec561913d1f` TENGU_IMPROVEMENTS: tracker — B1, B2, B3 done
+- `d35ec897bde588062f410f152859d7057eb60849` B4: every LLM call leaves a metrics record — failed calls and in-process agent turns too
+- `b924499b48d1101d4ade529c0f339ee081415077` Tracker: B4 done (d35ec897bde588062f410f152859d7057eb60849)
+- `e51eb0f82582663b808a50e545739a2b25628cce` B5: a step summary's Open Brain write shows in the step's trace
+- `bc0d458b5df370b007d24c70508ee2e0bb7d054f` Tracker: B5 done (e51eb0f82582663b808a50e545739a2b25628cce)
+- `f334e4a30b0e429f4544d8e8bf31ed605b53368b` B6: `tengu tool call --from-trace <run_id>:<seq>` runs a traced call again
+- `322fedf644a7fbf6357e0ece823416121f0f8b8c` Tracker: B6 done (f334e4a30b0e429f4544d8e8bf31ed605b53368b)
+- `217c3ecdadc1f09de36d737b7a4bd2f889210328` B8: the trace reader keeps runs parsed; run lists read each file's ends
+- `06574c719eaf4f95e54d81423548fc42fba17f71` Tracker: B8 done (217c3ecdadc1f09de36d737b7a4bd2f889210328)
+- `0c14d652cdf79ec1b064ee9818bd6ae1a5119ce5` B9: run figures — `tengu trace stats` and the Studio board header
+- `216779ba10bfeeb69fab68ba7741ab34271cf029` Tracker: B9 done (0c14d652cdf79ec1b064ee9818bd6ae1a5119ce5)
+- `457d2f15e54ca61fcbf7b8525816a055ee7501fa` B10: trace schema 2 — run constants on the first line only
+- `e69ea934993613f75d631de067b5801e6c653ecb` Tracker: B10 done (457d2f15e54ca61fcbf7b8525816a055ee7501fa)
+- `687212daa615fcb884d8aa38e89a7fd5cc17b27d` W1: tengu paths + config::paths::Layout
+- `7702dccf677942a41b1594aea7bc3a9b2b1044c6` Tracker: W1 done (687212daa615fcb884d8aa38e89a7fd5cc17b27d)
+- `cfd9c11c4151689712e8f782c7a5397b8a89f953` W4: harness workspace state under <ws>/.tengu/; new sandboxes in ~/tengu-lab/<s>/ws
+- `fb9f4eb354b993fb3fd85f741afbe507fbe8aa6c` Tracker: W4 done (cfd9c11c4151689712e8f782c7a5397b8a89f953)
+- `d44e1176f47f5c127c2d60eda14b5a6a712ea6ad` O4: code-map § 7 generated from the module docs
+- `061c4e8f253086882dbfd44ece5d83b071c13c78` Tracker: O4 done (d44e1176f47f5c127c2d60eda14b5a6a712ea6ad)
+- `d3abedc0049360d2543ab54d6684cdff9ea592dd` O6: the three root plans move to docs/plans/
+- `f16883bc38809eeb3cacbf487a5c99c80b9162dd` Tracker: O6 done (d3abedc0049360d2543ab54d6684cdff9ea592dd)
+- `a2d6a8836ec68363815b277dd7bcde4c3ce6c678` O8: README § Sandboxes is the one sandbox list, checked
+- `fb4397c0bf752b9f8c147f9d009f2d0aa9eabbef` Tracker: O8 done (a2d6a8836ec68363815b277dd7bcde4c3ce6c678)
+- `4ce4d43bb607d9ed27f2e338dfe46d7d7b1a2838` O2 + O3: archive 36 shipped docs, trim the architecture explorer
+- `dc0be7ef3fa186e1f721f51d41fe86a24d70f8a3` Tracker: O2 + O3 done (4ce4d43bb607d9ed27f2e338dfe46d7d7b1a2838)
+- `88225e93aeb10b5f17ac5bef1e9bb1725a35a48f` O1: living docs undated, 7 more shipped docs archived, the naming rule
+- `7a6fa2dae557150bc6be8b64e206e0616ad22593` Tracker: O1 done (88225e93aeb10b5f17ac5bef1e9bb1725a35a48f)
+- `bd2df0d53d2c4b830df4ac4afc480efe5af58a3b` O5: SESSION_HANDOFF = resume + Open gates + last 3 sessions (137 -> 15 KB)
+- `0d86956caa9ed0e78e3376e325632d2c6b38f889` Tracker: O5 done (bd2df0d53d2c4b830df4ac4afc480efe5af58a3b)
+- `4f9b29ecbf5108c52e19aa9bc90507cbfb60eea8` O7: five-step reading order on the docs hub; README links instead of repeating
+- `2ec1511bc5287e3378d3ed0dda158bbbec6af49b` O9: every living doc's relative links checked by tests/tutorial_map.rs
+- `55e84368982c8040e0de7db129fdce0ae2c3507d` Tracker: O7 + O9 done (2ec1511bc5287e3378d3ed0dda158bbbec6af49b)
+- `34f2d2cc7fbcf2be513819562e8e2bd4b27cc43f` O10: living docs cite path::symbol, never file.rs:line
+- `5509164c9405c9a6dd5a0f49ffb359563b336ac1` Tracker: O10 done (34f2d2cc7fbcf2be513819562e8e2bd4b27cc43f)
+- `8897fecf56fd2b6af49d9f1745634e65c13b83d9` O11: each config key documented once — the module doc; the example test-loaded whole
+- `2aa8ea4e7984e1fb3157231927993df1198e66ad` O3 svg: architecture.svg cut to flows, stores and mechanics (90 -> 40 KB)
+- `7158ca70837a5b001dfa128befb16bc48c3e435f` O11 fix: no repeated config docs — field doc comments are the one place
+- `b3111ba00b3fdfec84188cb22388e02a7b7854d6` Tracker: O11 + O3 svg done; next = cut the PR
+- `572019295ba4924c6f24cef4f66c866ef8669552` Cut W4: workspace state stays where it was (memory/, .tengu-attachments/)
+- `e5508ef11de820e51c85f8e8c3c98df5661e3b00` Cut `tengu paths`: the command goes, config::paths::Layout stays
+- `998c4e6e4180725f3a45a38b01d57301f23550d4` Cut B10: trace lines keep the schema-1 envelope
+- `0cd2167cbdff64118a1829945d077939d651f2a2` Cut B9: no `tengu trace stats`, no Studio board figures
+- `d5f1c958ff313e6aa4e5b6ef73a147142f6a0a42` Cut B8: the trace reader parses on read again, no run cache
+- `c5bc3f32c0e6a0a417a3df41975ebfd074e22f0f` Cut B6: no `tengu tool call --from-trace`
+- `a16778f30d344c73809af3991e4e8a5c3734d777` Tracker + handoff: B6, B8, B9, B10, `tengu paths`, W4 cut
+
+## On merge (operator)
+
+| File | Change |
+|---|---|
+| `~/.tengu/config.toml` | delete line 1 `runtime_profile = "auto"` (R2) and line 7 `default_lens = "eco"` (A9): unknown keys fail the load |
+| `sandboxes/xpower/config.toml` (branch `feature/xpower-sandbox`) | on rebase: delete `runtime_profile` (R2); S3, S13, S10, S16 as in part 1 below |
+
+## Gates still the operator's
+
+D1, D2, T3, Y7 (→ T8), T6, D4, S4 narrow-only, S14 empty set, W3 `--older-than` (§ 11).
+
+## Verify
+
+`cargo fmt --all --check` · `cargo test --test layering_lint --test language_policy --test scope_lint --test code_map --test tutorial_map` · `cargo test --all-features --lib config::` · `tengu lineage verify --pins` (0 errors, 8 warnings) · `diff CLAUDE.md AGENTS.md | wc -l` = 22 · CI Quality on the PR head.
+
 # Session 2026-10-22 → 2026-10-23: audit fixes part 1 — PR #59 open, not merged
 
 | What | Value |
