@@ -1009,15 +1009,11 @@ These are not preferences. They're load-bearing.
   call again as its agent (refused when the trace hid or dropped its args,
   unless `--args`).
 - **Worktrees inherit the main checkout's `.env` (2026-10-09)** — `main` calls
-  `config::paths::load_dotenv` (`dotenvy`): the nearest `.env` up from
+  `dotenvy::dotenv()` (`adapters/inbound/cli/mod.rs`): the nearest `.env` up from
   the cwd, never overriding an exported var. A `tengu` started under
   `.claude/worktrees/<lane>/` therefore gets the main checkout's `TENGU_HOME`
   (`~/.tengu`, the operator's live state) — `export TENGU_HOME=<own dir>`
-  first (lab: `$HOME/tengu-lab/home`). `tengu paths [--sandbox <s>] [--json]`
-  prints the home and where it came from (exported · the `.env` that set it ·
-  default), then every state dir, log, workspace and `.tengu/` store with its
-  size — paths under the home are joined only in `config::paths::Layout`.
-  `--sandbox <name>` is cwd-relative
+  first (lab: `$HOME/tengu-lab/home`). `--sandbox <name>` is cwd-relative
   (`sandboxes/<name>/config.toml`, `bootstrap/sandbox.rs`): run from the repo /
   worktree root.
 - **Weekend no-pull rule — lifted 2026-10-12 (G-WKND done)** — weekend #2 was

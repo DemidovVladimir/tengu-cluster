@@ -305,7 +305,10 @@ impl EgressPolicy {
             bail!("invalid [egress] config:\n- {}", errors.join("\n- "));
         }
         let cfg = cfg.resolved();
-        let audit_path = cfg.audit_file(&crate::config::paths::Layout::current());
+        let audit_path = cfg.audit.then(|| match &cfg.audit_log {
+            Some(p) => crate::config::paths::expand_tilde(p),
+            None => crate::config::paths::Layout::current().egress_log(),
+        });
         if let Some(dir) = audit_path.as_ref().and_then(|p| p.parent()) {
             let _ = std::fs::create_dir_all(dir);
         }

@@ -577,7 +577,6 @@ sources = [
 sources = [
   "src/adapters/inbound/cli/doctor.rs",
   "src/adapters/inbound/cli/mod.rs",
-  "src/adapters/inbound/cli/paths.rs",
   "src/adapters/outbound/prune.rs",
   "src/domain/engine_smoke.rs",
   "src/domain/runtime.rs",

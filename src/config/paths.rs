@@ -1,10 +1,8 @@
-//! Filesystem locations the config layer resolves: `TENGU_HOME` and where
-//! it came from, the [`Layout`] under it, the default config file, the skill tiers and `~`
-//! expansion for configured paths. `tengu paths --sandbox <s>` prints them
-//! for one sandbox.
+//! Filesystem locations the config layer resolves: `TENGU_HOME`, the
+//! [`Layout`] under it, the default config file, the skill tiers and `~`
+//! expansion for configured paths.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 pub fn expand_tilde(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
@@ -117,44 +115,6 @@ pub(crate) fn resolve_tengu_home() -> PathBuf {
         .join(".tengu")
 }
 
-/// Where `TENGU_HOME` came from (`tengu paths`). `.env` is the worktree
-/// trap: a `tengu` started below the main checkout takes its `.env`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HomeSource {
-    /// Exported before `tengu` started.
-    Env,
-    /// Set by this `.env` file ([`load_dotenv`]).
-    DotEnv(PathBuf),
-    /// Unset: `~/.tengu`.
-    Default,
-}
-
-static HOME_SOURCE: OnceLock<HomeSource> = OnceLock::new();
-
-/// Load the nearest `.env` up from the cwd — never overriding an exported
-/// variable — and note where `TENGU_HOME` came from ([`home_source`]).
-pub fn load_dotenv() {
-    let exported = std::env::var_os("TENGU_HOME").is_some();
-    let file = dotenvy::dotenv().ok();
-    let source = match file {
-        _ if exported => HomeSource::Env,
-        Some(f) if std::env::var_os("TENGU_HOME").is_some() => HomeSource::DotEnv(f),
-        _ => HomeSource::Default,
-    };
-    let _ = HOME_SOURCE.set(source);
-}
-
-/// What [`load_dotenv`] found; before it ran, the env alone decides.
-pub fn home_source() -> HomeSource {
-    HOME_SOURCE.get().cloned().unwrap_or_else(|| {
-        if std::env::var_os("TENGU_HOME").is_some() {
-            HomeSource::Env
-        } else {
-            HomeSource::Default
-        }
-    })
-}
-
 /// The `TENGU_HOME` tree — the one place its names are joined:
 ///
 /// | Path | Holds |
@@ -179,10 +139,6 @@ impl Layout {
 
     pub fn at(home: impl Into<PathBuf>) -> Self {
         Self { home: home.into() }
-    }
-
-    pub fn home(&self) -> &Path {
-        &self.home
     }
 
     pub fn config(&self) -> PathBuf {
@@ -290,7 +246,6 @@ mod tests {
     fn layout_names_the_home_tree() {
         let l = Layout::at("/h");
         let p = |s: &str| PathBuf::from(s);
-        assert_eq!(l.home(), Path::new("/h"));
         assert_eq!(l.config(), p("/h/config.toml"));
         assert_eq!(l.state_dir("xm"), p("/h/state/xm"));
         assert_eq!(l.vault("w1"), p("/h/state/evidence/w1"));
