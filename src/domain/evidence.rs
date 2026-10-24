@@ -260,7 +260,7 @@ mod tests {
             entry("runs/x/a.jsonl", &a),
             entry("other/y", &a),
         ];
-        let expected = sha256_hex(&format!("{a}  x/a.jsonl\n{b}  x/report.json\n"));
+        let expected = sha256_hex(format!("{a}  x/a.jsonl\n{b}  x/report.json\n"));
         assert_eq!(tree_hash("runs", &entries), expected);
         let mut reversed = entries.clone();
         reversed.reverse();

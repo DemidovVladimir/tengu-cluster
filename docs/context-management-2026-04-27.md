@@ -246,7 +246,7 @@ Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1152
 | `max_file_tokens` | 2 000 | `identity.instructions` and each workspace identity file (`IDENTITY.md`, `PROFILE.md`, `CONTEXT.md`) |
 | `max_skill_context_tokens` | 16 000 | each skill context fragment |
 | `max_total_tokens` | 32 000 | whole system prompt: an identity file past it ends the file list; a skill fragment past it is dropped with a warn (`Skill context DROPPED`); the tool listing gets 10 % slack |
-| (#13 each cut) | `truncate_to_token_budget` (`prompt_budget.rs:41`) | appends `\n\n[truncated]` |
+| (#13 each cut) | `truncate_to_token_budget` (`prompt_budget.rs:41`) | cuts at `tokens × 4` bytes on a char boundary, appends `\n\n[truncated]` |
 
 No dedup or per-skill-count cap — selection happens upstream.
 
@@ -546,7 +546,7 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 10 | 2 | untrusted fence | domain/untrusted.rs · application/memory/fencing.rs | wraps #8, planner recall, step inputs, webhook bodies, escalations, outside tool text; fixpoint cleaner |
 | 11 | 2 | grounding nudge (chat only) | application/chat/service.rs:250 · :395 | trigger words (whole) |
 | 12 | 2 | identity / skill / prompt caps | application/skills/registry.rs:1253 | 2K / 16K / 32K |
-| 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |
+| 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | byte cap (char boundary) |
 | 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | application/chat/tool_loop.rs:406 | 300 000 chars (local: window / 8 × 4) |
 | 15 | 3 | `compact_tool_result` | application/chat/tool_loop.rs:458 (caller :226) | 200 chars |
 | 16 | 3 | `[OUTPUT_TRUNCATED]` continue | application/chat/tool_loop.rs:135 | sentinel |

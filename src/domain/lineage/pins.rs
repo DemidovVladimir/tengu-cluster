@@ -9,18 +9,11 @@
 //! | `config:<sandbox>/<dotted path>` ([`config_pin`]) | the canonical JSON of that value of `sandboxes/<sandbox>/config.toml` (raw text: `${VAR}` not substituted) |
 //! | `spec:<sandbox>/<strategy>` ([`spec_pin`]) | the normalized spec = a run's `spec_sha256` (`StrategySpec::from_value` → `spec::spec_sha256`) |
 //! | `tool_schema:<tool>` ([`schema_pin`]) | the canonical JSON of the catalog tool's input schema |
-//! | `skill:<name>` · `repo:<path>` ([`bytes_sha256`]) | the file's bytes |
-
-use serde_json::Value;
-use sha2::{Digest, Sha256};
+//! | `skill:<name>` · `repo:<path>` ([`sha256_hex`]) | the file's bytes |
 
 use crate::domain::backtest::spec::{spec_sha256, StrategySpec};
 use crate::domain::canonical::{canonical_sha256, toml_to_json};
-
-/// sha256 of bytes, 64 lowercase hex.
-pub fn bytes_sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
+use serde_json::Value;
 
 /// The value at `path` of a TOML text.
 pub fn config_value(text: &str, path: &[String]) -> Result<Value, String> {
@@ -133,9 +126,5 @@ direction = "fade"
         );
         assert_eq!(spec_pin(&explicit, "weekend_fade").unwrap(), pin);
         assert!(spec_pin(CONFIG, "nope").is_err());
-        assert_eq!(
-            bytes_sha256(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
     }
 }

@@ -602,15 +602,9 @@ impl JudgeClient for EvalJudgeClient {
     }
 }
 
-/// `s` cut to `max` characters, `…` marking a cut.
+/// `s` cut to `max` characters, `…` marking a cut (`token::clip_chars`).
 pub(crate) fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max).collect();
-        out.push('…');
-        out
-    }
+    crate::domain::token::clip_chars(s, max)
 }
 
 /// A row's transcript (Markdown): config, prompt, message log, the judge's

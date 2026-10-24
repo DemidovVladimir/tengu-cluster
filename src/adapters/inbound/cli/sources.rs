@@ -41,13 +41,14 @@ use crate::config::sections::SandboxSections;
 use crate::config::sources::{sources_db, SourceEntry, SourceKind, SourcesConfig};
 use crate::config::Config;
 use crate::domain::canonical::canonical_json;
+use crate::domain::canonical::sha256_hex;
 use crate::domain::observation::now_ms;
 use crate::domain::source::ted::{query_key, TED_MAX_LIMIT};
 use crate::domain::source::AsOfMode;
 use crate::domain::time::{fmt_time, parse_time};
 use crate::ports::clock::Clock;
 use crate::ports::source_store::{
-    body_sha256, switched_off, Batch, Snapshot, SnapshotKind, SourceStore, SourceSwitch,
+    switched_off, Batch, Snapshot, SnapshotKind, SourceStore, SourceSwitch,
 };
 
 #[derive(Subcommand)]
@@ -576,7 +577,7 @@ async fn terms(sections: &SandboxSections, id: &str, file: &Path, now: i64) -> R
         .as_deref()
         .ok_or_else(|| anyhow!("source `{id}` has no terms_url (the page's address)"))?;
     let body = std::fs::read(file).map_err(|e| anyhow!("{}: {e}", file.display()))?;
-    let got = body_sha256(&body);
+    let got = sha256_hex(&body);
     if got != want {
         bail!(
             "{}: sha256 {got} is not the row's terms_sha256 {want} — another file, or the page \
@@ -980,7 +981,7 @@ mod tests {
         let page = b"<html>synthetic reuse terms, reviewed 2026-10-08</html>";
         let mut s = sections(dir.path(), true);
         let mut cfg = (**s.sources.as_ref().unwrap()).clone();
-        cfg.registry.get_mut("ted_search").unwrap().terms_sha256 = Some(body_sha256(page));
+        cfg.registry.get_mut("ted_search").unwrap().terms_sha256 = Some(sha256_hex(page));
         s.sources = Some(Arc::new(cfg));
         let good = dir.path().join("terms.html");
         let other = dir.path().join("other.html");
@@ -994,7 +995,7 @@ mod tests {
         assert!(
             e.contains(&format!(
                 "is not the row's terms_sha256 {}",
-                body_sha256(page)
+                sha256_hex(page)
             )),
             "{e}"
         );
@@ -1005,7 +1006,7 @@ mod tests {
         assert!(e.contains("has no terms_sha256"), "{e}");
         let said = terms(&s, "ted_search", &good, now).await.unwrap();
         assert!(
-            said.contains(&format!("terms page {} stored", body_sha256(page))),
+            said.contains(&format!("terms page {} stored", sha256_hex(page))),
             "{said}"
         );
         assert!(terms(&s, "ted_search", &good, now)
@@ -1021,7 +1022,7 @@ mod tests {
             .await
             .unwrap();
         let store = open_source_store(&s).unwrap();
-        let kept = store.snapshot(&body_sha256(page)).await.unwrap().unwrap();
+        let kept = store.snapshot(&sha256_hex(page)).await.unwrap().unwrap();
         assert_eq!(
             (kept.kind, kept.body.as_deref()),
             (SnapshotKind::Terms, Some(&page[..]))

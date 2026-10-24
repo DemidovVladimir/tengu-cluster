@@ -30,6 +30,7 @@ use serde_json::Value;
 
 use crate::domain::market::InstrumentId;
 use crate::domain::marketdata::{MarketEvent, EVENT_TITLE_MAX_CHARS};
+use crate::domain::token::clip_chars;
 use crate::domain::tz::Zone;
 
 const HOUR_MS: i64 = 3_600_000;
@@ -437,7 +438,7 @@ pub fn json_clock(json_ms: i64, published_ms: i64) -> JsonClock {
 /// The event title (module table): [`filing_title_full`] cut to
 /// `EVENT_TITLE_MAX_CHARS`.
 pub fn filing_title(f: &Filing) -> Option<String> {
-    filing_title_full(f).map(|t| clip(&t, EVENT_TITLE_MAX_CHARS))
+    filing_title_full(f).map(|t| clip_chars(&t, EVENT_TITLE_MAX_CHARS))
 }
 
 /// The 8-K items with short names, else `primaryDocDescription` — whole (a
@@ -459,15 +460,6 @@ pub fn filing_title_full(f: &Filing) -> Option<String> {
         format!("items {}", items.join(" · "))
     };
     (!title.is_empty()).then_some(title)
-}
-
-fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 /// The `filing` event of `f` for `instrument`, published at `published_ms`

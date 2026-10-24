@@ -616,7 +616,7 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
         cycle_id: cycle_id.clone(),
         decided_at_ms: p.decided_at_ms,
         mode,
-        packet_sha256: sha256_hex(&canonical_json(&serde_json::to_value(&packet)?)),
+        packet_sha256: sha256_hex(canonical_json(&serde_json::to_value(&packet)?)),
         generation: p.generation.clone(),
         architect: p.architect.clone(),
         critic: p.critic.clone(),

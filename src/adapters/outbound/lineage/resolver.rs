@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::domain::canonical::sha256_hex;
 use crate::domain::evidence::{tree_hash, EvidenceRecord, ItemKind, ManifestEntry};
-use crate::domain::lineage::pins::bytes_sha256;
 use crate::domain::lineage::value::Locator;
 use crate::ports::lineage::{EvidenceResolver, Resolution};
 
@@ -69,14 +69,14 @@ pub(crate) fn path_sha256(path: &Path) -> Result<String, String> {
             let bytes = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             entries.push(ManifestEntry {
                 path: format!("d/{rel}"),
-                sha256: bytes_sha256(&bytes),
+                sha256: sha256_hex(&bytes),
                 bytes: bytes.len() as u64,
             });
         }
         return Ok(tree_hash("d", &entries));
     }
     std::fs::read(path)
-        .map(|b| bytes_sha256(&b))
+        .map(|b| sha256_hex(&b))
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 

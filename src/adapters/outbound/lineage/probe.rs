@@ -18,7 +18,8 @@ use serde_json::Value;
 
 use crate::config::lineage::{declared_binding, repo_root, same_dir, sandbox_pin};
 use crate::domain::backtest::spec::KINDS;
-use crate::domain::lineage::pins::{bytes_sha256, schema_pin};
+use crate::domain::canonical::sha256_hex;
+use crate::domain::lineage::pins::schema_pin;
 use crate::domain::lineage::value::PinTarget;
 use crate::ports::lineage::{ContractProbe, SandboxBinding};
 
@@ -51,7 +52,7 @@ impl RepoProbe {
             return Err(format!("{} is a directory", path.display()));
         }
         std::fs::read(&path)
-            .map(|b| bytes_sha256(&b))
+            .map(|b| sha256_hex(&b))
             .map_err(|e| format!("{}: {e}", path.display()))
     }
 }

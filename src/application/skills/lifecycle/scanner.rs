@@ -296,13 +296,7 @@ fn verdict_str(v: Verdict) -> &'static str {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    let s = s.replace('\n', " ");
-    if s.chars().count() <= n {
-        s
-    } else {
-        let trimmed: String = s.chars().take(n.saturating_sub(1)).collect();
-        format!("{trimmed}…")
-    }
+    crate::domain::token::clip_chars(&s.replace('\n', " "), n)
 }
 
 // ---- Verdict mapping -----------------------------------------------------

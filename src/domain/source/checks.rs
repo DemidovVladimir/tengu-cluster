@@ -262,7 +262,7 @@ fn flood(w: &World, t: i64, kinds: &[Flood]) -> Vec<SourceRecord> {
                     n.parsed_ms = at;
                     n.valid_from_ms = at;
                     n.valid_until_ms = n.valid_until_ms.map(|u| u.max(at + D));
-                    n.snapshots = vec![crate::domain::canonical::sha256_hex(&format!("flood {k}"))];
+                    n.snapshots = vec![crate::domain::canonical::sha256_hex(format!("flood {k}"))];
                     n.supersedes = None;
                     n.with_identity()
                 }

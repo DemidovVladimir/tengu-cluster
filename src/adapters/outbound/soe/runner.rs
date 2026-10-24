@@ -165,7 +165,7 @@ pub(crate) fn skill_sha256_of(skill_packages: &[String], workspace: &Path) -> St
             .find(|p| p.is_file())
             .and_then(|p| std::fs::read(p).ok());
         let sha = match found {
-            Some(bytes) => sha256_hex(&String::from_utf8_lossy(&bytes)),
+            Some(bytes) => sha256_hex(String::from_utf8_lossy(&bytes).as_bytes()),
             None => "MISSING".to_string(),
         };
         skills.insert(name.clone(), sha);

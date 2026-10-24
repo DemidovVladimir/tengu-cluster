@@ -31,12 +31,13 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::config::sources::sources_db;
+use crate::domain::canonical::sha256_hex;
 use crate::domain::evidence::valid_sha256;
 use crate::domain::source::record::valid_source_id;
 use crate::domain::source::{Coverage, ParseStatus, Purge, SourceRecord};
 use crate::ports::source_store::{
-    body_sha256, Batch, CommitReport, Cursor, PurgeRequest, RecordQuery, Snapshot, SnapshotKind,
-    SourceStore, SourceSwitch,
+    Batch, CommitReport, Cursor, PurgeRequest, RecordQuery, Snapshot, SnapshotKind, SourceStore,
+    SourceSwitch,
 };
 
 /// The schema version in `PRAGMA user_version`.
@@ -258,8 +259,8 @@ fn batch_problems(batch: &Batch) -> Vec<String> {
             ));
         }
         if let Some(body) = &s.body {
-            if body_sha256(body) != s.sha256 {
-                out.push(format!("{at}: the body's sha256 is {}", body_sha256(body)));
+            if sha256_hex(body) != s.sha256 {
+                out.push(format!("{at}: the body's sha256 is {}", sha256_hex(body)));
             }
             if body.len() as u64 != s.bytes {
                 out.push(format!(

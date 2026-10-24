@@ -545,8 +545,8 @@ const MECHS = [
     pills: ["max_file_tokens = 2_000", "max_skill_context_tokens = 16_000", "max_total_tokens = 32_000"],
     tags: ["skill", "file", "system-prompt", "truncate"] },
   { n: 13, layer: 2, title: "truncate_to_token_budget", where: "prompt_budget.rs:41",
-    body: "Char-cap using ~4 chars/token. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by <code>build_system_prompt</code> (#12) + <code>maybe_compact_flow</code>.",
-    pills: ["char-cap", "[truncated] marker"], tags: ["truncate", "char", "budget"] },
+    body: "Cap of tokens × 4 bytes (the unit the token estimate counts), cut on a char boundary. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by <code>build_system_prompt</code> (#12) + <code>maybe_compact_flow</code>.",
+    pills: ["byte cap", "[truncated] marker"], tags: ["truncate", "char", "budget"] },
 
   // Layer 3
   { n: 14, layer: 3, title: "truncate_tool_result", where: "application/chat/tool_loop.rs:406 (tool_result_content)",

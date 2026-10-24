@@ -780,7 +780,7 @@ mod tests {
             &stamp(),
             read,
             prior,
-            sha256_hex(&format!("page with {}", read.publication_number)),
+            sha256_hex(format!("page with {}", read.publication_number)),
             at,
             at + 5,
         )

@@ -96,10 +96,7 @@ impl OpenRouterEngine {
     /// `raw` redacted and cut at a char boundary for a log line.
     fn log_excerpt(&self, raw: &str) -> String {
         let redacted = self.secrets.redact(raw);
-        match crate::domain::token::truncate_at_boundary(&redacted, EMPTY_TURN_LOG_CHARS) {
-            Some((prefix, _)) => format!("{prefix}…"),
-            None => redacted,
-        }
+        crate::domain::token::truncate_with_suffix(&redacted, EMPTY_TURN_LOG_CHARS, "…")
     }
 
     /// One POST of `request` with this engine's auth + attribution headers

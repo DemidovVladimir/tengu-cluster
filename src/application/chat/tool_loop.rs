@@ -36,7 +36,7 @@ use tracing::debug;
 use crate::domain::message::{Message, Role, StreamEvent, ToolCall, ToolDef, ToolRun};
 use crate::domain::metrics::MetricsLayer;
 use crate::domain::observation::Observation;
-use crate::domain::token::truncate_at_boundary;
+use crate::domain::token::{truncate_at_boundary, truncate_with_suffix};
 use crate::domain::untrusted;
 use crate::domain::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
 use crate::ports::engine::ToolExecutor;
@@ -624,18 +624,10 @@ fn compact_tool_result(content: &str, limit: usize) -> String {
         return untrusted::fence(origin, &compact_tool_result(inner, limit));
     }
 
-    // Take the first line — most tool results put key info there.
+    // Take the first line — most tool results put key info there — cut
+    // when it alone is too long.
     let first_line = content.lines().next().unwrap_or(content);
-    if first_line.len() <= limit {
-        return first_line.to_string();
-    }
-
-    // First line itself is too long — truncate it.
-    let mut end = limit;
-    while end > 0 && !first_line.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &first_line[..end])
+    truncate_with_suffix(first_line, limit, "…")
 }
 
 // ---------------------------------------------------------------------------

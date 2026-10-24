@@ -30,7 +30,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_postgres::{Client, NoTls};
@@ -38,6 +37,7 @@ use uuid::Uuid;
 
 use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::adapters::outbound::tools::args::require_str;
+use crate::domain::canonical::sha256_hex;
 use crate::domain::memory::{RecallHit, DEFAULT_EMBEDDING_MODEL};
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
@@ -1146,10 +1146,6 @@ fn resolve_workspace_path(workspace: &Path, path: &str) -> PathBuf {
     } else {
         workspace.join(p)
     }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn pgvector_literal(embedding: &[f32]) -> Result<String> {

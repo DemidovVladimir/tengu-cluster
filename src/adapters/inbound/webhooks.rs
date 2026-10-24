@@ -666,11 +666,7 @@ mod tests {
         let mut mac = HmacSha256::new_from_slice(secret).expect("hmac");
         mac.update(body);
         let bytes = mac.finalize().into_bytes();
-        let mut hex = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            hex.push_str(&format!("{:02x}", b));
-        }
-        format!("sha256={}", hex)
+        format!("sha256={}", crate::domain::canonical::hex(&bytes))
     }
 
     #[test]

@@ -197,8 +197,7 @@ async fn fetch_reuses_the_index_time_and_stores_snapshots() {
             ),
         ]
     );
-    let subs_sha =
-        crate::ports::source_store::body_sha256(fixture("CIK0000320193.json").as_bytes());
+    let subs_sha = crate::domain::canonical::sha256_hex(fixture("CIK0000320193.json").as_bytes());
     for r in &records {
         assert_eq!(r.validate(), Ok(()));
         assert_eq!(r.snapshots.len(), 2, "{}", r.record_id);
@@ -457,7 +456,7 @@ async fn a_failed_read_stops_the_cik_and_keeps_what_was_read() {
     .await;
     assert_eq!(report.rows[0].classes, vec![ErrorClass::Decode]);
     assert!(all(&store).await.is_empty());
-    let sha = crate::ports::source_store::body_sha256(b"<html>maintenance</html>");
+    let sha = crate::domain::canonical::sha256_hex(b"<html>maintenance</html>");
     let kept = store.snapshot(&sha).await.unwrap().unwrap();
     assert_eq!(kept.request_key, "submissions:0000320193");
     let cov = store.coverage(None).await.unwrap();

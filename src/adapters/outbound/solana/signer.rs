@@ -92,9 +92,7 @@ mod tests {
     use crate::domain::solana_tx::golden::{golden, ix, key, signer, unhex};
     use crate::domain::solana_tx::{Instruction, LegacyMessage};
 
-    fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
-    }
+    use crate::domain::canonical::hex;
 
     #[test]
     fn rfc8032_test_vector_1() {

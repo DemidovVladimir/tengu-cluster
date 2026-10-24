@@ -758,8 +758,7 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
 
     // Step 8: audit. sha256 over SKILL.md content.
     let skill_md_bytes = std::fs::read(install_dir.join("SKILL.md")).unwrap_or_default();
-    use sha2::{Digest, Sha256};
-    let sha = format!("{:x}", Sha256::digest(&skill_md_bytes));
+    let sha = crate::domain::canonical::sha256_hex(&skill_md_bytes);
     let entry = audit::AuditEntry {
         ts: chrono::Utc::now().to_rfc3339(),
         op: "install".to_string(),
