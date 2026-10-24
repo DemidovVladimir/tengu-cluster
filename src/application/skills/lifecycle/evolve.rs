@@ -161,7 +161,7 @@ pub(crate) fn apply_proposal_to_skill_md(
 /// metrics block replaced when the proposal carries metrics) and the
 /// proposed body.
 pub(crate) fn proposed_skill_md(current: &str, proposal: &ProposalBody) -> Result<String> {
-    let (fm_block, _old_body) = split_frontmatter(current)?;
+    let fm_block = crate::domain::skill::split_frontmatter(current)?.yaml;
     let new_fm = if let Some(ms) = &proposal.metrics {
         replace_metrics_block(fm_block, ms)?
     } else {
@@ -275,16 +275,6 @@ pub(crate) fn apply_proposal_resources(
     Ok(written)
 }
 
-pub(crate) fn split_frontmatter(body: &str) -> Result<(&str, &str)> {
-    let rest = body
-        .strip_prefix("---\n")
-        .ok_or_else(|| anyhow::anyhow!("no frontmatter"))?;
-    let end = rest
-        .find("\n---")
-        .ok_or_else(|| anyhow::anyhow!("frontmatter not closed"))?;
-    Ok((&rest[..end + 1], &rest[end + 4..]))
-}
-
 /// Read the `editable_by_learner` frontmatter flag from a skill's SKILL.md.
 ///
 /// Returns `Ok(true)` when the flag is present-and-true OR absent (back-compat
@@ -299,8 +289,8 @@ pub(crate) fn split_frontmatter(body: &str) -> Result<(&str, &str)> {
 pub(crate) fn is_editable_by_learner(skill_md_path: &Path) -> Result<bool> {
     let body = std::fs::read_to_string(skill_md_path)
         .with_context(|| format!("read {}", skill_md_path.display()))?;
-    let (fm_block, _) = match split_frontmatter(&body) {
-        Ok(parts) => parts,
+    let fm_block = match crate::domain::skill::split_frontmatter(&body) {
+        Ok(fm) => fm.yaml,
         Err(_) => {
             tracing::debug!(
                 "is_editable_by_learner: no frontmatter in {} — defaulting to true",

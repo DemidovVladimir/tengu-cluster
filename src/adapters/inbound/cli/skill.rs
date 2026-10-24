@@ -71,13 +71,8 @@ struct SkillFrontmatterLite {
 
 fn read_frontmatter_lite(skill_md: &Path) -> Option<SkillFrontmatterLite> {
     let content = std::fs::read_to_string(skill_md).ok()?;
-    if !content.starts_with("---") {
-        return None;
-    }
-    let rest = &content[3..];
-    let end = rest.find("\n---")?;
-    let yaml_text = rest[..end].trim_start_matches('\n');
-    serde_yaml::from_str::<SkillFrontmatterLite>(yaml_text).ok()
+    let fm = crate::domain::skill::split_frontmatter(&content).ok()?;
+    serde_yaml::from_str::<SkillFrontmatterLite>(fm.yaml).ok()
 }
 
 /// True if the frontmatter declares any `Script` or `ShellCheck` metric kinds.

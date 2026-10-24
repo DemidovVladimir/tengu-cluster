@@ -244,7 +244,7 @@
   <div class="sec-head">
     <span class="kicker">One file, three shapes</span>
     <h2 id="s-kinds">Documentation, API and shell skills</h2>
-    <p>The parser tries frontmatter first, then the classic shell format. Every skill in <code>skills/</code> today is frontmatter; none is a shell skill.</p>
+    <p>The parser tries frontmatter first, then the classic shell format. Every skill in <code>skills/</code> today is frontmatter; none is a shell skill. One split serves every reader (<code>domain::skill::split_frontmatter</code>): a fence is a line of three or more <code>-</code>, CRLF and leading blank lines are fine — a skill is visible to all readers or to none.</p>
   </div>
   <div class="tabs">
     <div class="tablist">
@@ -472,6 +472,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/application/skills/registry.rs</code></td><td>parse, validate, tiers, shadowing, allow-list, no-shell drop, hot reload, prompt budget</td></tr>
+        <tr><td><code>src/domain/skill.rs</code></td><td>the one frontmatter split (fences, CRLF, body) every skill reader uses</td></tr>
         <tr><td><code>src/ports/skill_source.rs</code></td><td>the port that lists skill files</td></tr>
         <tr><td><code>src/adapters/outbound/tools/skill/</code></td><td>shell skills as tools: template quoting, <code>shell_bins</code>, egress guard</td></tr>
         <tr><td><code>src/adapters/outbound/tools/view_skill/</code></td><td><code>view_skill</code>: list, read, read_resource</td></tr>

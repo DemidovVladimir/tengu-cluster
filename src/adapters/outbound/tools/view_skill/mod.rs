@@ -497,25 +497,13 @@ fn read_skill(skill: &str, skill_dir: &Path, tier: Tier) -> Result<ToolOutput> {
     Ok(ToolOutput::from(out.to_string()))
 }
 
-/// Returns `Some((frontmatter, body))` when SKILL.md has the standard
-/// `---\n<yaml>\n---\n<body>` envelope. The frontmatter `Option<Value>` is
+/// Returns `Some((frontmatter, body))` when SKILL.md has a frontmatter
+/// (`domain::skill::split_frontmatter`). The frontmatter `Option<Value>` is
 /// `None` when the YAML is unparseable (caller can decide to error or warn).
 /// Returns `None` when the envelope itself is missing.
 fn split_frontmatter(content: &str) -> Option<(Option<serde_yaml::Value>, String)> {
-    if !content.starts_with("---") {
-        return None;
-    }
-    let rest = &content[3..];
-    let end = rest.find("\n---")?;
-    let yaml_text = rest[..end].trim_start_matches('\n');
-    let body_start = end + "\n---".len();
-    // Body: skip up to and including the next newline (if present).
-    let body = match rest[body_start..].strip_prefix('\n') {
-        Some(after_nl) => after_nl.to_string(),
-        None => rest[body_start..].to_string(),
-    };
-    let fm = serde_yaml::from_str::<serde_yaml::Value>(yaml_text).ok();
-    Some((fm, body))
+    let fm = crate::domain::skill::split_frontmatter(content).ok()?;
+    Some((serde_yaml::from_str(fm.yaml).ok(), fm.body.to_string()))
 }
 
 fn build_metrics_summary(fm: &serde_yaml::Value) -> (Vec<Value>, Option<String>) {

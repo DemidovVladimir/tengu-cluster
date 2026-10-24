@@ -276,17 +276,11 @@ fn build_user_prompt(skill_name: &str, skill_description: &str, query: &str) -> 
 }
 
 /// Read `SKILL.md` and return `(name, description)` parsed from its YAML
-/// frontmatter. Mirrors `evolve.rs::split_frontmatter` for the split, then
-/// uses `serde_yaml` to extract the two string fields.
+/// frontmatter (`domain::skill::split_frontmatter`), then uses `serde_yaml`
+/// to extract the two string fields.
 fn read_skill_frontmatter(skill_md_path: &std::path::Path) -> Result<(String, String)> {
     let body = std::fs::read_to_string(skill_md_path)?;
-    let rest = body
-        .strip_prefix("---\n")
-        .ok_or_else(|| anyhow!("no frontmatter"))?;
-    let end = rest
-        .find("\n---")
-        .ok_or_else(|| anyhow!("frontmatter not closed"))?;
-    let fm_block = &rest[..end + 1];
+    let fm_block = crate::domain::skill::split_frontmatter(&body)?.yaml;
     let v: serde_yaml::Value = serde_yaml::from_str(fm_block)?;
     let name = v
         .get("name")

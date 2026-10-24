@@ -475,17 +475,9 @@ fn api_skill_preamble(name: &str) -> String {
 }
 
 fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-
-    let after_first = &trimmed[3..].trim_start_matches(|c: char| c == '-');
-    let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
-
-    let closing = after_first.find("\n---")?;
-    let yaml_block = &after_first[..closing];
-    let body = after_first[closing + 4..].trim_start_matches('-').trim();
+    let fm = crate::domain::skill::split_frontmatter(content).ok()?;
+    let yaml_block = fm.yaml;
+    let body = fm.body.trim();
 
     let mut name = None;
     let mut description = None;

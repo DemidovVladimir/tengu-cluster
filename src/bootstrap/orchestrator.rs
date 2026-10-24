@@ -311,16 +311,7 @@ fn planner_prompt() -> String {
 
 /// `content` after its `---` frontmatter (the whole text when it has none).
 fn skill_body(content: &str) -> &str {
-    let Some(after_first) = content.strip_prefix("---") else {
-        return content;
-    };
-    match after_first.find("\n---") {
-        Some(end) => {
-            let rest = &after_first[end + 4..];
-            rest.strip_prefix('\n').unwrap_or(rest).trim_start()
-        }
-        None => content,
-    }
+    crate::domain::skill::skill_body(content).trim_start()
 }
 
 /// Build a minimal `ChatServiceFactory` suitable for CLI commands that need to

@@ -428,13 +428,10 @@ pub(crate) fn load_skill_metrics(
     }
     let body = std::fs::read_to_string(skill_md_path)
         .with_context(|| format!("read {}", skill_md_path.display()))?;
-    let Some(rest) = body.strip_prefix("---\n") else {
+    let Ok(split) = crate::domain::skill::split_frontmatter(&body) else {
         return Ok(vec![]);
     };
-    let Some(end) = rest.find("\n---") else {
-        return Ok(vec![]);
-    };
-    let fm_yaml = &rest[..end];
+    let fm_yaml = split.yaml;
     let fm: SkillFrontmatter = serde_yaml::from_str(fm_yaml)
         .with_context(|| format!("parse frontmatter of {}", skill_md_path.display()))?;
     if !fm.metrics.is_empty() {

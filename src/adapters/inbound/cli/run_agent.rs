@@ -753,19 +753,12 @@ fn load_skill_body_three_tier(name: &str, workspace: &std::path::Path) -> Option
                 continue;
             }
         };
-        // Strip frontmatter `---<yaml>---` if present.
-        if content.starts_with("---") {
-            let after_first = &content[3..];
-            if let Some(end) = after_first.find("\n---") {
-                let mut body_start = end + 4;
-                let bytes = after_first.as_bytes();
-                if body_start < bytes.len() && bytes[body_start] == b'\n' {
-                    body_start += 1;
-                }
-                return Some(after_first[body_start..].trim_start().to_string());
-            }
-        }
-        return Some(content);
+        // The body after the `---` frontmatter, if any.
+        return Some(
+            crate::domain::skill::skill_body(&content)
+                .trim_start()
+                .to_string(),
+        );
     }
     None
 }

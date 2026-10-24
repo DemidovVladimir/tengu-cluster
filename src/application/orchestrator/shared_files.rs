@@ -217,12 +217,8 @@ fn parse_skill_name(path: &Path) -> Result<Option<String>> {
 }
 
 fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
-    if !content.starts_with("---\n") {
-        return None;
-    }
-    let rest = &content[4..];
-    let end = rest.find("\n---")?;
-    serde_yaml::from_str(&rest[..end]).ok()
+    let fm = crate::domain::skill::split_frontmatter(content).ok()?;
+    serde_yaml::from_str(fm.yaml).ok()
 }
 
 fn join_or_dash(items: &[String]) -> String {

@@ -415,13 +415,11 @@ fn byte_offset_to_line(content: &str, byte_offset: usize) -> u32 {
 
 // ---- Frontmatter parsing -------------------------------------------------
 
-/// Returns parsed YAML frontmatter (the block between the leading `---\n`
-/// and the closing `\n---\n`). Returns `None` if there's no frontmatter or
-/// it's malformed.
+/// Returns parsed YAML frontmatter (`domain::skill::split_frontmatter`).
+/// Returns `None` if there's no frontmatter or it's malformed.
 fn extract_frontmatter(skill_md: &str) -> Option<serde_yaml::Value> {
-    let body = skill_md.strip_prefix("---\n")?;
-    let fm = body.split("\n---\n").next()?;
-    serde_yaml::from_str::<serde_yaml::Value>(fm).ok()
+    let fm = crate::domain::skill::split_frontmatter(skill_md).ok()?;
+    serde_yaml::from_str::<serde_yaml::Value>(fm.yaml).ok()
 }
 
 /// Emit one `medium / shell_metric` advisory finding per `script` /

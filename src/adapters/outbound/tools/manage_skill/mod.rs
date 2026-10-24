@@ -720,13 +720,9 @@ fn next_char_boundary(s: &str, pos: usize) -> usize {
 }
 
 fn validate_post_patch_frontmatter(skill_md: &str) -> Result<()> {
-    let rest = skill_md
-        .strip_prefix("---\n")
-        .ok_or_else(|| anyhow!("missing leading frontmatter marker '---\\n'"))?;
-    let end = rest
-        .find("\n---")
-        .ok_or_else(|| anyhow!("frontmatter not closed (missing '\\n---')"))?;
-    let fm_block = &rest[..end + 1];
+    let fm_block = crate::domain::skill::split_frontmatter(skill_md)
+        .map_err(|e| anyhow!("{e}"))?
+        .yaml;
     let parsed: serde_yaml::Value = serde_yaml::from_str(fm_block)
         .map_err(|e| anyhow!("frontmatter YAML parse failure: {e}"))?;
     // Minimal structural check: name + description must remain present.
@@ -1225,8 +1221,8 @@ mod tests {
         a.body = Some("# Body".into());
         do_create(&a, ws.path()).unwrap();
         let md = std::fs::read_to_string(ws.path().join("skills/yaml-skill/SKILL.md")).unwrap();
-        let (fm, body) =
-            crate::application::skills::lifecycle::evolve::split_frontmatter(&md).unwrap();
+        let split = crate::domain::skill::split_frontmatter(&md).unwrap();
+        let (fm, body) = (split.yaml, split.body);
         let v: serde_yaml::Value = serde_yaml::from_str(fm).unwrap();
         assert_eq!(v["description"].as_str(), Some(desc), "{md}");
         assert_eq!(v["editable_by_learner"].as_bool(), Some(true));
