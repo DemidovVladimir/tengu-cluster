@@ -277,7 +277,7 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 | `soe` | `open`, `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]` | Software Opportunity Engine — source layer (O2) + weekly cycle (O3): `[sources]` registry `sec_edgar`, `ted_search` (both ship `enabled = false` until the operator's reviewed terms); read-only `soe_reader` (`source_evidence` only); `[soe]` stage agents `soe_architect` · `soe_critic` (`claude_code`, built-ins off) and the `soe_week` job; closed world, bound to SOE-G0 — `docs/source-evidence.md`, `docs/soe-2026-10-08.md` |
 | `storage-test` | tor | `persistent_store` file storage + vector indexing; agent `storage` (`claude_code`, skill `telegram-rag-ingest`) |
 | `tor-check` | tor | Minimal probe of the egress path over Tor (Arti + lyrebird-rs) |
-| `unlimited` | `open` | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |
+| `unlimited` | `open` | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator |
 | `venture-scan` | `open` (WebSearch / Codex search at the providers, `http_request` to any host) | Business-opportunity research on the subscriptions only: Claude Code scouts (`research` profile) and a Codex critic (live web search), served by `tengu a2a serve` (agents, no planner) and driven from outside the repo; no OpenRouter |
 | `xmarket` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Paper desk stage M0 ($100 `[risk]` budget) — § Paper desk |
 | `xmarket-weekend` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Rule W weekend run, floor profile (no LLM, no Jev); bound to W1 — § Paper desk |

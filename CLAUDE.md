@@ -231,7 +231,7 @@ every page whose `sources` lists a changed file or one of its parent directories
 and bump that page's `Checked against the code on <date>` footer. A new, moved or
 deleted source file also changes `sources.toml`; a new feature gets a page + a
 `assets/nav.js` entry. `cargo test --test tutorial_map` fails on an unmapped `src/`
-file, a dead path or a broken page; Claude Code also gets a reminder from the
+file, a dead path, a broken page or a dead relative link in a living doc; Claude Code also gets a reminder from the
 `PostToolUse` hook in `.claude/settings.json`. Page rules: `docs/tutorial/AUTHORING.md`.
 
 If you touched code that affects architecture, file structure, or the per-turn

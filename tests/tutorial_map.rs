@@ -8,6 +8,7 @@
 //! | src covered | a `src/**/*.rs` file is explained by no page and is not listed under `[glue]` |
 //! | pages well-formed | a page misses the shared assets or the `Checked against the code on` footer, or links a local `.html` that does not exist |
 //! | one sandbox list | README § Sandboxes has no row for a `sandboxes/<dir>`, a row for no dir, or a network cell that disagrees with `[egress] network`; the resolver on `sandboxes.html` does not offer one |
+//! | living links | a relative link (`[..](x)`, `href=` / `src=`) in `README.md`, `AGENTS.md`, `CLAUDE.md` or a tracked `docs/**/*.{md,html}` outside `docs/archive/` names a file that does not exist (`#…` / `?…` cut; schemes, `/…` and templated targets skipped) |
 //!
 //! Which pages to update after a code change: every `[pages.<slug>]` whose
 //! `sources` contains the changed file or one of its parent directories.
@@ -271,4 +272,57 @@ fn readme_lists_every_sandbox() {
         ));
     }
     assert!(wrong.is_empty(), "sandbox list:\n{}", wrong.join("\n"));
+}
+
+/// Every relative link in a living doc resolves (module table). The doc set
+/// is git's, so a private untracked draft in a checkout is not judged; the
+/// archive is history and keeps the links of its day.
+#[test]
+fn living_docs_link_only_to_files_that_exist() {
+    let out = std::process::Command::new("git")
+        .args([
+            "ls-files",
+            "--",
+            "docs",
+            "README.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+        ])
+        .current_dir(root())
+        .output()
+        .expect("git ls-files");
+    assert!(out.status.success(), "git ls-files failed");
+    let docs: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|f| (f.ends_with(".md") || f.ends_with(".html")) && !f.starts_with("docs/archive/"))
+        .map(str::to_string)
+        .collect();
+    assert!(docs.len() > 50, "only {} docs listed", docs.len());
+    let links = [
+        Regex::new(r#"\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#).unwrap(),
+        Regex::new(r#"(?:href|src)="([^"]+)""#).unwrap(),
+    ];
+    let scheme = Regex::new(r"^[A-Za-z][A-Za-z0-9+.-]*:").unwrap();
+    let mut dead = Vec::new();
+    for doc in &docs {
+        let path = root().join(doc);
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{doc}: {e}"));
+        let dir = path.parent().unwrap();
+        for re in &links {
+            for c in re.captures_iter(&text) {
+                let target = &c[1];
+                if scheme.is_match(target)
+                    || target.starts_with(['#', '/'])
+                    || target.contains(['$', '{', '}', '\'', '<', '>', '`'])
+                {
+                    continue;
+                }
+                let file = target.split(['#', '?']).next().unwrap_or_default();
+                if !file.is_empty() && !dir.join(file).exists() {
+                    dead.push(format!("{doc}: {target}"));
+                }
+            }
+        }
+    }
+    assert!(dead.is_empty(), "dead links:\n{}", dead.join("\n"));
 }
