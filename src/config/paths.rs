@@ -1,7 +1,8 @@
 //! Filesystem locations the config layer resolves: `TENGU_HOME` and where
-//! it came from, the [`Layout`] under it, the default config file, the skill
-//! tiers and `~` expansion for configured paths. `tengu paths --sandbox <s>`
-//! prints them for one sandbox.
+//! it came from, the [`Layout`] under it, a workspace's harness dirs
+//! ([`WorkspaceDir`]), the default config file, the skill tiers and `~`
+//! expansion for configured paths. `tengu paths --sandbox <s>` prints them
+//! for one sandbox.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

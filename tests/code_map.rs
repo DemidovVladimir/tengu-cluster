@@ -7,9 +7,11 @@
 //! built only in tests, `tests/support/test_files.rs`) and checks that:
 //!
 //! - the `GENERATED` block in `docs/code-map.html` equals it, and
-//! - every source file is listed in `docs/code-map.md`.
+//! - the `GENERATED` block of `docs/code-map.md` § 7 equals its table: every
+//!   source file by layer, its line count and the first paragraph of its
+//!   `//!` doc (edit the module doc, never the table).
 //!
-//! Regenerate the html block after moving code:
+//! Regenerate both blocks after changing code:
 //! `TENGU_REGEN_CODE_MAP=1 cargo test --test code_map`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,6 +27,20 @@ use support::test_files;
 
 const BEGIN: &str = "/* GENERATED:BEGIN — tests/code_map.rs, do not edit by hand */";
 const END: &str = "/* GENERATED:END */";
+const MD_BEGIN: &str = "<!-- GENERATED:BEGIN — tests/code_map.rs, do not edit by hand -->";
+const MD_END: &str = "<!-- GENERATED:END -->";
+
+/// § 7's sections: `layer()` → heading, in page order.
+const SECTIONS: [(&str, &str); 8] = [
+    ("entry", "Entry"),
+    ("domain", "domain — data + pure policy"),
+    ("ports", "ports — traits"),
+    ("config", "config — TOML schema"),
+    ("application", "application — use cases"),
+    ("bootstrap", "bootstrap — composition root"),
+    ("outbound", "adapters/outbound — driven adapters"),
+    ("inbound", "adapters/inbound — driving adapters"),
+];
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -228,25 +244,95 @@ fn html_graph_matches_source() {
     );
 }
 
-#[test]
-fn markdown_lists_every_source_file() {
-    let md = fs::read_to_string(root().join("docs/code-map.md")).expect("docs/code-map.md");
+/// A module's `//!` summary: its first paragraph on one line — up to a
+/// blank doc line, a table, a list, a heading or a code fence; `|` escaped
+/// for the table cell.
+fn summary(text: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("//!") else {
+            // Before the doc: blank lines, inner attributes, `// path` comments.
+            let lead = line.trim();
+            if out.is_empty()
+                && (lead.is_empty() || lead.starts_with("#!") || lead.starts_with("//"))
+            {
+                continue;
+            }
+            break;
+        };
+        let rest = rest.trim();
+        let ends = rest.is_empty()
+            || ["|", "- ", "* ", "#", "```"]
+                .iter()
+                .any(|p| rest.starts_with(p));
+        if ends {
+            if out.is_empty() {
+                continue;
+            }
+            break;
+        }
+        out.push(rest);
+    }
+    out.join(" ").replace('|', "\\|")
+}
+
+/// § 7 of `docs/code-map.md`, between its markers (module doc).
+fn markdown_block() -> String {
+    let src = root().join("src");
     let mut paths = Vec::new();
-    rust_files(&root().join("src"), &mut paths);
-    let missing: Vec<String> = paths
+    rust_files(&src, &mut paths);
+    let mut rows: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let mut files: Vec<(String, String)> = paths
         .iter()
         .map(|p| {
-            p.strip_prefix(root())
+            let rel = p
+                .strip_prefix(&src)
                 .unwrap()
                 .to_string_lossy()
-                .replace('\\', "/")
+                .replace('\\', "/");
+            (rel, fs::read_to_string(p).unwrap())
         })
-        .filter(|p| !md.contains(&format!("`{p}`")))
         .collect();
-    assert!(
-        missing.is_empty(),
-        "docs/code-map.md is missing {} source file(s) — add a row each:\n{}",
-        missing.len(),
-        missing.join("\n")
+    files.sort();
+    for (rel, text) in &files {
+        rows.entry(layer(rel)).or_default().push(format!(
+            "| `src/{rel}` | {} | {} |",
+            text.lines().count(),
+            summary(text)
+        ));
+    }
+    let mut out = vec![MD_BEGIN.to_string()];
+    for (key, heading) in SECTIONS {
+        let rows = rows.remove(key).unwrap_or_default();
+        out.push(format!("\n### {heading} ({} files)\n", rows.len()));
+        out.push("| File | Lines | What it is |".into());
+        out.push("|---|---:|---|".into());
+        out.extend(rows);
+    }
+    assert!(rows.is_empty(), "a layer with no § 7 section: {rows:?}");
+    out.push(String::new());
+    out.push(MD_END.to_string());
+    out.join("\n")
+}
+
+#[test]
+fn markdown_table_matches_source() {
+    let path = root().join("docs/code-map.md");
+    let md = fs::read_to_string(&path).expect("docs/code-map.md");
+    let (start, end) = (
+        md.find(MD_BEGIN).expect("GENERATED:BEGIN marker in § 7"),
+        md.find(MD_END).expect("GENERATED:END marker in § 7") + MD_END.len(),
+    );
+    let fresh = markdown_block();
+    if md[start..end] == fresh {
+        return;
+    }
+    if std::env::var_os("TENGU_REGEN_CODE_MAP").is_some() {
+        fs::write(&path, format!("{}{}{}", &md[..start], fresh, &md[end..])).unwrap();
+        return;
+    }
+    panic!(
+        "docs/code-map.md § 7 is stale — regenerate with \
+         `TENGU_REGEN_CODE_MAP=1 cargo test --test code_map`"
     );
 }

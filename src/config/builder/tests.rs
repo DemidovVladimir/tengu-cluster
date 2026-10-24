@@ -1,3 +1,9 @@
+//! Builder config tests: engines = `ENGINES`, every template compiles clean
+//! and loads, every field round-trips through the `deny_unknown_fields`
+//! structs, wire states, delegation, the Cloudflare store (offered; needs the
+//! proxy card), kept sections, view-only rules, traversal names, a current
+//! file that does not parse.
+
 use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
