@@ -117,8 +117,9 @@ config, channels) — it is the index into everything below.
    walkthrough. Five-sentence TL;DR up top, then §1 walks the seven steps from
    prompt to reply, §2 lists every file in every subsystem, §5 has a
    "trace one turn end-to-end before changing anything" recipe.
-2. **`docs/architecture.svg`** — the picture. Companion to the
-   walkthrough. Open both side by side.
+2. **`docs/architecture.svg`** — the picture: the chat turn, its stores,
+   key mechanics and the flows with no user message (no file lists —
+   `docs/code-map.html`). Open it beside the walkthrough.
 3. **`docs/architecture.html`** — interactive explorer: walk a
    chat turn step by step, and the flows with no user message (`tengu run`,
    `tengu backtest`, `tengu ranking run`). Which file owns what:
@@ -241,7 +242,7 @@ flow, audit these for staleness **before declaring done**:
 |---|---|
 | `docs/SESSION_HANDOFF.md` | Almost always — mark the items you closed, add new opens, update the "TL;DR" if behaviour changed |
 | `docs/architecture.md` | If you changed the per-turn flow, added/removed a subsystem, or moved a file's responsibilities |
-| `docs/architecture.svg` | If you changed the per-turn flow OR added/removed a file in a subsystem panel |
+| `docs/architecture.svg` | If you changed the per-turn flow, a store, a key mechanic, or the `tengu run` / `tengu backtest` / `tengu ranking run` flow |
 | `docs/architecture.html` | If you changed the per-turn flow or a flow with no user message: its inline `STEPS` / `FLOWS` arrays |
 | `docs/memory-*.md` + `src/adapters/outbound/tools/agentic_memory/mod.rs` doc-comment | If you changed the memory schema, the `agentic_memory` tool API / operations, the recall lanes, or the Open Brain ↔ LLM Wiki split |
 | `src/application/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `plan_state` shape, or who writes/reads them |
