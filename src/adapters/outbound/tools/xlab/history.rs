@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::{defs, field, object_args, opt_str, opt_time, whole, XlabShared};
+use super::{defs, XlabShared};
 use crate::adapters::outbound::backfill::gecko::{
     self, gecko_bars, network_of, GeckoClient, GeckoPlan,
 };
@@ -28,6 +28,9 @@ use crate::adapters::outbound::backfill::{text_table, ReportRow};
 use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::http_class::Retry;
 use crate::adapters::outbound::hyperliquid::info::{self, HlInfo};
+use crate::adapters::outbound::tools::args::{
+    field, object_args, opt_bool, opt_str, opt_time, whole,
+};
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::sections::SandboxSections;
 use crate::domain::backtest::engine::MarketData;
@@ -149,11 +152,7 @@ impl HistoryArgs {
                  narrow from / to or pick a longer interval"
             );
         }
-        let fetch = match field(o, "fetch") {
-            None => false,
-            Some(Value::Bool(b)) => *b,
-            Some(v) => bail!("{tool}: 'fetch' must be a boolean, got {v}"),
-        };
+        let fetch = opt_bool(tool, o, "fetch")?.unwrap_or(false);
         let pool = opt_str(tool, o, "pool")?.map(str::to_string);
         let points = match field(o, "points") {
             None => DEFAULT_POINTS,

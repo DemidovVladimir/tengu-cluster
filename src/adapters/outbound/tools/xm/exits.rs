@@ -33,10 +33,11 @@ use super::exec_common::{
     accrue_due_funding, check_private_agent, exec, finish, live_books, run_exec, ExecGate, ExecIo,
     ExecOrder, ExecSize, Executed, MarketRows,
 };
-use super::paper::{exit_bound_arg, object};
+use super::paper::exit_bound_arg;
 use super::{defs, XmShared};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::rate_limit::jitter01;
+use crate::adapters::outbound::tools::args::object_args;
 use crate::config::risk::RiskConfig;
 use crate::domain::book::Side;
 use crate::domain::market::InstrumentId;
@@ -81,7 +82,7 @@ impl XmExitsTool {
         let tool = names::XM_EXITS;
         let (risk, paper, ledger) = self.shared.parts()?;
         check_private_agent(ctx)?;
-        let o = object(tool, args, &["max_slippage_bps"])?;
+        let o = object_args(tool, args, &["max_slippage_bps"])?;
         let max_slippage_bps = exit_bound_arg(tool, o)?
             .unwrap_or_else(|| risk.max_slippage_bps.min(MAX_EXIT_SLIPPAGE_BPS));
         let account = risk.account.clone();

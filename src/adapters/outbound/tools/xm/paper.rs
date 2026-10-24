@@ -34,6 +34,7 @@ use super::exec_common::{
 use super::{defs, XmShared};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::rate_limit::jitter01;
+use crate::adapters::outbound::tools::args::{field, object_args, opt_bool, opt_str, req_str};
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::risk::STRATEGIES;
 use crate::domain::book::Side;
@@ -70,46 +71,6 @@ pub(crate) fn tools(shared: &XmShared) -> Vec<Arc<dyn Tool>> {
 }
 
 // ── Argument parsing (strict) ─────────────────────────────────────
-
-/// `args` as an object whose keys are all in `allowed`; `null` values
-/// count as absent.
-pub(super) fn object<'a>(
-    tool: &str,
-    args: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>> {
-    let o = args
-        .as_object()
-        .ok_or_else(|| anyhow!("{tool}: arguments must be a JSON object"))?;
-    let unknown: Vec<&str> = o
-        .keys()
-        .map(String::as_str)
-        .filter(|k| !allowed.contains(k))
-        .collect();
-    if !unknown.is_empty() {
-        bail!(
-            "{tool}: unknown argument(s) {unknown:?} (allowed: {})",
-            allowed.join(", ")
-        );
-    }
-    Ok(o)
-}
-
-fn field<'a>(o: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
-    o.get(key).filter(|v| !v.is_null())
-}
-
-fn opt_str<'a>(tool: &str, o: &'a Map<String, Value>, key: &str) -> Result<Option<&'a str>> {
-    match field(o, key) {
-        None => Ok(None),
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.as_str())),
-        Some(v) => bail!("{tool}: '{key}' must be a non-empty string, got {v}"),
-    }
-}
-
-fn req_str<'a>(tool: &str, o: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
-    opt_str(tool, o, key)?.ok_or_else(|| anyhow!("{tool}: '{key}' is required (string)"))
-}
 
 /// A finite number inside `(lo, hi)`.
 pub(super) fn opt_num(
@@ -163,14 +124,6 @@ fn coid_arg(tool: &str, o: &Map<String, Value>) -> Result<Option<String>> {
     Ok(Some(id.to_string()))
 }
 
-fn opt_bool(tool: &str, o: &Map<String, Value>, key: &str) -> Result<Option<bool>> {
-    match field(o, key) {
-        None => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(v) => bail!("{tool}: '{key}' must be a boolean, got {v}"),
-    }
-}
-
 /// A full `<venue>:<native id>`, verbatim (convention 1).
 fn instrument(tool: &str, key: &str, s: &str) -> Result<InstrumentId> {
     InstrumentId::parse(s).map_err(|e| anyhow!("{tool}: '{key}': {e}"))
@@ -195,7 +148,7 @@ const ORDER_ARGS: &[&str] = &[
 /// `paper_order` arguments (module table) → the order on `limits`.
 pub(crate) fn parse_order(args: &Value, limits: RiskLimits) -> Result<ExecOrder> {
     let tool = names::PAPER_ORDER;
-    let o = object(tool, args, ORDER_ARGS)?;
+    let o = object_args(tool, args, ORDER_ARGS)?;
     let id = instrument(tool, "instrument", req_str(tool, o, "instrument")?)?;
     let side = Side::parse(req_str(tool, o, "side")?)
         .ok_or_else(|| anyhow!("{tool}: 'side' must be buy or sell"))?;
@@ -276,7 +229,7 @@ pub(crate) enum CloseTarget {
 /// `paper_close` arguments: the target, the slippage bound, the id arg.
 pub(crate) fn parse_close(args: &Value) -> Result<(CloseTarget, f64, Option<String>)> {
     let tool = names::PAPER_CLOSE;
-    let o = object(
+    let o = object_args(
         tool,
         args,
         &["instrument", "all", "max_slippage_bps", "client_order_id"],
@@ -468,7 +421,7 @@ impl PaperPositionsTool {
     pub(crate) async fn positions(&self, args: &Value, now_ms: i64) -> Result<Observation> {
         let tool = names::PAPER_POSITIONS;
         let (risk, paper, ledger) = self.shared.parts()?;
-        let o = object(tool, args, &["account"])?;
+        let o = object_args(tool, args, &["account"])?;
         let account = opt_str(tool, o, "account")?.unwrap_or(&risk.account);
         let valid = account
             .chars()

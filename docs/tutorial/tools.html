@@ -380,7 +380,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
         <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>agent_base_tools</code>, <code>assemble_executor</code> (the one assembly: catalog, shell skills, <code>[[mcp_servers]]</code>, scopes — chat, <code>run-agent</code> and the MCP bridge), <code>build_tool_executor</code> → <code>ToolStack</code> (the tools to advertise, <code>[[mcp_servers]]</code> ones included, + the redacting executor), <code>within_generation</code>, scope map, fallback scope</td></tr>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>ToolRegistry</code>, <code>PluginToolExecutor</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset</td></tr>
-        <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td>argument helpers, workspace path checks</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td>argument helpers (the strict ones xm, xlab, SOE and sources share: unknown key refused, strings trimmed), workspace path checks</td></tr>
         <tr><td class="wrap"><code>src/adapters/outbound/tools/{workspace,http,crypto}/</code></td><td>the default tool families</td></tr>
         <tr><td><code>src/adapters/outbound/shell.rs</code></td><td>the shell runner (300 s cap)</td></tr>
         <tr><td><code>tests/scope_lint.rs</code></td><td>the scope-gate lint</td></tr>

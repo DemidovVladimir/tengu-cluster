@@ -18,9 +18,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tracing::warn;
 
-use super::{defs, opt_u64_arg, policy, store_live, HlShared};
+use super::{defs, policy, store_live, HlShared};
 use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::hyperliquid::info::{request_weight, HlInfo, InfoReply};
+use crate::adapters::outbound::tools::args::opt_u64_arg;
 use crate::application::observe::observe;
 use crate::domain::hl::ctx::{
     decode_categories, decode_coin_list, decode_perp_dexs, perp_rows, spot_rows, CoinRows,

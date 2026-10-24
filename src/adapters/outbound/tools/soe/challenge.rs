@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 
 use super::{args, opt_strings, refused, run_arg, SoeShared};
-use crate::adapters::outbound::tools::xlab::opt_str;
+use crate::adapters::outbound::tools::args::opt_str;
 use crate::application::soe::submit::submit_challenge;
 use crate::domain::canonical::canonical_json;
 use crate::domain::message::ToolDef;

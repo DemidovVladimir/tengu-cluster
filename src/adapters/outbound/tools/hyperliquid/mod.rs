@@ -23,9 +23,8 @@ pub(crate) mod defs;
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::Value;
 use tracing::warn;
 
 use crate::adapters::outbound::observations::open_observation_store;
@@ -68,17 +67,6 @@ pub(crate) async fn store_live(store: Option<&dyn ObservationStore>, obs: &Obser
             warn!(key = %obs.key, error = %e, "observation store write failed");
             false
         }
-    }
-}
-
-/// An optional non-negative integer argument (absent / `null` ⇒ `None`).
-pub(crate) fn opt_u64_arg(args: &Value, tool: &str, key: &str) -> Result<Option<u64>> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| anyhow!("{tool}: '{key}' must be a non-negative integer, got {v}")),
     }
 }
 

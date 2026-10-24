@@ -27,7 +27,7 @@ use crate::adapters::outbound::solana::plan::{
     ReadFailure,
 };
 use crate::adapters::outbound::solana::rpc::SolanaRpc;
-use crate::adapters::outbound::tools::args::require_str;
+use crate::adapters::outbound::tools::args::{opt_u64_arg, require_str};
 use crate::application::observe::observe;
 use crate::domain::lp::dlmm::{
     build_dlmm_pool, build_positions, flag_unvalued, DlmmPoolState, DlmmPositions,
@@ -77,17 +77,6 @@ pub(crate) fn pubkeys_arg(args: &Value, tool: &str, key: &str) -> Result<Vec<Pub
             })
             .collect(),
         Some(_) => Err(anyhow!("{tool}: '{key}' must be an array of strings")),
-    }
-}
-
-/// An optional non-negative integer (absent / null ⇒ `None`).
-pub(crate) fn opt_u64_arg(args: &Value, tool: &str, key: &str) -> Result<Option<u64>> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| anyhow!("{tool}: '{key}' must be a non-negative integer, got {v}")),
     }
 }
 

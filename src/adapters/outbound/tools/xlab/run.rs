@@ -32,8 +32,9 @@ use tracing::info;
 
 use super::holdout::{self, HoldoutRead, ReadCount};
 use super::rows::{self, RowsRequest};
-use super::{defs, field, object_args, opt_str, opt_time, XlabShared};
+use super::{defs, XlabShared};
 use crate::adapters::outbound::market_data::market_state_dir;
+use crate::adapters::outbound::tools::args::{field, object_args, opt_bool, opt_str, opt_time};
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::application::backtest::{
     capability_refusal, evaluate, prepare, spec_of, write_run_dir, BacktestEnv, BacktestJob,
@@ -211,11 +212,7 @@ pub(crate) enum Request {
 pub(crate) fn parse_args(args: &Value, bt: &BacktestConfig) -> Result<Request> {
     let tool = names::BACKTEST;
     let o = object_args(tool, args, ARGS)?;
-    let holdout = match field(o, "holdout") {
-        None => false,
-        Some(Value::Bool(b)) => *b,
-        Some(v) => bail!("{tool}: 'holdout' must be a boolean, got {v}"),
-    };
+    let holdout = opt_bool(tool, o, "holdout")?.unwrap_or(false);
     let given = |keys: &[&'static str]| -> Vec<&'static str> {
         keys.iter()
             .copied()

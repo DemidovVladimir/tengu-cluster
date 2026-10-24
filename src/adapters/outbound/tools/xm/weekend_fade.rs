@@ -34,10 +34,10 @@ use super::exec_common::{
     ExecSize, MarketRows, PaperFills, SHADOW_NOT_PAPER,
 };
 use super::exits::{first_unstored, plan_exit, warn_final_exit};
-use super::paper::object;
 use super::{defs, XmShared};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::rate_limit::jitter01;
+use crate::adapters::outbound::tools::args::object_args;
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::risk::RiskConfig;
 use crate::config::xmarket::WeekendFadeConfig;
@@ -149,7 +149,7 @@ impl XmWeekendFadeTool {
         let tool = names::XM_WEEKEND_FADE;
         let (risk, paper, ledger) = self.shared.parts()?;
         check_private_agent(ctx)?;
-        object(tool, args, &[])?;
+        object_args(tool, args, &[])?;
         let setup = self.shared.fade.as_deref().ok_or_else(|| {
             anyhow!(
                 "{WEEKEND_FADE_CONFIG_MISSING}: this sandbox has no [xmarket.weekend_fade] section"
