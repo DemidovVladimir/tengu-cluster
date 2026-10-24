@@ -36,8 +36,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::outbound::bridge_env::{
-    TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_GRANT_WORKSPACE_ENV, TENGU_BRIDGE_MCP_SERVERS_ENV,
-    TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV, TENGU_BRIDGE_TRANSCRIPT_FILE_ENV,
+    TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_GRANT_WORKSPACE_ENV, TENGU_BRIDGE_JOURNAL_ENV,
+    TENGU_BRIDGE_MCP_SERVERS_ENV, TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV,
+    TENGU_BRIDGE_TRANSCRIPT_FILE_ENV,
 };
 use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
 use crate::adapters::outbound::memory::embedder::Embedder;
@@ -161,6 +162,9 @@ struct BridgeSetup {
     /// `TENGU_BRIDGE_SUMMARY_FILE`: where `compress_and_store` writes the
     /// step's summary (`StepSummary`); `None` = refused with the reason.
     summary_file: Option<PathBuf>,
+    /// `TENGU_BRIDGE_JOURNAL`: a recorded step's journal — every call's
+    /// `tool.*` events go there (`trace_store::JournalSink`); `None` = none.
+    journal: Option<PathBuf>,
     /// `TENGU_BRIDGE_TRANSCRIPT_FILE`: the run's conversation, read per call
     /// (`call_conversation`); `None` = none.
     transcript_file: Option<PathBuf>,
@@ -185,6 +189,9 @@ impl BridgeSetup {
             grant_workspace: std::env::var(TENGU_BRIDGE_GRANT_WORKSPACE_ENV)
                 .is_ok_and(|v| v == "1"),
             summary_file: std::env::var_os(TENGU_BRIDGE_SUMMARY_FILE_ENV)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+            journal: std::env::var_os(TENGU_BRIDGE_JOURNAL_ENV)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             transcript_file: std::env::var_os(TENGU_BRIDGE_TRANSCRIPT_FILE_ENV)
@@ -284,7 +291,11 @@ async fn serve_mcp_stdio(
     // Inherited vault values + master password; the bridge never prompts.
     let secrets = Arc::new(process_secret_registry(None));
     let executor: Arc<dyn ToolExecutor> = Arc::new(StepSummary {
-        inner: sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets),
+        inner: journaled(
+            &setup,
+            sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets),
+            &secrets,
+        ),
         file: setup.summary_file.clone(),
     });
     let listed = bridge_tools(&setup)?;
@@ -366,6 +377,28 @@ fn sanitized(executor: PluginToolExecutor, secrets: &Arc<SecretRegistry>) -> Arc
             SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(secrets)),
         )),
     )
+}
+
+/// A recorded step's bridge (`TENGU_BRIDGE_JOURNAL`): each call's `tool.*`
+/// events go to the step's journal, as the step's own executor's do
+/// (`cli/run_agent.rs`); node `tool:<TENGU_BRIDGE_AGENT>/<tool>`.
+fn journaled(
+    setup: &BridgeSetup,
+    executor: Arc<dyn ToolExecutor>,
+    secrets: &Arc<SecretRegistry>,
+) -> Arc<dyn ToolExecutor> {
+    let Some(path) = &setup.journal else {
+        return executor;
+    };
+    Arc::new(crate::application::trace_exec::TracedExecutor::new(
+        executor,
+        Arc::new(crate::adapters::outbound::trace_store::JournalSink::new(
+            path.clone(),
+            Arc::clone(secrets),
+        )),
+        setup.agent.as_deref().unwrap_or("main"),
+        None,
+    ))
 }
 
 /// The `run-agent` step protocol tool (`skill_lifecycle::compress_and_store`).
@@ -937,6 +970,7 @@ net_hosts = ["api.hyperliquid.xyz"]
             agent: agent.map(str::to_string),
             grant_workspace: false,
             summary_file: None,
+            journal: None,
             transcript_file: None,
             env_scopes: HashMap::new(),
             mcp_servers: Vec::new(),

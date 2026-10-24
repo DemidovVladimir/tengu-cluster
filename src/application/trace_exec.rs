@@ -8,7 +8,7 @@
 //! | [`Cause`] · [`caused_by`] · [`cause`] | the event that caused what this task does now (its `parent_event_id`) + the session / correlation it belongs to; set around a loop event (`LoopDispatch`: `loop.started`), a decide run (`trigger.*`), a loop's tool call (`action.selected`), a feed's calls and tick (`feed.fired`). Read where the next event is written: `LoopDispatch::enqueue`, `DecisionLoop::run_event`, [`TracedExecutor`]. A task it spawns does not inherit it |
 //! | [`TracedExecutor`] | wraps one agent's executor (inside `egress::AttributedExecutor`, outside `SanitizedToolExecutor`: it sees redacted results): `tool.started` (`Running`, `{tool, args}`) → `tool.completed` (`Ok`) or `tool.failed` (`Failed`: the executor's error, a typed result whose status is not usable, or an `http_request` text whose status line is not 2xx — `reduce::http_ok`, the rule a loop's `ok` uses) with `duration_ms`; `node_id` `tool:<agent>/<tool>`, `call_id` = `ToolCall.id`, parent / session / correlation = the [`cause`]; the result as a summary (`line1` of the text, a typed result's `key` / `status` / `headline`), never the whole text |
 //! | [`GatedTrace`] · [`close_after`] | one piece of work's view of a recording, closed when the work ends — finished, or dropped unfinished (aborted at the shutdown deadline: the work is dropped first, so its own drop record lands): a write in flight finishes first, a later one is dropped, so nothing the work left behind (a step task being aborted, a metrics forwarder mid-send) lands after it or after the run's closing event. A webhook / escalation turn (`inbound/webhooks.rs`), an eval row |
-//! | [`DraftBuffer`] · [`replay_child`] | a `run-agent` child's sink (`AgentIpcInput.trace` set): keeps its `tool.*` drafts (child clock, parent = the step's `step.started` for a root, ids `ipc:<n>`, redacted + bounded, ≤ [`MAX_CHILD_EVENTS`]) for `AgentIpcOutput.trace` · the parent writes them into its own recording in order, each `ipc:<n>` parent mapped to the id its sink gave, the session = the step's, anything but `tool.*` dropped — one writer per run file |
+//! | [`child_draft`] · [`replay_child`] | a `run-agent` step's tool events (`AgentIpcInput.trace` set) go to its journal (`trace_store::JournalSink`: the child's in-process calls and its Claude Code / Codex bridge's, child clock, redacted + bounded, ids `ipc:<pid>:<n>`, ≤ [`MAX_CHILD_EVENTS`] per process), which the parent reads on any exit — clean, failed, killed at the timeout (`trace_store::read_journal`) · the parent writes them into its own recording in order, a root (no parent) under the step's `step.started`, each `ipc:` parent mapped to the id its sink gave, the session = the step's, anything but `tool.*` dropped — one writer per run file |
 //!
 //! The decorator reports what the executor returned, judged by the shared
 //! pass / fail predicates (`ObsStatus::usable`, `reduce::http_ok`); what the
@@ -18,7 +18,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -37,9 +36,10 @@ use crate::ports::engine::ToolExecutor;
 use crate::ports::tool::ToolOutput;
 use crate::ports::trace::TraceSink;
 
-/// Drafts a `run-agent` child hands back at most ([`DraftBuffer`]).
+/// Drafts one `run-agent` process (the child, its bridge) journals at most,
+/// and the parent reads back at most per step (`trace_store::read_journal`).
 pub(crate) const MAX_CHILD_EVENTS: usize = 512;
-/// Prefix of a child's own event ids ([`DraftBuffer`]); never a real one
+/// Prefix of a child's own event ids ([`child_id`]); never a real one
 /// (`<run_id>:<seq>`, a UUID).
 const CHILD_ID: &str = "ipc:";
 
@@ -224,71 +224,21 @@ impl ToolExecutor for TracedExecutor {
     }
 }
 
-/// A `run-agent` child's trace sink (module table): the step's tool events,
-/// kept for the parent.
-pub(crate) struct DraftBuffer {
-    /// The step's `step.started` in the parent's recording.
-    parent: String,
-    session: String,
-    secrets: Arc<SecretRegistry>,
-    drafts: Mutex<Vec<EventDraft>>,
-    dropped: AtomicU64,
+/// A `run-agent` child's draft as its step journal keeps it (module table):
+/// the child's clock, the payload redacted with the child's own secrets and
+/// bounded (the parent's sink does both again on replay).
+pub(crate) fn child_draft(mut d: EventDraft, secrets: &SecretRegistry) -> EventDraft {
+    if d.ts_ms.is_none() {
+        d = d.at(now_ms());
+    }
+    scrub_value(&mut d.payload, secrets);
+    d.payload = bound_payload(std::mem::take(&mut d.payload), MAX_PAYLOAD_BYTES, d.keep).0;
+    d
 }
 
-impl DraftBuffer {
-    pub(crate) fn new(parent: String, session: String, secrets: Arc<SecretRegistry>) -> Self {
-        Self {
-            parent,
-            session,
-            secrets,
-            drafts: Mutex::new(Vec::new()),
-            dropped: AtomicU64::new(0),
-        }
-    }
-
-    /// Every draft kept, in emit order (`AgentIpcOutput.trace`); a warn
-    /// names how many did not fit.
-    pub(crate) fn take(&self) -> Vec<EventDraft> {
-        let dropped = self.dropped.load(Ordering::Relaxed);
-        if dropped > 0 {
-            tracing::warn!(
-                dropped,
-                kept = MAX_CHILD_EVENTS,
-                "step trace: events past the cap not handed back"
-            );
-        }
-        std::mem::take(&mut *self.drafts.lock().unwrap_or_else(|p| p.into_inner()))
-    }
-}
-
-impl TraceSink for DraftBuffer {
-    fn emit(&self, mut d: EventDraft) -> Option<String> {
-        if d.parent_event_id.is_none() {
-            d.parent_event_id = Some(self.parent.clone());
-        }
-        if d.session_id.is_none() {
-            d.session_id = Some(self.session.clone());
-        }
-        if d.ts_ms.is_none() {
-            d = d.at(now_ms());
-        }
-        // The parent's sink redacts and bounds again; here it keeps the IPC
-        // payload small and the child's own secrets out of it.
-        scrub_value(&mut d.payload, &self.secrets);
-        d.payload = bound_payload(std::mem::take(&mut d.payload), MAX_PAYLOAD_BYTES, d.keep).0;
-        let mut v = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
-        if v.len() >= MAX_CHILD_EVENTS {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        v.push(d);
-        Some(format!("{CHILD_ID}{}", v.len()))
-    }
-
-    /// The child writes into the parent's run, not one of its own.
-    fn run_id(&self) -> Option<&str> {
-        None
-    }
+/// A child's own id for its `n`-th draft (1-based) in process `pid`.
+pub(crate) fn child_id(pid: u32, n: usize) -> String {
+    format!("{CHILD_ID}{pid}:{n}")
 }
 
 /// One piece of work's view of a recording (module table): open until
@@ -352,17 +302,17 @@ pub(crate) async fn close_after<F: Future<Output = ()>>(gate: Arc<GatedTrace>, w
     }
 }
 
-/// Write a child's drafts into `sink` (module table); how many were written.
+/// Write a child's drafts — `(its own id, draft)`, in order — into `sink`
+/// (module table); how many were written.
 pub(crate) fn replay_child(
     sink: &dyn TraceSink,
-    drafts: Vec<EventDraft>,
+    drafts: Vec<(String, EventDraft)>,
     step_event: &str,
     session: &str,
 ) -> usize {
     let mut ids: HashMap<String, String> = HashMap::new();
     let mut written = 0;
-    for (i, mut d) in drafts.into_iter().enumerate() {
-        let own = format!("{CHILD_ID}{}", i + 1);
+    for (own, mut d) in drafts {
         if !d.kind.starts_with("tool.") {
             continue;
         }
@@ -427,7 +377,8 @@ pub(crate) mod tests {
         }
     }
 
-    struct Fixed(Result<ToolOutput, String>);
+    /// Answers every call with its result after 5 ms.
+    pub(crate) struct Fixed(pub(crate) Result<ToolOutput, String>);
 
     #[async_trait]
     impl ToolExecutor for Fixed {
@@ -440,7 +391,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn call(id: &str, name: &str) -> ToolCall {
+    pub(crate) fn call(id: &str, name: &str) -> ToolCall {
         ToolCall {
             id: id.into(),
             name: name.into(),
@@ -517,65 +468,32 @@ pub(crate) mod tests {
         assert!(d[3].artifact.is_none());
     }
 
-    /// A child's tool events cross the IPC and land in the parent's run:
-    /// the start under the step, the finish under the start's real id, the
-    /// step's session, the child's clock; a secret never leaves the child;
-    /// anything but `tool.*` is dropped; past the cap nothing is kept.
-    #[tokio::test]
-    async fn child_tool_events_replay_under_the_step() {
-        let mut secrets = SecretRegistry::new();
-        secrets.register("sk-or-v1-0123456789abcdef".into());
-        let buf = Arc::new(DraftBuffer::new(
-            "run:7".into(),
-            "chat-session".into(),
-            Arc::new(secrets),
-        ));
-        let ex = TracedExecutor::new(
-            Arc::new(Fixed(Ok(ToolOutput::from("4 pools".to_string())))),
-            buf.clone(),
-            "crypto_researcher",
-            None,
-        );
-        let mut c = call("call_1", "dlmm_pools");
-        c.arguments = json!({"key": "sk-or-v1-0123456789abcdef"});
-        ex.execute_typed(&c, &[]).await.unwrap();
-        buf.emit(EventDraft::new(
-            Component::Loop,
-            "loop.started",
-            Status::Running,
-        ));
-        let drafts = buf.take();
-        assert_eq!(drafts.len(), 3);
-        assert_eq!(drafts[1].parent_event_id.as_deref(), Some("ipc:1"));
-        assert!(drafts[0].ts_ms.is_some(), "the child's clock");
-        let wire = serde_json::to_string(&drafts).unwrap();
-        assert!(!wire.contains("sk-or-v1-0123456789abcdef"), "{wire}");
-        let back: Vec<EventDraft> = serde_json::from_str(&wire).unwrap();
-
+    /// A child's drafts land in the parent's run: a root under the step,
+    /// a finish under its start's real id, the step's session, no
+    /// correlation; anything but `tool.*` is dropped (the journal round trip:
+    /// `trace_store::tests::a_step_journal_survives_any_exit`).
+    #[test]
+    fn child_drafts_replay_under_the_step() {
+        let start = EventDraft::new(Component::Loop, "tool.started", Status::Running)
+            .correlation("child-corr")
+            .node("tool:researcher/http_request");
+        let mut done = EventDraft::new(Component::Tool, "tool.completed", Status::Ok);
+        done.parent_event_id = Some(child_id(41, 1));
+        let other = EventDraft::new(Component::Loop, "loop.started", Status::Running);
+        let drafts = vec![
+            (child_id(41, 1), start),
+            (child_id(41, 2), other),
+            (child_id(41, 3), done),
+        ];
         let parent = MemTrace::default();
-        assert_eq!(replay_child(&parent, back, "run:7", "chat-session"), 2);
+        assert_eq!(replay_child(&parent, drafts, "run:7", "chat-session"), 2);
         let d = parent.all();
         assert_eq!(parent.kinds(), ["tool.started", "tool.completed"]);
         assert_eq!(d[0].parent_event_id.as_deref(), Some("run:7"));
         assert_eq!(d[1].parent_event_id, Some(MemTrace::id(0)));
-        assert_eq!(
-            d[0].node_id.as_deref(),
-            Some("tool:crypto_researcher/dlmm_pools")
-        );
-        assert!(d
-            .iter()
-            .all(|e| e.session_id.as_deref() == Some("chat-session")));
-        assert_eq!(d[1].payload["line1"], json!("4 pools"));
-
-        let full = DraftBuffer::new("p".into(), "s".into(), Arc::new(SecretRegistry::new()));
-        for _ in 0..MAX_CHILD_EVENTS + 3 {
-            full.emit(EventDraft::new(
-                Component::Tool,
-                "tool.started",
-                Status::Running,
-            ));
-        }
-        assert_eq!(full.take().len(), MAX_CHILD_EVENTS);
+        assert!(d.iter().all(|e| e.component == Component::Tool
+            && e.correlation_id.is_none()
+            && e.session_id.as_deref() == Some("chat-session")));
     }
 
     /// A typed result whose status is not usable is `tool.failed` with its

@@ -339,9 +339,9 @@ pub(crate) struct RunIds {
 }
 
 /// What the caller knows of an event; the sink stamps the rest
-/// ([`RunContext::stamp`]). Serializable: a `run-agent` child hands its
-/// tool events to the parent over IPC (`AgentIpcOutput.trace`), which
-/// writes them into its own recording (`keep` does not cross).
+/// ([`RunContext::stamp`]). Serializable: a `run-agent` step journals its
+/// tool events (`trace_store::JournalSink`) for the parent, which writes
+/// them into its own recording (`keep` does not cross).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct EventDraft {
     pub component: Component,

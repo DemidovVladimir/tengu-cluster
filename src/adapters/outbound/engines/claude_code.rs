@@ -1199,6 +1199,7 @@ mod tests {
         "TENGU_BRIDGE_GRANT_WORKSPACE",
         "TENGU_BRIDGE_SUMMARY_FILE",
         "TENGU_BRIDGE_TRANSCRIPT_FILE",
+        "TENGU_BRIDGE_JOURNAL",
         "TENGU_BRIDGE_MCP_SERVERS",
         "TENGU_EGRESS",
         "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
@@ -1311,8 +1312,8 @@ mod tests {
             .is_none());
     }
 
-    /// A `run-agent` step names its workspace grant and summary file
-    /// explicitly in the bridge env.
+    /// A `run-agent` step names its workspace grant, summary file and
+    /// journal explicitly in the bridge env.
     #[test]
     fn step_bridge_options_reach_the_bridge_env() {
         let engine =
@@ -1320,6 +1321,7 @@ mod tests {
                 .with_step_bridge(StepBridge {
                     grant_workspace: true,
                     summary_file: Some(PathBuf::from("/tmp/tengu-summary-x")),
+                    journal: Some(PathBuf::from("/tmp/tengu-journal-x")),
                 });
         let tools = [ToolDef::new("read_file", "d", serde_json::json!({}))];
         let cfg = engine.build_mcp_config_json(
@@ -1333,6 +1335,7 @@ mod tests {
         let env = &cfg["mcpServers"]["tengu-tools"]["env"];
         assert_eq!(env["TENGU_BRIDGE_GRANT_WORKSPACE"], "1");
         assert_eq!(env["TENGU_BRIDGE_SUMMARY_FILE"], "/tmp/tengu-summary-x");
+        assert_eq!(env["TENGU_BRIDGE_JOURNAL"], "/tmp/tengu-journal-x");
     }
 
     /// A parent Claude Code session's env is dropped; the operator's auth,

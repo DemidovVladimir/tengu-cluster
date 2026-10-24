@@ -386,6 +386,7 @@
     var env = [
       ["TENGU_BRIDGE_AGENT", '"storage"', 0],
       ["TENGU_BRIDGE_GRANT_WORKSPACE", '"1"', step.checked ? 1 : -1],
+      ["TENGU_BRIDGE_JOURNAL", '"<this step\'s journal, when it is recorded>"', step.checked ? 1 : -1],
       ["TENGU_BRIDGE_MAX_RESULT_CHARS", '"50000"', 0],
       ["TENGU_BRIDGE_MCP_SERVERS", '"[\\"github\\"]"', mcp.checked ? 1 : -1],
       ["TENGU_BRIDGE_SCOPES", '"<the agent\'s scopes as JSON: fallback only>"', 0],

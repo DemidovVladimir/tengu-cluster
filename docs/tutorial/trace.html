@@ -441,7 +441,7 @@
           </ul>
         </li>
       </ul>
-      <p class="note">A replan: <code>plan.replanned</code> hangs under the last <code>step.failed</code>, the next <code>plan.created</code> under it. A step the replan reuses (finished in an earlier attempt, unchanged) runs nothing: one <code>step.completed</code> right under the new <code>plan.created</code>, no <code>step.started</code>, node or duration. A step's tool calls run in its <code>run-agent</code> child; the child hands them back over IPC and the parent writes them under <code>step.started</code>. A turn dropped unfinished (aborted at the shutdown deadline, an eval row's timeout) aborts its steps and writes <code>plan.completed</code> dropped, <code>cancelled: true</code>.</p>
+      <p class="note">A replan: <code>plan.replanned</code> hangs under the last <code>step.failed</code>, the next <code>plan.created</code> under it. A step the replan reuses (finished in an earlier attempt, unchanged) runs nothing: one <code>step.completed</code> right under the new <code>plan.created</code>, no <code>step.started</code>, node or duration. A step's tool calls run in its <code>run-agent</code> child, or in its <code>claude_code</code> / <code>codex</code> bridge; both append them to the step's journal, and the parent writes them under <code>step.started</code> once the child has exited, however it ended. A turn dropped unfinished (aborted at the shutdown deadline, an eval row's timeout) aborts its steps and writes <code>plan.completed</code> dropped, <code>cancelled: true</code>.</p>
     </div></div>
   </div>
 </section>
@@ -483,11 +483,11 @@
     <h2 id="s-rules">Safety</h2>
   </div>
   <ul class="checks">
-    <li><span><b>Scrubbed before the write.</b> In every payload string and object key: registered secrets become <code>[REDACTED]</code>, then URLs become <code>&lt;url&gt;</code>. A <code>run-agent</code> child scrubs its events too, before they cross the IPC.</span></li>
+    <li><span><b>Scrubbed before the write.</b> In every payload string and object key: registered secrets become <code>[REDACTED]</code>, then URLs become <code>&lt;url&gt;</code>. A <code>run-agent</code> step scrubs its events too, before they reach its journal.</span></li>
     <li><span><b>Bounded, never cut.</b> A payload over 4096 bytes loses whole fields and says which (<code>_dropped</code>, <code>_bytes</code>). A string, id or number is never shortened.</span></li>
     <li><span><b>Summaries, not contents.</b> A tool event keeps its args and the result's first line and size; a webhook event the body size, never the body or a header; a plan event counts, sizes and an error's first line, never the goal, a message or the answer.</span></li>
     <li><span><b>One event, one line, in order.</b> The next <code>seq</code> is taken under the lock the write holds; one <code>write_all</code> per line. A failed write keeps its <code>seq</code> for the next event: no gap.</span></li>
-    <li><span><b>One writer per file.</b> A <code>run-agent</code> child keeps at most 512 tool events and hands them back over IPC; the parent writes them under the step.</span></li>
+    <li><span><b>One writer per file.</b> A <code>run-agent</code> step never opens the run file: the child and its bridge each append at most 512 tool events to the step's journal (a 0600 temp file); the parent reads at most 512 back and writes them under the step.</span></li>
     <li><span><b>The closing event is last.</b> <code>tengu run</code> and <code>tengu webhooks</code> own every accepted orchestrator turn (a webhook agent endpoint's, a loop escalation's) and drain it with the loop events before the lease release and <code>runtime.stopped</code> / <code>run.closed</code>; one still running at <code>shutdown_grace_secs</code> is aborted and its <code>plan.completed</code> (dropped) is written first. A turn and an eval row await the metrics barrier, so their last <code>metrics.recorded</code> lands before the end, then their trace gate shuts: a straggler is not written.</span></li>
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID, a sandbox name <code>[a-z0-9][a-z0-9_-]</code> (at most 40, the rule <code>--sandbox</code> and the builder use), before any file opens.</span></li>
@@ -506,8 +506,7 @@
       <thead><tr><th>Not recorded</th><th>What the run shows instead</th></tr></thead>
       <tbody>
         <tr><td class="wrap">A typed scope refusal</td><td class="wrap"><code>tool.failed</code> with the refusal text</td></tr>
-        <tr><td class="wrap">A <code>claude_code</code> or <code>codex</code> plan step's tool calls (they run in its MCP bridge process)</td><td class="wrap">only <code>step.*</code></td></tr>
-        <tr><td class="wrap">The tool calls of a <code>run-agent</code> child that ends without its IPC output (an engine error mid-loop, a step-timeout kill)</td><td class="wrap">only <code>step.retrying</code> / <code>step.failed</code></td></tr>
+        <tr><td class="wrap">A bridged call still running when its step is killed at the timeout</td><td class="wrap">its <code>tool.started</code> only, or nothing if it started after the parent read the journal</td></tr>
         <tr><td class="wrap">The end of a step aborted because a sibling step was exhausted or the turn was cancelled</td><td class="wrap">its <code>step.started</code>, no outcome event</td></tr>
         <tr><td class="wrap">An escalation <code>tengu run</code> triggers before its recording reaches the escalator (the first feed slot of the start)</td><td class="wrap">the loop's <code>action.escalated</code>; no <code>plan.*</code></td></tr>
         <tr><td class="wrap">An A2A task <code>tengu a2a serve</code> runs (planner or agent; <a href="a2a.html">A2A</a>)</td><td class="wrap">no run file: its plan is built without a recording</td></tr>
@@ -558,16 +557,16 @@
       <tbody>
         <tr><td><code>src/domain/trace.rs</code></td><td>the envelope, <code>RunKind</code>, <code>Component</code>, <code>Status</code> + tone, <code>scrub_value</code>, <code>bound_payload</code>, replay order, <code>RunSummary</code>, <code>RunState</code></td></tr>
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> (write each event once, fail-soft) · <code>TraceReader</code> (runs, events, last seq, follow)</td></tr>
-        <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL file per run: <code>run.opened</code>, stamp, scrub, bound, write; list, page, follow</td></tr>
+        <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL file per run: <code>run.opened</code>, stamp, scrub, bound, write; list, page, follow; a step's journal (<code>JournalSink</code>, <code>append_journal_metrics</code>, <code>read_journal</code>)</td></tr>
         <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + ids) for loops and feeds; <code>run.closed</code></td></tr>
-        <tr><td><code>src/application/trace_exec.rs</code></td><td>the cause (<code>parent_event_id</code>, session) per task; <code>TracedExecutor</code> (<code>tool.*</code>); <code>DraftBuffer</code> / <code>replay_child</code>; <code>GatedTrace</code> / <code>close_after</code> (a turn's gate, shut when it ends)</td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the cause (<code>parent_event_id</code>, session) per task; <code>TracedExecutor</code> (<code>tool.*</code>); <code>child_draft</code> / <code>replay_child</code> (a step's events: clock, scrub, bound · into the parent's run); <code>GatedTrace</code> / <code>close_after</code> (a turn's gate, shut when it ends)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code></td><td><code>TraceBridge</code>: <code>plan.*</code>, <code>step.*</code>, <code>metrics.recorded</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code></td><td><code>runtime.*</code>, the <code>tengu run</code> recording; the shutdown order (drain, leases, <code>runtime.stopped</code>)</td></tr>
         <tr><td><code>src/application/runtime/feeds.rs</code> · <code>loops.rs</code></td><td><code>feed.*</code> · <code>loop.*</code>; <code>Turns</code>: the owned orchestrator turns the drain waits for</td></tr>
         <tr><td><code>src/application/decision_loop/mod.rs</code></td><td><code>observation.read</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/decide.rs</code></td><td><code>trigger.decide</code> / <code>trigger.map</code> → <code>trigger.completed</code> / <code>trigger.failed</code></td></tr>
         <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code>, <code>webhook.responded</code>; each turn owned by the dispatch</td></tr>
-        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code> · <code>inbound/cli/run_agent.rs</code></td><td>the step's trace ref to the child; the child's tool events back over IPC</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code> · <code>inbound/cli/run_agent.rs</code></td><td>the step's trace ref + journal to the child; the journal read after any exit: events replayed, metrics forwarded when no reply came</td></tr>
         <tr><td><code>src/adapters/inbound/studio/control.rs</code></td><td><code>studio.*</code>: Studio's own recording</td></tr>
         <tr><td><code>src/adapters/inbound/cli/trace.rs</code></td><td><code>tengu trace runs</code> · <code>tengu trace show</code></td></tr>
       </tbody>

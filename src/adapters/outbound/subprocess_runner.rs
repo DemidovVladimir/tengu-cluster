@@ -5,10 +5,15 @@
 //! implements `WorkerHandle` so the DagExecutor drives it; the child runs the
 //! real LLM mini-loop (`inbound/cli/run_agent.rs::run_agent_subprocess`). The plan
 //! the step belongs to reaches the child as `AgentIpcInput.plan_state`
-//! (`WorkerHandle::run_step(step, inputs, plan)`). A recording orchestrator (`with_trace`) asks
-//! the child for its tool events (`AgentIpcInput.trace`: the step's
-//! `step.started`) and writes the ones it hands back (`AgentIpcOutput.trace`)
-//! into its own run (`trace_exec::replay_child`).
+//! (`WorkerHandle::run_step(step, inputs, plan)`). Each step gets a journal
+//! (`AgentIpcInput.journal`, `trace_store::JournalSink`): a recording
+//! orchestrator (`with_trace`) asks the child for its tool events
+//! (`AgentIpcInput.trace`: the step's `step.started`), which the child and
+//! its Claude Code / Codex bridge append there as they run; the child also
+//! appends each engine turn's metrics. Read once the child has exited —
+//! however: an engine error or the timeout kill leaves no IPC reply — the
+//! events go into this run (`trace_exec::replay_child`) and, without a
+//! reply, the metrics onto the bus.
 //!
 //! The child subprocess is the same `tengu` binary re-invoked with a dedicated
 //! `run-agent` subcommand and the `TENGU_AGENT_IPC=1` environment guard. The
@@ -61,13 +66,19 @@ pub struct AgentIpcInput {
     /// system prompt. `None` (an SOE stage: no plan) ⇒ no block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_state: Option<String>,
-    /// The parent's execution trace this step runs under: set ⇒ the child
-    /// records its tool calls (`trace_exec::DraftBuffer`) and hands them
-    /// back in `AgentIpcOutput.trace`; the parent writes them into this run
-    /// under `parent_event_id` (the step's `step.started`). `None` (a
-    /// surface that does not record) ⇒ nothing is recorded.
+    /// The parent's execution trace this step runs under: set (with a
+    /// `journal`) ⇒ the child and its bridge record its tool calls in the
+    /// journal; the parent writes them into this run under
+    /// `parent_event_id` (the step's `step.started`). `None` (a surface that
+    /// does not record) ⇒ nothing is recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<IpcTraceRef>,
+    /// The step's journal (`trace_store::JournalSink`, module docs): a 0600
+    /// file the parent made and reads back on any exit — the tool events
+    /// (`trace` set) and each engine turn's metrics. `None` (the SOE stage
+    /// runner) ⇒ the child writes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<std::path::PathBuf>,
 }
 
 /// [`AgentIpcInput::trace`]: which recording, under which event.
@@ -80,9 +91,9 @@ pub struct IpcTraceRef {
 /// JSON schema of the IPC output stream (stdout of `tengu run-agent`).
 ///
 /// `metrics` carries per-turn LLM telemetry collected during the subagent's
-/// inner tool loop — empty for the legacy/test paths that don't fill it in.
-/// `trace` is the step's `tool.*` events when `AgentIpcInput.trace` asked for
-/// them (`trace_exec::DraftBuffer`; the parent writes them into its run).
+/// inner tool loop — empty for the legacy/test paths that don't fill it in
+/// (the step's journal has them too, for an exit without this reply).
+/// A step's tool events travel in its journal, not here.
 /// `tools` is the step's tool activity in call order (`ToolRun`: name + ok):
 /// calls the child ran (`compress_and_store` included) and the ones a Claude
 /// Code engine ran through the bridge (`StreamEvent::ToolRan`) — what
@@ -101,8 +112,6 @@ pub enum AgentIpcOutput {
         metrics: Vec<crate::domain::metrics::MetricsRecord>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tools: Vec<crate::domain::message::ToolRun>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        trace: Vec<crate::domain::trace::EventDraft>,
     },
     /// Step failed. `output` contains partial text up to the failure.
     Failed {
@@ -112,8 +121,6 @@ pub enum AgentIpcOutput {
         metrics: Vec<crate::domain::metrics::MetricsRecord>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tools: Vec<crate::domain::message::ToolRun>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        trace: Vec<crate::domain::trace::EventDraft>,
     },
 }
 
@@ -137,8 +144,8 @@ pub struct SubprocessRunner {
     pub sandbox_name: Option<String>,
     /// The recording a step's child tool events go to (`with_trace`): asked
     /// for over `AgentIpcInput.trace` when the step runs caused by a
-    /// `step.started` (`trace_exec::cause`), written back by
-    /// `trace_exec::replay_child`. `None` = no child records.
+    /// `step.started` (`trace_exec::cause`), read from the step's journal and
+    /// written by `trace_exec::replay_child`. `None` = no child records.
     pub trace: Option<std::sync::Arc<dyn crate::ports::trace::TraceSink>>,
 }
 
@@ -390,6 +397,9 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             format!("{}\n\nUpstream context:\n{}", step.goal, step_inputs)
         };
 
+        // The step's journal (module docs): made here (0600), read once the
+        // child has exited, removed with `journal`.
+        let journal = tempfile::NamedTempFile::new().context("run-agent: step journal")?;
         // The child re-loads the same config (`sandbox_config`) and takes
         // `[agents.<agent_name>]` from it (model, tools, skills); only the
         // per-agent turn cap travels in the payload.
@@ -410,47 +420,34 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
                 crate::application::orchestrator::shared_files::render_plan_state(plan),
             ),
             trace: self.trace_ref(),
+            journal: Some(journal.path().to_path_buf()),
         };
         let step_event = input.trace.as_ref().map(|t| t.parent_event_id.clone());
-        let replay = |drafts: Vec<crate::domain::trace::EventDraft>| {
-            if let (Some(sink), Some(parent)) = (&self.trace, &step_event) {
-                crate::application::trace_exec::replay_child(
-                    sink.as_ref(),
-                    drafts,
-                    parent,
-                    &self.session_id,
-                );
+        let result = self.run_with_timeout(input, step_timeout_secs).await;
+        let written = crate::adapters::outbound::trace_store::read_journal(journal.path());
+        if let (Some(sink), Some(parent)) = (&self.trace, &step_event) {
+            crate::application::trace_exec::replay_child(
+                sink.as_ref(),
+                written.events,
+                parent,
+                &self.session_id,
+            );
+        }
+        // Re-emit per-turn subagent telemetry on the parent's global metrics
+        // sink: the reply's, else the journal's (no reply came). The child
+        // logged each one already (`forward_child_log`).
+        let metrics = match &result {
+            Ok(AgentIpcOutput::Ok { metrics, .. } | AgentIpcOutput::Failed { metrics, .. }) => {
+                metrics.clone()
             }
+            Err(_) => written.metrics,
         };
-
-        match self.run_with_timeout(input, step_timeout_secs).await? {
-            AgentIpcOutput::Ok {
-                output,
-                metrics,
-                trace,
-                ..
-            } => {
-                replay(trace);
-                // Re-emit per-turn subagent telemetry on the parent's global
-                // metrics sink. The IPC boundary is the only path these
-                // records can take from the child to the TUI / aggregator.
-                // The child logged each one already (`forward_child_log`).
-                for rec in metrics {
-                    crate::application::metrics::forward(rec);
-                }
-                Ok(output)
-            }
-            AgentIpcOutput::Failed {
-                error,
-                output,
-                metrics,
-                trace,
-                ..
-            } => {
-                replay(trace);
-                for rec in metrics {
-                    crate::application::metrics::forward(rec);
-                }
+        for rec in metrics {
+            crate::application::metrics::forward(rec);
+        }
+        match result? {
+            AgentIpcOutput::Ok { output, .. } => Ok(output),
+            AgentIpcOutput::Failed { error, output, .. } => {
                 anyhow::bail!("subagent failed: {}\npartial output:\n{}", error, output)
             }
         }
@@ -550,6 +547,7 @@ mod tests {
             sandbox_config: None,
             plan_state: None,
             trace: None,
+            journal: None,
         };
         let json = serde_json::to_string(&input).unwrap();
         // `None` is skipped on the wire.
@@ -572,6 +570,7 @@ mod tests {
             sandbox_config: None,
             plan_state: Some("## Steps\n".to_string()),
             trace: None,
+            journal: None,
         };
         let json = serde_json::to_string(&input).unwrap();
         assert!(json.contains("\"plan_state\""));
@@ -593,44 +592,107 @@ mod tests {
         assert!(err.to_string().contains("max_turns"), "{err}");
     }
 
-    /// The trace ref crosses only when set (an old child never sees the
-    /// key); an old child's output (no `trace`) parses to no events; a new
-    /// one's drafts round-trip.
+    /// The trace ref and the journal cross only when set (an old child
+    /// never sees the keys); an old child's output with `trace` drafts still
+    /// parses (tool events travel in the journal now).
     #[test]
     fn ipc_trace_is_compatible_both_ways() {
         let json = r#"{"goal":"g","agent_name":"a","max_turns":3,"session_id":"s","step_id":"x"}"#;
         let mut input: AgentIpcInput = serde_json::from_str(json).unwrap();
-        assert!(!serde_json::to_string(&input).unwrap().contains("\"trace\""));
+        let wire = serde_json::to_string(&input).unwrap();
+        assert!(!wire.contains("\"trace\"") && !wire.contains("\"journal\""));
         input.trace = Some(IpcTraceRef {
             run_id: "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e".into(),
             parent_event_id: "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e:7".into(),
         });
+        input.journal = Some("/tmp/tengu-journal-x".into());
         let back: AgentIpcInput =
             serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
         assert_eq!(back.trace, input.trace);
+        assert_eq!(back.journal, input.journal);
 
-        let old: AgentIpcOutput =
-            serde_json::from_str(r#"{"status":"ok","output":"o","summary":"s"}"#).unwrap();
-        assert!(matches!(old, AgentIpcOutput::Ok { trace, .. } if trace.is_empty()));
-        let draft = crate::domain::trace::EventDraft::new(
-            crate::domain::trace::Component::Tool,
-            "tool.started",
-            crate::domain::trace::Status::Running,
+        let old: AgentIpcOutput = serde_json::from_str(
+            r#"{"status":"ok","output":"o","summary":"s","trace":[{"component":"tool","kind":"tool.started","status":"running"}]}"#,
         )
-        .node("tool:crypto_researcher/sol_price");
-        let out = AgentIpcOutput::Failed {
-            error: "e".into(),
-            output: String::new(),
-            metrics: Vec::new(),
-            tools: Vec::new(),
-            trace: vec![draft.clone()],
+        .unwrap();
+        assert!(matches!(old, AgentIpcOutput::Ok { output, .. } if output == "o"));
+    }
+
+    /// A child that dies without its IPC reply — an exit code (an engine
+    /// error), or killed at the step timeout — still leaves the tool events
+    /// it and its bridge journalled: replayed under the step, the finish
+    /// under its start; the step fails with the same class as before.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dead_child_still_reports_its_tool_events() {
+        use crate::application::trace_exec::tests::MemTrace;
+        use crate::application::trace_exec::{caused_by, Cause};
+        use crate::domain::trace::{Component, EventDraft, Status};
+        use crate::ports::orchestration::WorkerHandle;
+        use std::os::unix::fs::PermissionsExt;
+
+        let line = |id: &str, kind: &str, status, parent: Option<&str>| {
+            let mut d = EventDraft::new(Component::Tool, kind, status).at(1);
+            d.parent_event_id = parent.map(str::to_string);
+            serde_json::json!({"event": {"id": id, "draft": d}}).to_string()
         };
-        let AgentIpcOutput::Failed { trace, .. } =
-            serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap()
-        else {
-            panic!("expected Failed");
-        };
-        assert_eq!(trace, [draft]);
+        let lines = [
+            line("ipc:9:1", "tool.started", Status::Running, None),
+            line("ipc:9:2", "tool.completed", Status::Ok, Some("ipc:9:1")),
+        ];
+        for (exit, failure) in [
+            ("exit 3", ErrorClass::Fatal),
+            ("sleep 5", ErrorClass::Timeout),
+        ] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let exe = tmp.path().join("fake-tengu");
+            std::fs::write(
+                &exe,
+                format!(
+                    "#!/bin/sh\nj=$(sed -n 's/.*\"journal\":\"\\([^\"]*\\)\".*/\\1/p')\nprintf '%s\\n' '{}' '{}' >> \"$j\"\n{exit}\n",
+                    lines[0], lines[1]
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut agent = crate::config::Config::default()
+                .agents
+                .remove("main")
+                .unwrap();
+            agent.description = Some("web research".into());
+            agent.limits.step_timeout_secs = 1;
+            let sink = std::sync::Arc::new(MemTrace::default());
+            let mut runner = SubprocessRunner::new(
+                None,
+                "chat".into(),
+                [("researcher".to_string(), agent)].into(),
+            )
+            .with_trace(Some(sink.clone()));
+            runner.tengu_path = Some(exe);
+            let step = crate::domain::plan::Step {
+                id: crate::domain::plan::StepId("s1".into()),
+                agent: "researcher".into(),
+                goal: "g".into(),
+                depends_on: vec![],
+                compose: None,
+            };
+            let plan = crate::domain::plan::Plan {
+                steps: vec![step.clone()],
+            };
+            let err = caused_by(
+                Cause::new(Some("run:7".into()), "chat"),
+                runner.run_step(&step, "", &plan),
+            )
+            .await
+            .unwrap_err();
+            let class = err.downcast_ref::<StepFailure>().map(|f| f.class);
+            assert_eq!(class, Some(failure), "{err:#}");
+            let d = sink.all();
+            assert_eq!(sink.kinds(), ["tool.started", "tool.completed"], "{exit}");
+            assert_eq!(d[0].parent_event_id.as_deref(), Some("run:7"));
+            assert_eq!(d[1].parent_event_id, Some(MemTrace::id(0)));
+            assert!(d.iter().all(|e| e.session_id.as_deref() == Some("chat")));
+        }
     }
 
     #[test]
@@ -640,7 +702,6 @@ mod tests {
             summary: "summary".to_string(),
             metrics: Vec::new(),
             tools: Vec::new(),
-            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"ok\""));
@@ -659,7 +720,6 @@ mod tests {
             output: "partial".to_string(),
             metrics: Vec::new(),
             tools: Vec::new(),
-            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"failed\""));
@@ -678,7 +738,6 @@ mod tests {
             summary: "s".into(),
             metrics: Vec::new(),
             tools: vec![run("read_file", true), run("lp_decide", false)],
-            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(
@@ -720,7 +779,6 @@ mod tests {
             summary: "summary".to_string(),
             metrics: vec![m],
             tools: Vec::new(),
-            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"metrics\""));

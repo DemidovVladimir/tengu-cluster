@@ -415,6 +415,7 @@ async fn smoke_agent(
             grant_workspace: true,
             summary_file: None,
             config_file: None,
+            journal: None,
         },
     )
     .context("build engine")?;

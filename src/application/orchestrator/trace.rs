@@ -30,9 +30,9 @@
 //! A step's work runs caused by its `step.started` ([`TraceBridge::cause`]
 //! via `EventBus::send_with_cause` → `trace_exec::caused_by`): the
 //! `SubprocessRunner` hands that id to its `run-agent` child
-//! (`AgentIpcInput.trace`), whose `tool.*` events come back in
-//! `AgentIpcOutput.trace` and are written under that step
-//! (`trace_exec::replay_child`).
+//! (`AgentIpcInput.trace`), whose `tool.*` events — its own and its
+//! bridge's — come back in the step's journal and are written under that
+//! step (`trace_exec::replay_child`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

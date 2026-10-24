@@ -46,6 +46,12 @@ pub(crate) const TENGU_BRIDGE_GRANT_WORKSPACE_ENV: &str = "TENGU_BRIDGE_GRANT_WO
 /// Absent = the bridge refuses `compress_and_store` with the reason.
 pub(crate) const TENGU_BRIDGE_SUMMARY_FILE_ENV: &str = "TENGU_BRIDGE_SUMMARY_FILE";
 
+/// A recorded `run-agent` step's journal (`trace_store::JournalSink`): the
+/// bridge appends each tool call's `tool.*` events there, as the step's own
+/// executor does; the parent replays them into its run on any exit.
+/// Absent = the bridge records nothing.
+pub(crate) const TENGU_BRIDGE_JOURNAL_ENV: &str = "TENGU_BRIDGE_JOURNAL";
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -69,6 +75,9 @@ pub(crate) struct StepBridge {
     /// back as its IPC summary. `None` = the bridge refuses the call with
     /// the reason.
     pub summary_file: Option<PathBuf>,
+    /// [`TENGU_BRIDGE_JOURNAL_ENV`]: the step's journal when the parent
+    /// records the step; `None` = no tool events.
+    pub journal: Option<PathBuf>,
 }
 
 /// What one CLI run hands its `tengu mcp-bridge`.
@@ -129,6 +138,12 @@ pub(crate) fn bridge_env(run: &BridgeRun<'_>) -> Map<String, Value> {
     if let Some(file) = &run.step.summary_file {
         env.insert(
             TENGU_BRIDGE_SUMMARY_FILE_ENV.into(),
+            s(file.to_string_lossy().into_owned()),
+        );
+    }
+    if let Some(file) = &run.step.journal {
+        env.insert(
+            TENGU_BRIDGE_JOURNAL_ENV.into(),
             s(file.to_string_lossy().into_owned()),
         );
     }

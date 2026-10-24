@@ -993,10 +993,12 @@ These are not preferences. They're load-bearing.
   (`application/orchestrator/trace.rs`; `build_orchestrator(.., trace)`;
   `StepFailed.retry_in_ms` / `PlanCompleted.failed` tell a retry from the last
   attempt, an answer from a system error). A plan step's `run-agent` child gets
-  `AgentIpcInput.trace` and hands its `tool.*` drafts back in
-  `AgentIpcOutput.trace` (`default` + `skip_serializing_if`: old payloads
-  parse); the parent writes them under the step's `step.started` — one writer
-  per file; a `claude_code` step's bridged calls are not recorded. The process owns every planner turn it starts (webhook endpoint, loop escalation: `runtime::loops::Turns` in `LoopDispatch`): shutdown drains them with the loop events (≤ `shutdown_grace_secs`, then aborted, `plan.completed` status dropped; a new one 503) and awaits `Orchestrator::flush_metrics` before the lease release and `run.closed` / `runtime.stopped`; eval closes a row the same way (no sleep).
+  `AgentIpcInput.trace` + `.journal` (a 0600 temp file per step): the child and
+  its `claude_code` / `codex` bridge (`TENGU_BRIDGE_JOURNAL`) append their
+  `tool.*` drafts there, the child each turn's metrics too
+  (`trace_store::JournalSink`); the parent reads it after any exit — an engine
+  error or the timeout kill included — and writes the drafts under the step's
+  `step.started` (one writer per file), plus the metrics when no IPC reply came. The process owns every planner turn it starts (webhook endpoint, loop escalation: `runtime::loops::Turns` in `LoopDispatch`): shutdown drains them with the loop events (≤ `shutdown_grace_secs`, then aborted, `plan.completed` status dropped; a new one 503) and awaits `Orchestrator::flush_metrics` before the lease release and `run.closed` / `runtime.stopped`; eval closes a row the same way (no sleep).
   `decisions.jsonl` lines carry the recording's `runtime_id` / `run_id`. `tengu
   trace runs` · `show --run <id> [--after <seq>] [--follow]` read it in every
   build, no config (`--sandbox default` for a `-c` config); only `tengu prune`

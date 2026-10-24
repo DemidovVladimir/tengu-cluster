@@ -991,6 +991,7 @@ mod tests {
         let step = StepBridge {
             grant_workspace: true,
             summary_file: Some(PathBuf::from("/tmp/summary")),
+            journal: Some(PathBuf::from("/tmp/journal")),
         };
         let scopes = HashMap::new();
         let env = bridge_env(&BridgeRun {
@@ -1038,6 +1039,7 @@ mod tests {
             ("TENGU_CONFIG", "/srv/sandboxes/x/config.toml"),
             ("TENGU_BRIDGE_GRANT_WORKSPACE", "1"),
             ("TENGU_BRIDGE_SUMMARY_FILE", "/tmp/summary"),
+            ("TENGU_BRIDGE_JOURNAL", "/tmp/journal"),
             ("TENGU_BRIDGE_TRANSCRIPT_FILE", "/tmp/transcript"),
             ("TENGU_BRIDGE_WORKSPACE", "/srv/ws"),
         ] {

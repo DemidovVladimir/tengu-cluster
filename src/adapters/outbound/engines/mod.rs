@@ -28,13 +28,16 @@ pub(crate) fn bridges_tools(engine: &str) -> bool {
 }
 
 /// What a caller asks of a CLI engine's bridge (Claude Code, Codex) beyond
-/// the defaults: a `run-agent` step's workspace grant and
-/// `compress_and_store` summary file (`bridge_env::StepBridge`), and the
+/// the defaults: a `run-agent` step's workspace grant, `compress_and_store`
+/// summary file and trace journal (`bridge_env::StepBridge`), and the
 /// config file the bridge loads. Ignored by the other engines.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StepOpts {
     pub grant_workspace: bool,
     pub summary_file: Option<std::path::PathBuf>,
+    /// The step's journal when the parent records it
+    /// (`bridge_env::TENGU_BRIDGE_JOURNAL_ENV`).
+    pub journal: Option<std::path::PathBuf>,
     /// The config the bridge loads (`TENGU_CONFIG`) and takes
     /// `[agents.<agent_id>]` from; `None` = the config in effect
     /// (`config::paths::default_config_path`). `tengu eval` passes its
@@ -114,6 +117,7 @@ pub(crate) fn build_step_engine(
                         crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,
                             summary_file: step.summary_file,
+                            journal: step.journal,
                         },
                     ),
                 ))
@@ -157,6 +161,7 @@ pub(crate) fn build_step_engine(
                         crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,
                             summary_file: step.summary_file,
+                            journal: step.journal,
                         },
                     ),
                 ))

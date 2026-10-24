@@ -166,7 +166,7 @@
         <li>A planner call returns. One record: kind <code>planner</code>, agent <code>planner/&lt;agent&gt;</code> (<code>replanner/</code> on replan), the engine's token counts and the prompt's layers.</li>
         <li><code>record()</code> always writes one info line, message <code>metrics</code>: kind, agent, model, tokens, chars, latency, step and session. Layer sizes go to debug.</li>
         <li>A <code>run-agent</code> child records one per engine turn, with its <code>step_id</code> and its messages' size per role as layers (<code>system</code>, <code>user</code>, <code>assistant</code>, <code>tool</code>), and logs that line in its own process.</li>
-        <li>The records ride back in <code>AgentIpcOutput.metrics</code>. The parent puts each one on the sink, after a success and after a failure; its log line already came with the child's log.</li>
+        <li>The records ride back in <code>AgentIpcOutput.metrics</code>, and each is appended to the step's journal as it happens. The parent puts each one on the sink, after a success and after a failure; a child that dies without a reply (engine error, timeout kill) leaves the journal's. Its log line already came with the child's log.</li>
         <li>Embedding calls (agent <code>embedder</code>), the wiki compiler and Jev decisions (agent = the loop's name) report the same way.</li>
         <li><code>build_orchestrator</code> installs one global sink: a broadcast channel with 256 slots. Without an orchestrator there is no sink, only the log line.</li>
         <li>Each orchestrator owns one bridge task that copies every record onto its bus as <code>OrchestratorEvent::MetricsRecorded</code> (the trace writes <code>metrics.recorded</code> then), and ends with the orchestrator. Eval runs read it there too.</li>
@@ -351,7 +351,7 @@
         <tr><td><code>src/domain/usage.rs</code></td><td>chat-turn token totals behind <code>/cost</code></td></tr>
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td>planner records and their layers</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>one record per child engine turn</td></tr>
-        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td><code>AgentIpcOutput.metrics</code>, re-emit</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td><code>AgentIpcOutput.metrics</code> (else the step journal's), re-emit</td></tr>
         <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>embedding records</td></tr>
         <tr><td><code>src/application/decision_loop/mod.rs</code></td><td>decision records, <code>decisions.jsonl</code> lines</td></tr>
         <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>sink install, bus bridge (owned by the orchestrator)</td></tr>

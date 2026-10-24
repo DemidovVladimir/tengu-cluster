@@ -83,7 +83,9 @@ async fn try_persist_agentic_step_summary(
 ///      text becomes the summary — else Failed)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
 ///    per-turn `metrics` and the tool activity `tools` (every call and its
-///    outcome, bridged Claude Code calls included).
+///    outcome, bridged Claude Code calls included). The step's journal
+///    (`AgentIpcInput.journal`) already holds its tool events and metrics,
+///    written as they happened: the parent reads them however this ends.
 pub(super) async fn run_agent_subprocess() -> Result<()> {
     use crate::domain::message::{Message, Role};
     use crate::ports::engine::EngineContext;
@@ -278,6 +280,10 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     }
     system_prompt.push_str(MANDATORY_SUFFIX);
 
+    // The step's journal when the parent records this step: tool events go
+    // there (from here and from a CLI engine's bridge).
+    let traced_journal = input.trace.as_ref().and(input.journal.clone());
+
     // ----- Build engine (the agent's own `engine`) -----
     let mut agent_cfg_for_engine = crate::bootstrap::tools::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
@@ -301,6 +307,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             grant_workspace: true,
             summary_file: summary_file.as_ref().map(|f| f.path().to_path_buf()),
             config_file: None,
+            journal: traced_journal.clone(),
         },
     )
     .with_context(|| {
@@ -364,23 +371,26 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         }
     };
     // The parent records this step (`AgentIpcInput.trace`): every tool call
-    // here becomes `tool.*` drafts it writes into its run, under the step's
-    // `step.started` (`trace_exec::DraftBuffer`; outside the redaction, as a
-    // loop's `TracedExecutor`). A Claude Code step's calls run in its bridge
-    // process and are not recorded.
-    let step_trace = input.trace.as_ref().map(|t| {
-        Arc::new(crate::application::trace_exec::DraftBuffer::new(
-            t.parent_event_id.clone(),
-            input.session_id.clone(),
-            Arc::clone(&secret_registry),
-        ))
-    });
+    // here goes into the step's journal as `tool.*` drafts, which the parent
+    // writes into its run under the step's `step.started` on any exit
+    // (`trace_store::JournalSink`; outside the redaction, as a loop's
+    // `TracedExecutor`). A Claude Code / Codex step's calls run in its
+    // bridge, which writes the same journal (`StepOpts::journal`).
+    let step_trace: Option<Arc<dyn crate::ports::trace::TraceSink>> =
+        traced_journal
+            .as_ref()
+            .map(|path| -> Arc<dyn crate::ports::trace::TraceSink> {
+                Arc::new(crate::adapters::outbound::trace_store::JournalSink::new(
+                    path.clone(),
+                    Arc::clone(&secret_registry),
+                ))
+            });
     let executor: Option<Arc<dyn crate::ports::engine::ToolExecutor>> = stack.map(|stack| {
         let sanitized = stack.executor;
         match &step_trace {
-            Some(buf) => Arc::new(crate::application::trace_exec::TracedExecutor::new(
+            Some(sink) => Arc::new(crate::application::trace_exec::TracedExecutor::new(
                 sanitized,
-                buf.clone(),
+                sink.clone(),
                 &input.agent_name,
                 None,
             )),
@@ -570,7 +580,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             summary,
             metrics: subagent_metrics,
             tools: tool_runs,
-            trace: step_trace.as_ref().map(|b| b.take()).unwrap_or_default(),
         }
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
@@ -583,7 +592,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             output,
             metrics: subagent_metrics,
             tools: tool_runs,
-            trace: step_trace.as_ref().map(|b| b.take()).unwrap_or_default(),
         }
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
@@ -595,7 +603,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
 /// A step's seams in the shared tool loop (`tool_loop::LoopHooks`): its
 /// `compress_and_store` summary, the last text the model wrote, and one
-/// `Subagent` metrics record per engine turn (shipped back over IPC).
+/// `Subagent` metrics record per engine turn (shipped back over IPC, and
+/// appended to the step's journal as it happens: an engine error or the
+/// timeout kill leaves no IPC reply).
 struct StepHooks {
     session_id: String,
     step_id: String,
@@ -604,6 +614,8 @@ struct StepHooks {
     summary: std::sync::Mutex<Option<String>>,
     last_text: std::sync::Mutex<String>,
     metrics: std::sync::Mutex<Vec<crate::domain::metrics::MetricsRecord>>,
+    /// `AgentIpcInput.journal`.
+    journal: Option<std::path::PathBuf>,
 }
 
 impl StepHooks {
@@ -619,6 +631,7 @@ impl StepHooks {
             summary: Default::default(),
             last_text: Default::default(),
             metrics: Default::default(),
+            journal: input.journal.clone(),
         }
     }
 
@@ -672,6 +685,9 @@ impl crate::application::chat::tool_loop::LoopHooks for StepHooks {
         };
         // In the step's own log too (the parent forwards stderr).
         crate::application::metrics::record(rec.clone());
+        if let Some(path) = &self.journal {
+            crate::adapters::outbound::trace_store::append_journal_metrics(path, &rec);
+        }
         self.metrics.lock().unwrap().push(rec);
         if !turn.text.is_empty() {
             *self.last_text.lock().unwrap() = turn.text.to_string();
