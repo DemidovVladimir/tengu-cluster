@@ -122,7 +122,7 @@ pub(crate) async fn import_hl_archive(
 mod tests {
     use super::*;
     use crate::adapters::outbound::market_data::SqliteMarketData;
-    use crate::domain::marketdata::parse_time;
+    use crate::domain::time::parse_time;
     use std::io::Write;
 
     const HEADER: &str = "time,coin,funding,open_interest,prev_day_px,day_ntl_vlm,premium,oracle_px,mark_px,mid_px,impact_bid_px,impact_ask_px";

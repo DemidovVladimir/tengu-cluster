@@ -533,7 +533,7 @@ fn date_ms(s: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::marketdata::{fmt_time, parse_time};
+    use crate::domain::time::{fmt_time, parse_time};
 
     fn fixture(name: &str) -> String {
         let path = format!("{}/tests/fixtures/sec/{name}", env!("CARGO_MANIFEST_DIR"));

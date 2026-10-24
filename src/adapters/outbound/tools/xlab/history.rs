@@ -31,12 +31,13 @@ use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::sections::SandboxSections;
 use crate::domain::backtest::engine::MarketData;
 use crate::domain::market::{InstrumentId, HYPERLIQUID};
-use crate::domain::marketdata::{fmt_time, Interval, StockSplit};
+use crate::domain::marketdata::{Interval, StockSplit};
 use crate::domain::marketdata_stats::{sample_indices, FetchSummary, MarketHistory, StoredSeries};
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
     now_ms, ErrorClass, ObsSource, ObsStatus, Observation, Observed, ReadError,
 };
+use crate::domain::time::fmt_time;
 use crate::domain::tools as names;
 use crate::ports::market_data::{CoverageRow, MarketDataStore};
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};

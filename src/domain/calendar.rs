@@ -26,10 +26,9 @@ use std::collections::BTreeSet;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Weekday};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::time::{parse_hm, DAY_MIN};
 use crate::domain::tz::Zone;
 
-/// Minutes in a day.
-pub const DAY_MIN: u32 = 1440;
 /// Minutes in a week (weekly windows count from Monday 00:00 local).
 #[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
 pub const WEEK_MIN: u32 = 7 * DAY_MIN;
@@ -286,16 +285,6 @@ fn in_cyclic(from: u32, to: u32, x: u32) -> bool {
 #[allow(dead_code)] // session reads of the W1-pinned `[xmarket.calendars.*]` hours: no gate reads one yet
 fn local_minute(local: NaiveDateTime) -> (NaiveDate, u32) {
     (local.date(), local.hour() * 60 + local.minute())
-}
-
-/// `"HH:MM"` (00:00–23:59) → minutes after midnight.
-pub fn parse_hm(s: &str) -> Option<u32> {
-    let (h, m) = s.trim().split_once(':')?;
-    if h.len() != 2 || m.len() != 2 {
-        return None;
-    }
-    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
-    (h < 24 && m < 60).then_some(h * 60 + m)
 }
 
 /// `"Sun 20:00"` (three-letter day, any case) → minutes after Monday 00:00.
@@ -616,11 +605,6 @@ mod tests {
 
     #[test]
     fn parsers() {
-        assert_eq!(parse_hm("09:30"), Some(570));
-        assert_eq!(parse_hm("23:59"), Some(1439));
-        for bad in ["24:00", "9:30", "09:60", "0930", "", "ab:cd"] {
-            assert_eq!(parse_hm(bad), None, "{bad:?}");
-        }
         assert_eq!(parse_week_hm("Mon 00:00"), Some(0));
         assert_eq!(parse_week_hm("sun 20:00"), Some(6 * DAY_MIN + 1200));
         assert_eq!(parse_week_hm("FRI 17:00"), Some(4 * DAY_MIN + 1020));

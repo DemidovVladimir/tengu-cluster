@@ -33,8 +33,10 @@ use crate::domain::backtest::spec::{
     WeekendWindowParams,
 };
 use crate::domain::book::Side;
-use crate::domain::calendar::{parse_hm, Calendar, ExchangeCalendar};
-use crate::domain::marketdata::{fmt_time, Bar, BarSeries};
+use crate::domain::calendar::{Calendar, ExchangeCalendar};
+use crate::domain::marketdata::{Bar, BarSeries};
+use crate::domain::time::fmt_time;
+use crate::domain::time::parse_hm;
 use crate::domain::tz::Zone;
 use crate::domain::xm::weekend_fade::{
     anchor_date, fade_window, select_capped, signal_of, FadeRule, Signal,

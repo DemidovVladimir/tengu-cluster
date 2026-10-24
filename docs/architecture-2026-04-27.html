@@ -1602,7 +1602,7 @@ const FILE_MAP = [
   ["src/domain/schedule.rs", "runtime", "next_fire — UTC grid, local windows, DST-safe at-ticks, jitter, late grace"],
   ["src/ports/runtime.rs", "runtime", "RuntimeStore — the single-runner lease port"],
   ["src/adapters/outbound/runtime_store.rs", "runtime", "SqliteRuntimeStore — <state dir>/runtime.db lease (acquire / renew / release)"],
-  ["src/domain/tz.rs · src/domain/calendar.rs", "xmarket", "New York / Paris / UTC civil time with DST · exchange sessions, holidays, weekend window"],
+  ["src/domain/tz.rs · src/domain/calendar.rs · src/domain/time.rs", "xmarket", "New York / Paris / UTC civil time with DST · exchange sessions, holidays, weekend window · shared parse_time / fmt_time / parse_hm"],
   // ── xmarket ──
   ["src/domain/xm/risk.rs", "xmarket", "pre-trade gate: evaluate (every rule a Check, fail closed), evaluate_shadow, Lifecycle, HaltReason"],
   ["src/domain/xm/risk_state.rs", "xmarket", "halts, UTC day roll + day-start equity, risk_state/1"],
@@ -1622,7 +1622,7 @@ const FILE_MAP = [
   ["src/adapters/outbound/tools/xm/weekend_fade.rs", "xmarket", "xm_weekend_fade — one idempotent step of rule W per call (capped + shadow ledgers)"],
   ["src/adapters/outbound/tools/xm/risk_status.rs", "xmarket", "risk_status — risk_state/1: marks, kill-switch file, day roll"],
   // ── xlab ──
-  ["src/domain/marketdata.rs", "xlab", "Interval, Bar, FundingPoint, CtxPoint, series observable at close, StockSplit + adjust_for_split, parse_time"],
+  ["src/domain/marketdata.rs", "xlab", "Interval, Bar, FundingPoint, CtxPoint, series observable at close, StockSplit + adjust_for_split"],
   ["src/domain/marketdata_decode.rs", "xlab", "HL candleSnapshot / fundingHistory, GeckoTerminal OHLCV, HL archive CSV, JSON decoders"],
   ["src/domain/marketdata_stats.rs", "xlab", "market_history statistics + the mkt_history/1 row"],
   ["src/domain/sec.rs", "xlab", "SEC EDGAR decoders: ticker map, submissions + older pages, index Accepted → published_ms, forms kept, MarketEvent"],

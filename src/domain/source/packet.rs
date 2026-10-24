@@ -50,10 +50,10 @@ use super::record::{
     Trust, Withdrawn,
 };
 use super::rules::{DemandStatus, Issue};
-use crate::domain::marketdata::fmt_time;
 use crate::domain::observation::{
     set_int, set_str, ErrorClass, Features, ObsStatus, Observed, ReadError,
 };
+use crate::domain::time::fmt_time;
 
 /// The packet schema (observation schema too).
 pub const PACKET_SCHEMA: &str = "source_asof/1";

@@ -50,7 +50,7 @@ use crate::domain::lineage::ranking::{
 use crate::domain::lineage::value::{Locator, Time, TimeOrder};
 use crate::domain::lineage::variant::VariantStatus;
 use crate::domain::lineage::Registry;
-use crate::domain::marketdata::fmt_time;
+use crate::domain::time::fmt_time;
 use crate::domain::tz::Zone;
 
 /// `ranking.json`'s schema tag.

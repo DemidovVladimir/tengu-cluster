@@ -13,10 +13,10 @@ use crate::adapters::outbound::http_class::test_support::{
 };
 use crate::adapters::outbound::rate_limit::Limiters;
 use crate::adapters::outbound::sources::store::SqliteSourceStore;
-use crate::domain::marketdata::parse_time;
 use crate::domain::source::{
     as_of, AsOfInput, AsOfMode, Revision, SourcePolicy, SourceRecord, SupersededBy,
 };
+use crate::domain::time::parse_time;
 use crate::ports::clock::SimClock;
 use crate::ports::source_store::SourceSwitch;
 

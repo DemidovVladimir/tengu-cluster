@@ -25,9 +25,10 @@ use crate::adapters::outbound::hyperliquid::info::{
     api_url, HlInfo, InfoReply, API_URL_ENV, MAINNET_URL, RATE_LIMIT,
 };
 use crate::config::sections::SandboxSections;
-use crate::domain::marketdata::{fmt_time, Bar, Interval};
+use crate::domain::marketdata::{Bar, Interval};
 use crate::domain::marketdata_decode::{closed_bars, hl_candles, hl_coin, hl_funding};
 use crate::domain::scope::ToolScope;
+use crate::domain::time::fmt_time;
 use crate::ports::market_data::MarketDataStore;
 
 /// HL keeps this many bars per interval (the newest).

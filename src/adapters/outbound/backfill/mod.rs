@@ -36,8 +36,9 @@ use serde::Serialize;
 use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::rate_limit::jitter01;
 use crate::domain::backoff::{next_delay, BackoffPolicy, Delay};
-use crate::domain::marketdata::{fmt_time, Interval};
+use crate::domain::marketdata::Interval;
 use crate::domain::observation::ErrorClass;
+use crate::domain::time::fmt_time;
 use crate::ports::market_data::MarketDataStore;
 
 /// Retry of one backfill request (module doc).

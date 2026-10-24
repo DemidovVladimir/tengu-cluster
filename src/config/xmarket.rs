@@ -49,10 +49,11 @@ use super::paths::{expand_tilde, resolve_tengu_home};
 use super::risk::HL_MIN_ORDER_USD;
 use super::Config;
 use crate::domain::calendar::{
-    parse_date, parse_hm, parse_week_hm, Calendar, ExchangeCalendar, WeeklyWindow,
+    parse_date, parse_week_hm, Calendar, ExchangeCalendar, WeeklyWindow,
 };
 use crate::domain::market::MarketCtx;
 use crate::domain::observation::Observed;
+use crate::domain::time::parse_hm;
 use crate::domain::tools::{XM_TOOLS, XM_WEEKEND_FADE};
 use crate::domain::tz::Zone;
 use crate::domain::xm::risk::permission_error;

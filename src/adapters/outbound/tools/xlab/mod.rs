@@ -44,7 +44,7 @@ use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::tools::xm::STATE_DIR_MISSING;
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::MARKET_DB;
-use crate::domain::marketdata::parse_time;
+use crate::domain::time::parse_time;
 use crate::ports::market_data::MarketDataStore;
 use crate::ports::observation::ObservationStore;
 use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};

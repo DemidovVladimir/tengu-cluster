@@ -42,7 +42,6 @@ use crate::adapters::outbound::sources::fetch_gate;
 use crate::config::rate_limits::RateLimitConfig;
 use crate::config::sections::SandboxSections;
 use crate::config::sources::{SourceAuth, SourceEntry, SourceKind};
-use crate::domain::marketdata::fmt_time;
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
 use crate::domain::source::ted::{
@@ -50,6 +49,7 @@ use crate::domain::source::ted::{
     TED_MAX_LIMIT, TED_MAX_WINDOW, TED_SEARCH_PATH,
 };
 use crate::domain::source::{Coverage, Fact, ParseStatus, SourceRecord, SourceStamp};
+use crate::domain::time::fmt_time;
 use crate::ports::clock::Clock;
 use crate::ports::source_store::{Batch, Cursor, RecordQuery, Snapshot, SnapshotKind, SourceStore};
 
@@ -863,8 +863,8 @@ mod tests {
         canned, local_scope, serve, test_client, Canned,
     };
     use crate::adapters::outbound::sources::store::SqliteSourceStore;
-    use crate::domain::marketdata::parse_time;
     use crate::domain::source::ted::query_for;
+    use crate::domain::time::parse_time;
     use crate::ports::clock::SimClock;
     use crate::ports::source_store::SourceSwitch;
 

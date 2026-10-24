@@ -54,7 +54,7 @@ use crate::domain::canonical::sha256_hex;
 use crate::domain::lineage::ranking::RankingContract;
 use crate::domain::lineage::value::{RecordKind, Time};
 use crate::domain::lineage::Registry;
-use crate::domain::marketdata::fmt_time;
+use crate::domain::time::fmt_time;
 use crate::ports::clock::Clock;
 use crate::ports::market_data::MarketDataStore;
 use crate::ports::runtime::RuntimeStore;

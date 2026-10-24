@@ -15,7 +15,7 @@
 //!
 //! | Rule | Value |
 //! |---|---|
-//! | Times | epoch ms, RFC 3339 or `YYYY-MM-DD` (`domain::marketdata::parse_time`) |
+//! | Times | epoch ms, RFC 3339 or `YYYY-MM-DD` (`domain::time::parse_time`) |
 //! | Store | `<TENGU_HOME>/state/<sources.state>/sources.db`; `list`, `asof` and `purge` read without creating it |
 //! | Network | `fetch` only, through the installed `[egress]` policy (`--sandbox` installs the sandbox's); audit lines attributed `agent = cli`, `session = sources-fetch:<start ms>`, `call_id = <source>:<entity>` (SEC: `<source>:sec:cik:<cik10>`, TED: `<source>:query:<sha256>`) |
 
@@ -40,10 +40,10 @@ use crate::config::sections::SandboxSections;
 use crate::config::sources::{sources_db, SourceEntry, SourceKind, SourcesConfig};
 use crate::config::Config;
 use crate::domain::canonical::canonical_json;
-use crate::domain::marketdata::{fmt_time, parse_time};
 use crate::domain::observation::now_ms;
 use crate::domain::source::ted::{query_key, TED_MAX_LIMIT};
 use crate::domain::source::AsOfMode;
+use crate::domain::time::{fmt_time, parse_time};
 use crate::ports::clock::Clock;
 use crate::ports::source_store::{
     body_sha256, switched_off, Batch, Snapshot, SnapshotKind, SourceStore, SourceSwitch,

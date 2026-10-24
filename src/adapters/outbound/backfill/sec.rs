@@ -39,7 +39,7 @@ use crate::adapters::outbound::http_class::{
 use crate::adapters::outbound::rate_limit::{limiters, Limiters, Priority};
 use crate::config::rate_limits::RateLimitConfig;
 use crate::config::sections::SandboxSections;
-use crate::domain::marketdata::{fmt_time, EventCoverage, MarketEvent};
+use crate::domain::marketdata::{EventCoverage, MarketEvent};
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
 use crate::domain::sec::{
@@ -47,6 +47,7 @@ use crate::domain::sec::{
     json_clock, older_pages_to_read, sec_ticker, submissions, ticker_ciks, Filing, IndexAcceptance,
     JsonClock, Submissions,
 };
+use crate::domain::time::fmt_time;
 use crate::ports::market_data::MarketDataStore;
 
 /// `company_tickers.json` and the filing archive.
@@ -661,7 +662,7 @@ mod tests {
         canned, local_scope, serve, test_client, Canned,
     };
     use crate::adapters::outbound::market_data::SqliteMarketData;
-    use crate::domain::marketdata::parse_time;
+    use crate::domain::time::parse_time;
 
     const AAPL: &str = "hyperliquid:xyz:AAPL";
 

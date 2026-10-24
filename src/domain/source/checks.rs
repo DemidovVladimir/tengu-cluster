@@ -24,8 +24,8 @@ use super::testkit::{
     copy_of, correction_of, edited, gone, reparsed, retext, worlds, Src, World, D, H,
 };
 use crate::domain::canonical::canonical_json;
-use crate::domain::marketdata::fmt_time;
 use crate::domain::source::record::WithdrawnHow;
+use crate::domain::time::fmt_time;
 
 const MODES: [AsOfMode; 2] = [AsOfMode::Captured, AsOfMode::Knowable];
 const FLOOD_HOURS: i64 = 48;

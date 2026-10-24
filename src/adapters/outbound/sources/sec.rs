@@ -34,7 +34,6 @@ use crate::adapters::outbound::http_class::{read_error, HttpError};
 use crate::adapters::outbound::sources::fetch_gate;
 use crate::config::sections::SandboxSections;
 use crate::config::sources::{SourceAuth, SourceEntry, SourceKind};
-use crate::domain::marketdata::fmt_time;
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
 use crate::domain::sec::{
@@ -43,6 +42,7 @@ use crate::domain::sec::{
 use crate::domain::source::record::sec_cik_entity;
 use crate::domain::source::sec_records::{filing_record, FilingTime};
 use crate::domain::source::{Coverage, Fact, ParseError, ParseStatus, SourceStamp};
+use crate::domain::time::fmt_time;
 use crate::ports::clock::Clock;
 use crate::ports::source_store::{Batch, Cursor, RecordQuery, Snapshot, SnapshotKind, SourceStore};
 

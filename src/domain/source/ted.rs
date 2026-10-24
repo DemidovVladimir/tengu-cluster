@@ -734,10 +734,10 @@ mod tests {
     //! field was asked for.
     use super::*;
     use crate::domain::canonical::canonical_json;
-    use crate::domain::marketdata::{fmt_time, parse_time};
     use crate::domain::source::{
         as_of, AsOfInput, AsOfMode, Revision, SourceClass, SourcePolicy, SupersededBy, Trust,
     };
+    use crate::domain::time::{fmt_time, parse_time};
     use std::collections::BTreeMap;
 
     fn fixture(name: &str) -> Value {

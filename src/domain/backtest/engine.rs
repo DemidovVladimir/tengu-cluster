@@ -45,7 +45,8 @@ use crate::domain::backtest::spec::{StrategyKind, StrategySpec};
 use crate::domain::backtest::stats::{StatsParams, Summary};
 use crate::domain::book::Side;
 use crate::domain::calendar::Calendar;
-use crate::domain::marketdata::{fmt_time, BarSeries, CtxSeries, FundingSeries, StockSplit};
+use crate::domain::marketdata::{BarSeries, CtxSeries, FundingSeries, StockSplit};
+use crate::domain::time::fmt_time;
 use crate::domain::xm::weekend_fade::Skip as FadeSkip;
 
 const DAY_MS: i64 = 86_400_000;

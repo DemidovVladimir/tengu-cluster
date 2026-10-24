@@ -11,7 +11,7 @@
 //!
 //! | Rule | Value |
 //! |---|---|
-//! | Times | epoch ms, RFC 3339 or `YYYY-MM-DD` (`domain::marketdata::parse_time`) |
+//! | Times | epoch ms, RFC 3339 or `YYYY-MM-DD` (`domain::time::parse_time`) |
 //! | Items | comma-separated full ids; `@<name>` = `[backtest.universes.<name>]`; Gecko: `<id>@<pool address>` |
 //! | Network | the process's installed `[egress]` policy (`cli/mod.rs` installs the sandbox's): proxy, `allow_hosts`, audit lines attributed `agent = cli`, `session = history-backfill:<start ms>` (`events`: `history-events:<start ms>`), `call_id = <instrument>` (the SEC ticker map: `sec:company_tickers`) |
 
@@ -40,10 +40,11 @@ use crate::config::sections::SandboxSections;
 use crate::config::xmarket::market_db;
 use crate::config::Config;
 use crate::domain::market::InstrumentId;
-use crate::domain::marketdata::{fmt_time, parse_time, Interval};
+use crate::domain::marketdata::Interval;
 use crate::domain::marketdata_decode::hl_coin;
 use crate::domain::observation::now_ms;
 use crate::domain::sec::sec_ticker;
+use crate::domain::time::{fmt_time, parse_time};
 use crate::ports::history::HistoryStore;
 
 #[derive(Subcommand)]

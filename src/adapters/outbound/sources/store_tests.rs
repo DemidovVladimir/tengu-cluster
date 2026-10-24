@@ -4,10 +4,10 @@ use serde_json::Value;
 
 use super::*;
 use crate::domain::canonical::canonical_json;
-use crate::domain::marketdata::fmt_time;
 use crate::domain::source::record::{sec_cik_entity, Origin};
 use crate::domain::source::testkit::{copy_of, edited, rec, worlds, Src, D, H, T0};
 use crate::domain::source::{AsOfInput, AsOfMode, AsOfQuery, EvidencePacket};
+use crate::domain::time::fmt_time;
 use crate::ports::source_store::switched_off;
 
 fn open() -> (tempfile::TempDir, SqliteSourceStore) {

@@ -7,7 +7,7 @@
 //! | Flag | Rule |
 //! |---|---|
 //! | `--strategy <name>` xor `--spec <file.json>` | a `[backtest.strategies]` name, or a JSON object (named by its `name`, else the file stem) |
-//! | `--from` / `--to` | decisions in `[from, to)`: epoch ms, RFC 3339 or a UTC date (`domain::marketdata::parse_time`); default the earliest stored bar of the run's instruments at the spec's interval / now |
+//! | `--from` / `--to` | decisions in `[from, to)`: epoch ms, RFC 3339 or a UTC date (`domain::time::parse_time`); default the earliest stored bar of the run's instruments at the spec's interval / now |
 //! | `--split time:<t>` · `instruments:<id,…>` | in-sample vs holdout, side by side; a run with a holdout candidate is a read: one `holdout-reads.jsonl` line (`via = "cli"`, counted with the tool's) before the figures print, `holdout read #n …` on stderr |
 //! | `--data-through <t>` | read only the data known at t (bars closed by it, funding / ctx rows stamped by it) — every run prints and records its `data_through_ms` (the newest row read); rerun with it over a grown `market.db` for the same result (lineage D1) |
 //! | `--format table` (default) · `json` | the compact summary (+ the gate's two lines) + the run dir · `report.json` on stdout (the run dir on stderr) |
@@ -48,9 +48,9 @@ use crate::config::xmarket::{backtests_dir, market_db};
 use crate::config::Config;
 use crate::domain::backtest::gate::{GateClass, COST_PER_DECISION_USD};
 use crate::domain::backtest::spec::SplitSpec;
-use crate::domain::marketdata::{fmt_time, parse_time};
 use crate::domain::marketdata_decode::hl_coin;
 use crate::domain::observation::now_ms;
+use crate::domain::time::{fmt_time, parse_time};
 
 /// Failed gate calls printed (stderr) before "… and N more".
 const SHOW_FAILED: usize = 5;

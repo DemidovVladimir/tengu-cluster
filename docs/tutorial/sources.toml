@@ -383,6 +383,7 @@ sources = [
   "src/domain/backoff.rs",
   "src/domain/calendar.rs",
   "src/domain/tz.rs",
+  "src/domain/time.rs",
   "src/domain/schedule.rs",
   "src/domain/schedule_tests.rs",
   "src/ports/runtime.rs",
@@ -507,6 +508,7 @@ sources = [
 [pages.history]
 sources = [
   "src/domain/marketdata.rs",
+  "src/domain/time.rs",
   "src/domain/marketdata_decode.rs",
   "src/domain/marketdata_stats.rs",
   "src/domain/sec.rs",

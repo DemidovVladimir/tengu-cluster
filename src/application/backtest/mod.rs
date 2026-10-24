@@ -48,7 +48,8 @@ use crate::domain::backtest::spec::{
 };
 use crate::domain::canonical::canonical_sha256;
 use crate::domain::lineage::value::Locator;
-use crate::domain::marketdata::{fmt_time, Interval, StockSplit};
+use crate::domain::marketdata::{Interval, StockSplit};
+use crate::domain::time::fmt_time;
 use crate::ports::market_data::MarketDataStore;
 
 const HOUR_MS: i64 = 3_600_000;

@@ -132,9 +132,9 @@ mod tests {
 
     use super::*;
     use crate::domain::canonical::sha256_hex;
-    use crate::domain::marketdata::{fmt_time, parse_time};
     use crate::domain::sec::{index_acceptance, submissions};
     use crate::domain::source::{SourceClass, Trust};
+    use crate::domain::time::{fmt_time, parse_time};
 
     fn fixture(name: &str) -> String {
         let path = format!("{}/tests/fixtures/sec/{name}", env!("CARGO_MANIFEST_DIR"));

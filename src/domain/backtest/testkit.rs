@@ -22,10 +22,11 @@ use crate::domain::backtest::fills::ExitReason;
 use crate::domain::backtest::spec::StrategySpec;
 use crate::domain::backtest::stats::SplitMix64;
 use crate::domain::book::Side;
-use crate::domain::calendar::{parse_date, parse_hm, Calendar, ExchangeCalendar};
+use crate::domain::calendar::{parse_date, Calendar, ExchangeCalendar};
 use crate::domain::marketdata::{
     Bar, BarSeries, CtxPoint, CtxSeries, FundingPoint, FundingSeries, Interval,
 };
+use crate::domain::time::parse_hm;
 use crate::domain::tz::Zone;
 
 pub(crate) const H: i64 = 3_600_000;

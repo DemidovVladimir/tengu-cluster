@@ -46,9 +46,9 @@ use crate::domain::backtest::costs::cost_for;
 use crate::domain::backtest::report::PRIMARY_ARM;
 use crate::domain::backtest::spec::SplitSpec;
 use crate::domain::calendar::Calendar;
-use crate::domain::marketdata::fmt_time;
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{now_ms, set_int, ObsSource, Observation, MAX_FEATURES};
+use crate::domain::time::fmt_time;
 use crate::domain::tools as names;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 

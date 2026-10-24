@@ -27,7 +27,7 @@
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
-use crate::domain::calendar::{parse_hm, DAY_MIN};
+use crate::domain::time::{parse_hm, DAY_MIN};
 use crate::domain::tz::Zone;
 
 /// Local dates [`next_fire`] looks at around an instant: one back (a window
