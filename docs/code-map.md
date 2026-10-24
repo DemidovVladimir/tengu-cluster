@@ -146,7 +146,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | 3. Opt-in only: add the name | `src/domain/tools.rs::WORKSPACE_TOOLS` |
 | 4. Give it to an agent: `tools = ["<name>"]` (+ `[agents.<a>.scopes.<name>]`) | `sandboxes/<sandbox>/config.toml` |
 | 5. Every engine (operator rule 2026-09-30): a bridge conformance case (`tests/bridge_conformance.rs::cases()`) + the tool in an engine-matrix set (`tests/engine_matrix.rs`) and its fixture agents | [`tools.md`](tools.md) § Add a Rust tool step 5 |
-| 6. Test | `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint --test bridge_conformance --test engine_matrix` |
+| 6. Test | `cargo test --lib -- catalog schema_lint && cargo test --test scope_lint --test bridge_conformance --test engine_matrix` |
 
 No Rust: HTTP API → a skill that teaches `http_request`; existing tool server → `[[mcp_servers]]` (tools appear as `<server>__<tool>`). Details: [`tools.md`](tools.md).
 
@@ -186,7 +186,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | New field in an existing section | Add `pub <field>: T` with a doc comment and `#[serde(default)]` or `#[serde(default = "default_<field>")]` + `fn default_<field>()`; update that struct's `impl Default`; add checks in `validation_errors` / `validate_agent` (`ValidationErrors::require*`); read it in the consuming adapter / bootstrap |
 | New agent key | Same, on `AgentConfig` — it is `deny_unknown_fields`, so configs using the key fail to load until the field exists; update `impl Default for Config`'s `main` agent literal |
 | New top-level section | `#[derive(Debug, Clone, Serialize, Deserialize, Default)] pub struct XConfig` (consider `deny_unknown_fields`), `#[serde(default)] pub x: XConfig` on `Config`, add to `impl Default for Config` |
-| Always | Update `config.example.toml` and every `sandboxes/*/config.toml` that should use it; add a `validate_*` test in `src/config/tests.rs`; `cargo test --bin tengu config` |
+| Always | Update `config.example.toml` and every `sandboxes/*/config.toml` that should use it; add a `validate_*` test in `src/config/tests.rs`; `cargo test --lib config` |
 
 ### Other recipes
 
@@ -249,7 +249,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 
 | Test | Guards |
 |---|---|
-| `cargo test --bin tengu` | unit tests (`#[cfg(test)]` modules: in the file, or a sibling `<stem>_tests.rs` behind `#[path]` / `tests.rs` under a `mod.rs` once a file's tests outgrow it; no `[lib]` target) |
+| `cargo test --lib` | unit tests (`#[cfg(test)]` modules: in the file, or a sibling `<stem>_tests.rs` behind `#[path]` / `tests.rs` under a `mod.rs` once a file's tests outgrow it; all in the `tengu` lib — `src/lib.rs`, the bin has none) |
 | `tests/layering_lint.rs` | layer dependency rules (§1) + subtree rows (`domain/soe` ↔ `domain/xm` / the backtest engine / `config::risk`, `domain/source` → never `domain/soe`, `application/soe` ↔ `application/backtest`); core never names a vertical (`VERTICALS`; `COMPOSITION` files, `bootstrap/`, `adapters/inbound/` exempt; `super::` paths resolved); grouped and multi-line `use` statements expanded leaf by leaf; test code is exempt — inline `#[cfg(test)]` blocks and the files built only in tests (`tests/support/test_files.rs`, shared with `code_map.rs`) |
 | `tests/scope_lint.rs` | every `Tool::execute` calls a scope check within its first 30 lines (or says `// scope: pure-compute`) |
 | `tests/code_map.rs` | this file lists every source file; `code-map.html` graph is current (edges from non-test code only) |
@@ -271,7 +271,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
-| `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
+| `src/lib.rs` | 18 | The `tengu` library — every module (private), one `pub async fn run` (the CLI); unit tests `cargo test --lib`, no doctests. |
+| `src/main.rs` | 6 | Tengu binary entry point: `#[tokio::main]` calls `tengu::run`. |
 
 ### domain — data + pure policy (128 files)
 

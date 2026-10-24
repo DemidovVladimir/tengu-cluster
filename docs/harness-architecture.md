@@ -579,7 +579,7 @@ Each interface is ≤10 methods and documented in its defining file.
 | config | `src/config/tests.rs` | 12 |
 | eval runner | `src/adapters/inbound/eval/` (+ `application/skills/lifecycle/eval.rs`) inline | ~25 |
 
-All pass under `cargo test --bin tengu <filter>` with narrow filters (per project rule: ≤30s test runs, no blind full `cargo test`).
+All pass under `cargo test --lib <filter>` with narrow filters (per project rule: ≤30s test runs, no blind full `cargo test`).
 
 ### 14.1 End-to-end eval dispatch
 

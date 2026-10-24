@@ -31,7 +31,7 @@
 //! the file IO and the tests sit in `tests`.
 //!
 //! Regenerate (only when a case or the packet shape changes; review the
-//! diff): `TENGU_REGEN_SOURCE_EVAL=1 cargo test --bin tengu
+//! diff): `TENGU_REGEN_SOURCE_EVAL=1 cargo test --lib
 //! domain::source::eval` rebuilds every case from the captures above and
 //! [`super::testkit`], checks each hand summary, and rewrites the file.
 

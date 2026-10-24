@@ -704,7 +704,7 @@ mod tests {
         assert!(o.errors[0].message.contains("net_hosts"), "{:?}", o.errors);
     }
 
-    // ── live (mainnet; `cargo test --bin tengu live_hl -- --ignored --test-threads 1`) ──
+    // ── live (mainnet; `cargo test --lib live_hl -- --ignored --test-threads 1`) ──
 
     #[tokio::test]
     #[ignore]

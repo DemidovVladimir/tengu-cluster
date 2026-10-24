@@ -814,7 +814,7 @@ mod tests {
         assert!(
             want == text,
             "{} is stale (sandbox config, catalog or graph builder changed) — \
-             regenerate with `TENGU_REGEN_GOLDEN=1 cargo test --bin tengu studio::graph`\n{text}",
+             regenerate with `TENGU_REGEN_GOLDEN=1 cargo test --lib studio::graph`\n{text}",
             path.display()
         );
     }

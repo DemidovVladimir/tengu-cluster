@@ -124,8 +124,8 @@ mod e2e_tests {
     //! End-to-end orchestrator test with in-memory planner + worker.
     //!
     //! Kept inline (rather than in `tests/orchestrator_e2e.rs`) because
-    //! the crate has no `[lib]` target — external integration tests
-    //! cannot reach crate-private types.
+    //! the `tengu` lib keeps its modules private — external integration
+    //! tests cannot reach crate-private types.
 
     use std::sync::Arc;
 

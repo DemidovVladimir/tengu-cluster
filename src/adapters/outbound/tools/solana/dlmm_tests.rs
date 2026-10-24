@@ -473,7 +473,7 @@ async fn tools_run_through_execute_with_the_scope_gate() {
     assert!(e.to_string().contains("'pool'"), "{e}");
 }
 
-// ── live (public mainnet; `cargo test --bin tengu live_ -- --ignored --test-threads 1`) ──
+// ── live (public mainnet; `cargo test --lib live_ -- --ignored --test-threads 1`) ──
 
 mod live {
     use super::*;

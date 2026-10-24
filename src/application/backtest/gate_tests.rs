@@ -620,7 +620,7 @@ fn print_run(run: &GateRun, cands: &[Candidate], audit: &Path) {
 /// real cached `JevClient` on a temp state dir: 10 live decisions that
 /// all parse into a class, then an offline rerun with another K answered
 /// wholly from the cache. Run:
-/// `cargo test --bin tengu live_gate_on_synthetic_candidates -- --ignored --nocapture`.
+/// `cargo test --lib live_gate_on_synthetic_candidates -- --ignored --nocapture`.
 #[tokio::test]
 #[ignore]
 async fn live_gate_on_synthetic_candidates() {
@@ -659,7 +659,7 @@ async fn live_gate_on_synthetic_candidates() {
 
 /// The pinned build slug the decisions endpoint reports
 /// (`typesafe/jev-1.13-20260917`) through the same gate: is it accepted?
-/// `cargo test --bin tengu live_gate_with_a_pinned_slug -- --ignored --nocapture`.
+/// `cargo test --lib live_gate_with_a_pinned_slug -- --ignored --nocapture`.
 #[tokio::test]
 #[ignore]
 async fn live_gate_with_a_pinned_slug() {

@@ -955,7 +955,7 @@ async fn acceptance_cases() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Fixture authoring aid: `SOE_CASE=<id> cargo test --bin tengu
+/// Fixture authoring aid: `SOE_CASE=<id> cargo test --lib
 /// application::soe::tests::print_case -- --ignored --nocapture` prints the
 /// case's portfolio, its diffs and the memo.
 #[tokio::test]

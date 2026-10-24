@@ -408,10 +408,11 @@ Restart=on-failure
 Hexagonal, single crate. Every file, extension recipe (tools, engines, config, channels) and dependency: **`docs/code-map.md`** (interactive graph: `docs/code-map.html`). Layer rules are enforced by `tests/layering_lint.rs`.
 
 ```
-src/main.rs                 14 lines → adapters::inbound::cli::run
+src/lib.rs                  the `tengu` lib: every module (private) + `run` → adapters::inbound::cli::run
+src/main.rs                 6 lines → tengu::run
 src/domain/                 plain data + pure policy: message, session, plan, scope (ToolScope), secrets, tools, metrics, memory,
-                            observation, decision, schedule, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
-                            canonical (JSON + sha256), evidence (+ _coverage), sec (EDGAR decoders), workflow (Studio graph), trace
+                            observation, decision, schedule, time, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
+                            canonical (JSON + sha256, TOML digest), base58, evidence (+ _coverage), sec (EDGAR decoders), workflow (Studio graph), trace
                             (execution-trace envelope), blueprint (builder canvas); hl/ (ctx, book), lp/ (DLMM, perps, hedge), xm/ (risk
                             gate, ledger, paper, exits, weekend_fade, cost, grade, regrade), backtest/ (spec, kinds, engine, fills, costs,
                             features, gate, stats, report, checks, evaluation, labels, ranking), lineage/ (records, registry + checks,

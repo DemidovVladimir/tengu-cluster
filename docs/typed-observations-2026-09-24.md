@@ -86,7 +86,7 @@ Every Solana tool's first check is `ctx.scope.check_fs_write(workspace)` (the st
 
 | File | Holds | Proof |
 |---|---|---|
-| `hedge.rs` | port of the bot hedge controller (`simulator/src/hedge.rs` ← `hedgeController.ts:94-375`) + `auto_band_sol` | 1027/1027 production vectors, `cargo test --bin tengu lp::hedge` |
+| `hedge.rs` | port of the bot hedge controller (`simulator/src/hedge.rs` ← `hedgeController.ts:94-375`) + `auto_band_sol` | 1027/1027 production vectors, `cargo test --lib lp::hedge` |
 | `gates.rs` | re-entry gate, storm hysteresis, trend + regime confirm, composition / imbalance, wallet 50/50, bin math (70-bin cap), DLMM fee rate, swap oracle gate | ported bot tests |
 | `snapshot/` | `compose_snapshot` (`compose.rs`), knobs (`knobs.rs`), `LpControllerState` (`state.rs`), `decide_hedge` (`hedge_decide.rs`: gates first, then `hedge::decide` unchanged), `decide_lp` (`lp_decide.rs`) | gate tables (`tests.rs`) |
 | `dlmm.rs`, `perps.rs`, `wallet.rs`, `market.rs` | decoders + builders over one `AccountSet` / fetched JSON | SDK / Anchor / live-fixture goldens |
@@ -121,7 +121,7 @@ Opt-in, one catalog row each. Runner `tools/solana/write_common.rs`; pipeline `o
 | `unconfirmed` / `partial` | partial — do not retry blindly |
 | `refused` / `sim_failed` / `failed` / `expired` | error |
 
-Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`tests/fixtures/solana/tx/golden.json`; generator not kept — Rust-only repo); fake-cluster pipeline tests; live keyless mainnet simulations (`cargo test --bin tengu -- --ignored live_`): Ultra swap, DLMM open, DLMM close of a real 46-bin position, perps short increase. No live `send` yet.
+Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`tests/fixtures/solana/tx/golden.json`; generator not kept — Rust-only repo); fake-cluster pipeline tests; live keyless mainnet simulations (`cargo test --lib -- --ignored live_`): Ultra swap, DLMM open, DLMM close of a real 46-bin position, perps short increase. No live `send` yet.
 
 ## Market rows (xmarket, `domain/market.rs`, 2026-09-30)
 

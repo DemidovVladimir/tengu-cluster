@@ -551,20 +551,20 @@
 <span class="ln o"><span class="c"># prints {text, observation, is_error}; the observation key and line 1 of the text:</span></span>
 <span class="ln o">source_asof/1:ted_search:all:1790985600000</span>
 <span class="ln o">source_asof 2026-10-03T00:00:00Z knowable: 1 facts · 0 pending · 0 expired · 0 withdrawn · 0 unparsed · 0 conflicts · 0 issues | <span class="hl">ok 0s live</span></span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::eval</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --lib domain::source::eval</span>
 <span class="ln o">test domain::source::eval::tests::eval_set_replays_without_lookahead ... ok</span>
 <span class="ln o">test domain::source::eval::tests::no_case_counts_a_copy_as_confirmation ... ok</span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu sources::</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --lib sources::</span>
 <span class="ln o">test adapters::outbound::sources::ted::tests::crash_between_pages_resumes_from_the_cursor ... ok</span>
 <span class="ln o">test adapters::inbound::cli::sources::tests::import_then_asof_is_deterministic ... ok</span>
 <span class="ln o">test adapters::outbound::sources::store::tests::store_reads_give_the_packet_of_the_whole_store ... ok</span>
 <span class="ln o">test adapters::outbound::sources::sec::tests::user_agent_never_lands_in_records_or_audit ... ok</span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::checks</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --lib domain::source::checks</span>
 <span class="ln o">test domain::source::checks::knowable_mode_never_reads_in_place_edits_early ... ok</span>
 <span class="ln o">test domain::source::checks::coverage_and_purges_after_t_change_nothing_at_t ... ok</span>
 <span class="ln o">test domain::source::checks::corrections_after_t_append_and_never_rewrite ... ok</span>
 <span class="ln o">test domain::source::checks::packets_at_t_ignore_everything_after_t ... ok</span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu config::sources</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --lib config::sources</span>
 <span class="ln o"># <span class="hl">soe_sandbox_is_a_closed_world</span>, enabled rows need reviewed terms, hosts inside the egress ceiling, …</span></pre>
   </div>
 </section>

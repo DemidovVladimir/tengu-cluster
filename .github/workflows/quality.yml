@@ -41,7 +41,7 @@ jobs:
       # `webhooks` is a default feature too (2026-10-22), so the webhook
       # listener tests run above as well; this build has neither.
       - name: Studio tests (without the studio feature)
-        run: cargo test --no-default-features --features telegram --bin tengu studio
+        run: cargo test --no-default-features --features telegram --lib studio
 
       # Sealed keys (docs/sealed-keys-2026-10-09.md): the shared formats crate
       # `crates/tengu-seal` is a workspace member (its tests run in `Tests`

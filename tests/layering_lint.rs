@@ -11,7 +11,7 @@
 //! | `application` | `domain`, `ports`, `config`, `application` (IO crates only in the shrink-only `APPLICATION_IO`) |
 //! | `adapters/outbound` | all but `adapters::inbound`, `bootstrap` (`FORBIDDEN`) |
 //! | `bootstrap` | all but `adapters::inbound` (`FORBIDDEN`) |
-//! | `adapters/inbound`, `main.rs` | everything |
+//! | `adapters/inbound`, `main.rs`, `lib.rs` | everything |
 //!
 //! | Subtree (`FORBIDDEN`) | Must not import |
 //! |---|---|
@@ -25,7 +25,7 @@
 //! module of `domain`, `ports`, `config`, `application` and
 //! `adapters/outbound` is core, and only the `COMPOSITION` files (module
 //! lists, the `Config` aggregate and its loader, the tool catalog),
-//! `bootstrap/`, `adapters/inbound/` and `main.rs` wire verticals in. A
+//! `bootstrap/`, `adapters/inbound/`, `main.rs` and `lib.rs` wire verticals in. A
 //! vertical may use core and other verticals.
 //!
 //! A `use` statement counts leaf by leaf: grouped and multi-line imports
@@ -168,7 +168,7 @@ const VERTICALS: &[&str] = &[
 ];
 
 /// Core files (relative to `src/`) that wire verticals in; `bootstrap/`,
-/// `adapters/inbound/` and `main.rs` are composition as a whole.
+/// `adapters/inbound/`, `main.rs` and `lib.rs` are composition as a whole.
 const COMPOSITION: &[&str] = &[
     "domain/mod.rs",
     "ports/mod.rs",
@@ -419,6 +419,7 @@ fn core_vertical_violations() -> Vec<String> {
     let mut found = Vec::new();
     for (rel, text) in &texts {
         let composition = rel == "main.rs"
+            || rel == "lib.rs"
             || rel.starts_with("bootstrap/")
             || rel.starts_with("adapters/inbound/")
             || COMPOSITION.contains(&rel.as_str());

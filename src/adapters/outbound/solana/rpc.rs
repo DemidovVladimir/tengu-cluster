@@ -1399,7 +1399,7 @@ pub(crate) mod tests {
         assert_eq!(rpc.host(), "rpc.example.com");
     }
 
-    // ── live (public mainnet; `cargo test --bin tengu live_ -- --ignored`) ──
+    // ── live (public mainnet; `cargo test --lib live_ -- --ignored`) ──
 
     pub(crate) fn live_rpc() -> SolanaRpc {
         let scope = ToolScope {
@@ -1639,7 +1639,7 @@ pub(crate) mod tests {
                 "endpoint_host": "api.mainnet-beta.solana.com",
                 "slot": slot,
                 "captured_at": chrono::Utc::now().to_rfc3339(),
-                "captured_by": "TENGU_CAPTURE_FIXTURES=1 cargo test --bin tengu live_capture_fixtures -- --ignored",
+                "captured_by": "TENGU_CAPTURE_FIXTURES=1 cargo test --lib live_capture_fixtures -- --ignored",
                 "keys": ids_json,
                 "labels": labels,
             });

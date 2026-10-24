@@ -30,7 +30,7 @@ For an implementation session: read this section and § 4, then [`xmarket-build-
 | R9 | Ids and observation keys per conventions 1–2; never truncate ids, addresses, tickers or hashes | conventions 1–2 · operator's global rule |
 | R10 | State under `<TENGU_HOME>/state/xmarket/`, one shared workspace, SQLite behind ports; new top-level config sections are `deny_unknown_fields`, and unknown top-level keys are rejected | conventions 3–6 |
 | R11 | One item at a time: build it, test it, prove it works before the next; no parallel tracks or stacked PRs; stage explicit paths (never `git add -A`); squash-merge | operator's working rules |
-| R12 | Tests: scoped runs under 30 s (`cargo test --bin tengu <filter>`), never a blind full `cargo test`; no network in tests (replay fixtures); `cargo fmt` | project conventions |
+| R12 | Tests: scoped runs under 30 s (`cargo test --lib <filter>`), never a blind full `cargo test`; no network in tests (replay fixtures); `cargo fmt` | project conventions |
 | R13 | Docs change in the same commit that makes them stale (§ 10); CLAUDE.md and AGENTS.md stay mirrored; tick the item here | CLAUDE.md |
 
 ### Definition of done (every item)
@@ -264,7 +264,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ✅ fbb3246a171bbfedf13f50ba98153e90ce20d357 | `x-weekend-fade-strategy` | Deterministic weekend-fade rule (W): at Sun 18:00 ET (last closed day before a trading day) s = ln(HL at 18:00 / HL at Fri 20:00 ET) per name; paper-fade every eligible name in a shadow ledger (no cap, depth-walk fills) and the 4 names with the largest absolute s, at least 50 bps, at $25 each in the capped ledger; exit Mon 09:00 ET; ET clock ticks via `rt-scheduler` | §21 §31 | M | rust |
 | ✅ bc510871c69db05b61a99ba29cfe6787b906e91f | `x-weekend-sandbox` | `sandboxes/xmarket-weekend/config.toml`: floor profile (no LLM, no X, Jev off), `hl_ctx` every 60 s + `hl_book` every 5 min (60 s around entry and exit) with recording, the W strategy, its own state dir; runbook with `caffeinate`; offline replay of the 2026-09-26 → 09-28 weekend + a 30-min live soak (build plan § weekend sandbox) | §31 §35 | S | toml |
 | ☐ | `ops-deploy-compose` | Docker on the operator's Hetzner / Hostinger VPS: `tengu run` service with `restart: unless-stopped`, persistent `<TENGU_HOME>/state/xmarket` + workspace volumes, `webhooks` feature, healthcheck `tengu doctor --live`; operator chat on demand | §35 | M | infra |
-| ☐ | `x-m0-e2e-test` | Offline end-to-end test (HL ctx / book / `perpDexs` / OI-cap + EDGAR fixtures, scripted Jev) under `cargo test --bin tengu`, < 30 s | §13 §30 §31 §32 | M | rust |
+| ☐ | `x-m0-e2e-test` | Offline end-to-end test (HL ctx / book / `perpDexs` / OI-cap + EDGAR fixtures, scripted Jev) under `cargo test --lib`, < 30 s | §13 §30 §31 §32 | M | rust |
 | ☐ | `rt-docs` | Runtime operator doc + code map / egress / decision-loop plan / webhooks doc / config example | §13 | S | docs |
 | ☐ | `hl-docs` | HL tools in typed-observations, code map, tools.md, egress hosts, CLAUDE / AGENTS gotchas | §32 | S | docs |
 | ☐ | `x-info-docs` | Information-slice doc (M0 part: EDGAR adapter + tool rows) | §15 §32 | S | docs |

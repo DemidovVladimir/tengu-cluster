@@ -327,7 +327,7 @@ SKL-14 second learner against same skill: state/<learner-2>.json is independent 
 Any change to `skill_lifecycle/`:
 
 ```
-cargo test --bin tengu skill_lifecycle::
+cargo test --lib skill_lifecycle::
 tengu eval skill-creator
 tengu eval orchestration-e2e
 ```

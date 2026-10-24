@@ -761,7 +761,7 @@ pub(crate) mod tests {
         assert!(tool.execute(&json!({}), &denied.ctx()).await.is_err());
     }
 
-    // ── live (public mainnet; `cargo test --bin tengu live_ -- --ignored --test-threads 1`) ──
+    // ── live (public mainnet; `cargo test --lib live_ -- --ignored --test-threads 1`) ──
 
     use crate::domain::scope::ToolScope;
 

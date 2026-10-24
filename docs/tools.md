@@ -37,7 +37,7 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per always-on 
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (from `ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*(..)` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. `pub(crate) mod <name>;` + one `ToolEntry` in `catalog()`.
 3. Opt-in only: add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (`catalog_tests` fail otherwise).
-4. `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint && cargo test --test bridge_conformance`.
+4. `cargo test --lib -- catalog schema_lint && cargo test --test scope_lint && cargo test --test bridge_conformance`.
 5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` / `"codex"` (through `tengu mcp-bridge`). Keep the input schema in the subset every engine accepts (§ Tool schema subset — the lint covers every catalog row automatically), keep results within a local model's context window, and add:
    - a bridge conformance case — one `case("<tool>", json!({..}))` row in `tests/bridge_conformance.rs::cases()` with its scope TOML, mock replies (fixtures under `tests/fixtures/<area>/`) and expected outcome; `bridge_conformance` fails for a catalog tool without one (`docs/mcp-bridge.md` § Testing);
    - its engine-matrix smoke: the tool in a tool set of `tests/engine_matrix.rs` (`Set::tools`, the scripted `goal`, what the answer must hold; `every_catalog_tool_has_a_live_leg` fails CI for a catalog tool in no set) and in the fixture agents' `tools` + scopes — `tests/fixtures/engine_matrix/*.toml` for a `[risk]` sandbox, `tests/fixtures/engine_matrix/open/*.toml` otherwise (memory, shell, `[[mcp_servers]]`) — then the live legs on every engine (`docs/engine-backends.md` § Engine matrix). An exec tool (private agents only) goes in the xm set: its legs run `tengu tool turn` on the fixtures' private `xm_*` agents instead of `run-agent`.
@@ -46,7 +46,7 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per always-on 
 
 ## Tool schema subset
 
-`cargo test --bin tengu schema_lint` (`tools/schema_lint.rs`) checks every definition an engine can receive — every catalog row (opt-ins, memory, `agentic_memory` under `postgres_memory`), `compress_and_store`, `[[mcp_servers]]` tools (fixture server) and shell-skill tools (fixture SKILL.md) — and lists every violation at once.
+`cargo test --lib schema_lint` (`tools/schema_lint.rs`) checks every definition an engine can receive — every catalog row (opt-ins, memory, `agentic_memory` under `postgres_memory`), `compress_and_store`, `[[mcp_servers]]` tools (fixture server) and shell-skill tools (fixture SKILL.md) — and lists every violation at once.
 
 Real `[[mcp_servers]]` tools are linted at runtime, on every discovery path (`mcp_client::linted_tool`: the executor's `McpPlugin`, the bridge, `enumerate_tools` for the planner registry and the Claude Code bridge list): a violator is dropped with a warn naming the server, the tool and each rule, so one bad external schema cannot break a Gemini or Ollama turn.
 

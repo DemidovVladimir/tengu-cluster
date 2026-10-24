@@ -10,7 +10,7 @@
 //! | `skills/soe-architect/resources/proposal.example.json` | the same draft: the Architect's shape example (`skill_resource`) | same |
 //!
 //! Regenerate both after a cycle or record change:
-//! `TENGU_REGEN_SOE_STATE=1 cargo test --bin tengu fixture_state_is_current`.
+//! `TENGU_REGEN_SOE_STATE=1 cargo test --lib fixture_state_is_current`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -908,7 +908,7 @@ async fn fixture_state_is_current() {
     }
     on_disk.sort();
     let want: Vec<String> = files.keys().cloned().collect();
-    let regen = "TENGU_REGEN_SOE_STATE=1 cargo test --bin tengu fixture_state_is_current";
+    let regen = "TENGU_REGEN_SOE_STATE=1 cargo test --lib fixture_state_is_current";
     assert_eq!(on_disk, want, "fixture files differ — regenerate: {regen}");
     for (rel, bytes) in &files {
         let have = std::fs::read(root.join(rel)).unwrap();

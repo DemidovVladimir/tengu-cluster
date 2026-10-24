@@ -24,6 +24,7 @@ sources = [
 [pages.big-picture]
 sources = [
   "src/main.rs",
+  "src/lib.rs",
   "src/adapters/inbound/cli/mod.rs",
   "src/adapters/inbound/cli/run_agent.rs",
   "src/adapters/inbound/tui/mod.rs",

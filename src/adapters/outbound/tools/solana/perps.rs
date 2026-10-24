@@ -338,7 +338,7 @@ mod tests {
         );
     }
 
-    // ── live (public mainnet; `cargo test --bin tengu live_ -- --ignored --test-threads 1`) ──
+    // ── live (public mainnet; `cargo test --lib live_ -- --ignored --test-threads 1`) ──
 
     #[tokio::test]
     #[ignore]

@@ -5,7 +5,7 @@ Run this at the end of every implementation phase. Both the TUI and Telegram cha
 ## Pre-flight
 
 - [ ] `cargo build --release` completes with no errors or warnings
-- [ ] `cargo test --bin tengu` passes (unit tests — the crate has no `[lib]`)
+- [ ] `cargo test --lib` passes (unit tests — all in the `tengu` lib; the bin has none)
 - [ ] `cargo test --test scope_lint --test run_agent_ipc` passes (structural scope lint + IPC boundary)
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] Network: `make tor` is up (Arti + lyrebird-rs on 127.0.0.1:9050 — `[egress] network = "tor"` is the default) OR the config sets `[egress] network = "open"`; `cargo run -- doctor [--sandbox <name>]` prints `network:` + proxy reachability (`--tor` = live exit check)

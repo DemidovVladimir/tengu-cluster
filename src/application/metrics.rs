@@ -38,8 +38,8 @@ pub fn install_global_sink() -> broadcast::Sender<MetricsRecord> {
 ///
 /// Today's wiring goes through the broadcast `Sender` returned from
 /// `install_global_sink` (the build_orchestrator bridge subscribes on the
-/// sender directly), so this helper has no internal callers — the binary
-/// has no `[lib]` target, which makes rustc treat all `pub fn` items as
+/// sender directly), so this helper has no internal callers — the `tengu`
+/// lib exports only `run`, so rustc treats every unreached `pub fn` as
 /// dead. Kept for future subscribers (a `tengu metrics` CLI subcommand,
 /// an HTTP exporter, an external eval harness).
 #[allow(dead_code)]

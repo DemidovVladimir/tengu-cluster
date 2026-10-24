@@ -101,10 +101,10 @@ rg -n 'MemoryServiceHandle|EmbeddingPort|MemoryStorePort|DiskVectorMemoryStore|O
 Per project rule: never run full `cargo test` blindly. Use these filters:
 
 ```bash
-cargo test --bin tengu application::memory 2>&1 | tail -3
-cargo test --bin tengu application::orchestrator 2>&1 | tail -3
-cargo test --bin tengu adapters::outbound::tools::memory 2>&1 | tail -3
-cargo test --bin tengu config 2>&1 | tail -3
+cargo test --lib application::memory 2>&1 | tail -3
+cargo test --lib application::orchestrator 2>&1 | tail -3
+cargo test --lib adapters::outbound::tools::memory 2>&1 | tail -3
+cargo test --lib config 2>&1 | tail -3
 cargo test --test scope_lint 2>&1 | tail -3
 cargo test --test run_agent_ipc 2>&1 | tail -3
 ```
@@ -117,7 +117,7 @@ cargo test --test run_agent_ipc 2>&1 | tail -3
 | `config` | 121 passed, 0 failed |
 | `scope_lint` | 2 passed, 0 failed |
 | `run_agent_ipc` | 7 passed, 0 failed |
-| whole bin (`cargo test --bin tengu -- --list`) | 1,539 tests |
+| whole bin (`cargo test --lib -- --list`) | 1,539 tests |
 
 **If any fail:** don't continue — something regressed.
 
@@ -384,9 +384,9 @@ T=$HOME/.cache/tengu-xm.noindex/main/release/tengu
 ### 9.1 Offline (no network, scoped runs)
 
 ```bash
-cargo test --bin tengu config::xmarket::tests::xmarket_sandbox_m0_stage
-cargo test --bin tengu config::xmarket::tests::weekend_sandbox_replays_the_golden
-cargo test --bin tengu config::risk::tests::every_sandbox_and_the_example_load
+cargo test --lib config::xmarket::tests::xmarket_sandbox_m0_stage
+cargo test --lib config::xmarket::tests::weekend_sandbox_replays_the_golden
+cargo test --lib config::risk::tests::every_sandbox_and_the_example_load
 TENGU_CONFORMANCE_ONLY=paper_ cargo test --test bridge_conformance bridge_matches_in_process
 TENGU_CONFORMANCE_ONLY=xm_ cargo test --test bridge_conformance bridge_matches_in_process
 cargo test --test engine_matrix offline_local_xm
@@ -443,8 +443,8 @@ Runbook: top of `sandboxes/xlab/config.toml`. Doc: `docs/xlab-2026-10-01.md` § 
 ### 10.1 Offline (no network, scoped runs)
 
 ```bash
-cargo test --bin tengu domain::backtest::checks           # 5 tests: time integrity (§ 39) + the rule W golden
-cargo test --bin tengu config::backtest                   # 6 tests: [backtest] load rules, the strategy library checked at load
+cargo test --lib domain::backtest::checks           # 5 tests: time integrity (§ 39) + the rule W golden
+cargo test --lib config::backtest                   # 6 tests: [backtest] load rules, the strategy library checked at load
 TENGU_CONFORMANCE_ONLY=market_history cargo test --test bridge_conformance bridge_matches_in_process
 TENGU_CONFORMANCE_ONLY=backtest cargo test --test bridge_conformance bridge_matches_in_process
 cargo test --test engine_matrix offline_local_xlab        # offline_local_xlab + _xlab_holdout + _xlab_rank

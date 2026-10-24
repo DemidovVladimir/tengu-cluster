@@ -1176,7 +1176,7 @@ async fn decide_tools_run_through_execute_with_a_scope_check() {
     );
 }
 
-// ── live (public mainnet; `cargo test --bin tengu live_lp_ -- --ignored --test-threads 1`) ──
+// ── live (public mainnet; `cargo test --lib live_lp_ -- --ignored --test-threads 1`) ──
 
 use super::super::price::tests::Live;
 

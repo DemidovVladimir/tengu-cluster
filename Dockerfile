@@ -8,8 +8,8 @@ WORKDIR /usr/src/tengu
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 
-# Create stub main.rs for dependency caching
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs
+# Create stub lib.rs + main.rs for dependency caching
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs && touch src/lib.rs
 
 # Pre-build dependencies (cached unless Cargo.toml changes)
 # The Cargo.toml default features (telegram, studio, a2a, webhooks) and every
@@ -27,7 +27,7 @@ COPY skills skills
 COPY sandboxes sandboxes
 
 # Touch source to invalidate the stub build
-RUN touch src/main.rs
+RUN touch src/main.rs src/lib.rs
 
 # Build the real binary
 RUN cargo build --release --features "${FEATURES}"

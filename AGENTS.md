@@ -81,6 +81,8 @@ one message with no tools, bridge or memory).
 | bootstrap | `src/bootstrap/` | composition root: tool executor, memory, orchestrator, sandbox, decision loops, runtime, SOE job, Studio, trace | all but inbound |
 | inbound adapters | `src/adapters/inbound/` | CLI (`cli/`), TUI, Telegram, webhooks, `tengu run`, Studio server, MCP bridge, eval/evolve | everything |
 
+Crate: `src/lib.rs` = the `tengu` lib (every module, private; one `pub fn run`), `src/main.rs` calls `tengu::run`; unit tests `cargo test --lib`.
+
 Enforced by `tests/layering_lint.rs`. **Where does X live / how do I add Y** → `docs/code-map.md` (+ `docs/code-map.html`, interactive knowledge graph).
 
 ---

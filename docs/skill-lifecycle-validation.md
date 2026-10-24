@@ -100,9 +100,9 @@ Confirm: `./target/debug/tengu doctor` lists both agents (`main`, `skill-improve
 ## 1. Unit test suite (no API key, no cost)
 
 ```bash
-cargo test --bin tengu skills::lifecycle:: -- --nocapture 2>&1 | tail -5
-cargo test --bin tengu inbound::eval::    -- --nocapture 2>&1 | tail -5
-cargo test --bin tengu outbound::tools:: -- --nocapture 2>&1 | tail -5
+cargo test --lib skills::lifecycle:: -- --nocapture 2>&1 | tail -5
+cargo test --lib inbound::eval::    -- --nocapture 2>&1 | tail -5
+cargo test --lib outbound::tools:: -- --nocapture 2>&1 | tail -5
 ```
 
 Expected:
@@ -532,9 +532,9 @@ cargo build --bin tengu
 export OPENROUTER_API_KEY=sk-or-...
 
 # Unit tests (no cost)
-cargo test --bin tengu skills::lifecycle:: --quiet
-cargo test --bin tengu inbound::eval:: --quiet
-cargo test --bin tengu outbound::tools:: --quiet
+cargo test --lib skills::lifecycle:: --quiet
+cargo test --lib inbound::eval:: --quiet
+cargo test --lib outbound::tools:: --quiet
 
 # Config sanity
 ./target/debug/tengu doctor

@@ -137,10 +137,10 @@ Hosts, audit (`sec_edgar` / `ted_search`) and attribution: [`egress-2026-09-16.m
 
 | Test | Guards |
 |---|---|
-| `cargo test --bin tengu domain::source::checks` | split-world no-lookahead: three worlds, every move after t (delete, next ms, flood, coverage, reparse, purge), both clocks |
-| `cargo test --bin tengu domain::source::eval` | 12 dated replay cases (`tests/fixtures/sources/eval/cases.json`, regenerate with `TENGU_REGEN_SOURCE_EVAL=1`): byte-identical packets; copies never confirm |
-| `cargo test --bin tengu sources::` | store append-only + reads = whole-store packet; SEC / TED fetch, resume, partial rules; User-Agent never stored; CLI import → asof deterministic |
-| `cargo test --bin tengu config::sources` | load rules; the example block; `soe_sandbox_is_a_closed_world` |
+| `cargo test --lib domain::source::checks` | split-world no-lookahead: three worlds, every move after t (delete, next ms, flood, coverage, reparse, purge), both clocks |
+| `cargo test --lib domain::source::eval` | 12 dated replay cases (`tests/fixtures/sources/eval/cases.json`, regenerate with `TENGU_REGEN_SOURCE_EVAL=1`): byte-identical packets; copies never confirm |
+| `cargo test --lib sources::` | store append-only + reads = whole-store packet; SEC / TED fetch, resume, partial rules; User-Agent never stored; CLI import → asof deterministic |
+| `cargo test --lib config::sources` | load rules; the example block; `soe_sandbox_is_a_closed_world` |
 | `cargo test --test bridge_conformance` · `--test engine_matrix offline_local_sources` | same text + store rows in-process and through the bridge; a 16k local model gets each read whole |
 
 ## 11. Open

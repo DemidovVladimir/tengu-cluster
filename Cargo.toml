@@ -5,6 +5,15 @@ edition = "2021"
 rust-version = "1.78"
 license = "MIT"
 
+# Every module lives in the `tengu` lib (private modules, one `pub fn run`);
+# the bin only calls it. Same name as the bin, so tracing targets stay
+# `tengu::…` (`RUST_LOG=tengu=info`). Doc comments hold tables and shell
+# snippets, not Rust examples: no doctests. Unit tests: `cargo test --lib`.
+[lib]
+name = "tengu"
+path = "src/lib.rs"
+doctest = false
+
 [[bin]]
 name = "tengu"
 path = "src/main.rs"
