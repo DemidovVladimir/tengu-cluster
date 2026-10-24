@@ -845,7 +845,7 @@ async fn bridge_memory(
         warn!("Memory tools requested but OPENROUTER_API_KEY not set — skipping");
         return None;
     };
-    match DiskVectorStore::new(&crate::config::paths::WS_MEMORY.open(&setup.workspace)) {
+    match DiskVectorStore::new(&setup.workspace.join("memory")) {
         Ok(store) => {
             let store: Arc<dyn VectorStore> = Arc::new(store);
             let embedder = Arc::new(Embedder::new(api_key, DEFAULT_EMBEDDING_MODEL.to_string()));

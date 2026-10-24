@@ -15,17 +15,16 @@ use crate::ports::memory::VectorStore;
 // Memory subsystem initialization
 // ---------------------------------------------------------------------------
 
-/// Resolve the memory store path: `<workspace>/.tengu/memory` when a
-/// workspace is provided (an old `<workspace>/memory/vectors.bin` moves in
-/// first — `config::paths::WS_MEMORY`), else `[memory] store_path` (`~` expanded), else
+/// Resolve the memory store path: `<workspace>/memory` when a workspace is
+/// provided, else `[memory] store_path` (`~` expanded), else
 /// `<TENGU_HOME>/memory`.
 pub(crate) fn resolve_memory_store_path(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> std::path::PathBuf {
-    use crate::config::paths::{expand_tilde, Layout, WS_MEMORY};
+    use crate::config::paths::{expand_tilde, Layout};
     match (workspace, memory_config.store_path.as_deref()) {
-        (Some(ws), _) => WS_MEMORY.open(ws),
+        (Some(ws), _) => ws.join("memory"),
         (None, Some(path)) => expand_tilde(Path::new(path)),
         (None, None) => Layout::current().memory(),
     }
@@ -116,7 +115,7 @@ mod tests {
         let ws = Path::new("/ws");
         assert_eq!(
             resolve_memory_store_path(&memory, Some(ws)),
-            ws.join(".tengu/memory")
+            ws.join("memory")
         );
         memory.store_path = Some("~/elsewhere/mem".into());
         assert_eq!(

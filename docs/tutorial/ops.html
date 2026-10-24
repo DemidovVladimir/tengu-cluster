@@ -581,7 +581,7 @@ ufw: allow 22/tcp and 7080/tcp
     /* prune.rs plan_prune: --sandbox = that sandbox only; none = the shared logs + memory */
     var rm = sb ? ["<code>&lt;TENGU_HOME&gt;/logs/trace/" + sb + "/</code> the execution traces of " + sb]
       : ["<code>&lt;TENGU_HOME&gt;/memory</code> global memory vectors", "<code>&lt;TENGU_HOME&gt;/logs</code> log files, the audit trails (<code>decisions</code>, <code>risk</code>, <code>egress</code>) and every sandbox's traces"];
-    if (ws && !hard) [".tengu/memory", ".tengu/attachments", ".tengu/storage", "memory/vectors.bin (old path)", ".tengu-attachments (old path)"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
+    if (ws && !hard) ["memory", ".tengu-attachments", ".tengu/storage"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
     if (ws && hard) rm.push("every entry inside <code>" + ws + "</code>: <code>.tengu/</code> (cache, observations, workspace skills), output folders …");
     var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code>: the xmarket, xlab and SOE state dirs, <code>solana-writes.db</code>",
       "<code>&lt;TENGU_HOME&gt;/secrets.vault</code>", "<code>&lt;TENGU_HOME&gt;/config.toml</code>", "<code>&lt;TENGU_HOME&gt;/skills</code> (managed skills)",

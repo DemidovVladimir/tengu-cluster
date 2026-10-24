@@ -172,7 +172,7 @@ tengu sources --sandbox soe list                          # the source registry;
 
 ```bash
 tengu prune                              # the shared <TENGU_HOME>/memory/ and logs/ (every sandbox's traces, the audit logs)
-tengu prune --sandbox <name>             # only <name>: logs/trace/<name>/, each workspace's .tengu/memory/, .tengu/attachments/, .tengu/storage/ (+ an old memory/vectors.bin, .tengu-attachments/), scaffold project dirs, the vectors.bin of its own [memory] store_path
+tengu prune --sandbox <name>             # only <name>: logs/trace/<name>/, each workspace's memory/, .tengu-attachments/, .tengu/storage/, scaffold project dirs, the vectors.bin of its own [memory] store_path
 tengu prune --sandbox <name> --hard      # the same, each workspace root emptied (every child) instead, the root kept
 ```
 

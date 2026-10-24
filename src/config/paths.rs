@@ -1,6 +1,5 @@
 //! Filesystem locations the config layer resolves: `TENGU_HOME` and where
-//! it came from, the [`Layout`] under it, a workspace's harness dirs
-//! ([`WorkspaceDir`]), the default config file, the skill tiers and `~`
+//! it came from, the [`Layout`] under it, the default config file, the skill tiers and `~`
 //! expansion for configured paths. `tengu paths --sandbox <s>` prints them
 //! for one sandbox.
 
@@ -244,95 +243,6 @@ impl Layout {
     }
 }
 
-/// A dir the harness keeps in an agent's workspace: every such file sits
-/// under `<ws>/.tengu/`, out of the agents' writers' reach
-/// (`domain::scope::protected_write`). Two dirs sat at the workspace root
-/// before 2026-10-24; the first use moves the old one in ([`moved_in`]).
-///
-/// | Dir | Holds | Was |
-/// |---|---|---|
-/// | `.tengu/memory/` | the workspace vector store (`vectors.bin`) | `memory/` |
-/// | `.tengu/attachments/` | Telegram attachments | `.tengu-attachments/` |
-/// | `.tengu/observations.db` · `cache.db` · `storage/` · `skills/` | typed rows · `shared_cache` · `persistent_store` · workspace skills | — |
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkspaceDir {
-    pub now: &'static str,
-    pub was: &'static str,
-    /// What moves: the whole old dir, or one file of it (`memory/` may
-    /// hold an agent's own files).
-    pub moves: Option<&'static str>,
-}
-
-pub const WS_MEMORY: WorkspaceDir = WorkspaceDir {
-    now: ".tengu/memory",
-    was: "memory",
-    // `DiskVectorStore`'s file.
-    moves: Some("vectors.bin"),
-};
-
-pub const WS_ATTACHMENTS: WorkspaceDir = WorkspaceDir {
-    now: ".tengu/attachments",
-    was: ".tengu-attachments",
-    moves: None,
-};
-
-impl WorkspaceDir {
-    /// `<ws>/<now>` — no move (prune plans, `tengu paths`).
-    pub fn path(&self, ws: &Path) -> PathBuf {
-        ws.join(self.now)
-    }
-
-    /// `<ws>/<was>`.
-    pub fn old(&self, ws: &Path) -> PathBuf {
-        ws.join(self.was)
-    }
-
-    /// The dir to use, after [`moved_in`]: `<ws>/<now>`, or `<ws>/<was>`
-    /// when the old state is there and could not move.
-    pub fn open(&self, ws: &Path) -> PathBuf {
-        let (now, was) = (self.path(ws), self.old(ws));
-        let (from, to) = match self.moves {
-            Some(file) => (was.join(file), now.join(file)),
-            None => (was.clone(), now.clone()),
-        };
-        match moved_in(&from, &to) {
-            Ok(true) => {
-                if self.moves.is_some() {
-                    // Empty now unless an agent kept files there.
-                    let _ = std::fs::remove_dir(&was);
-                }
-                tracing::info!(from = %from.display(), to = %to.display(), "workspace state moved under .tengu/");
-                now
-            }
-            Ok(false) => now,
-            Err(e) => {
-                tracing::warn!(from = %from.display(), to = %to.display(), error = %e, "workspace state not moved; the old path stays in use");
-                was
-            }
-        }
-    }
-}
-
-/// Move `from` to `to` once: `Ok(true)` when it moved, `Ok(false)` when
-/// there was nothing to move (`from` missing, or `to` already there — the
-/// new path wins). Refused while a `<from>.lock` exists (a writer holds the
-/// old store).
-fn moved_in(from: &Path, to: &Path) -> std::io::Result<bool> {
-    if to.exists() || !from.exists() {
-        return Ok(false);
-    }
-    let mut lock = from.as_os_str().to_owned();
-    lock.push(".lock");
-    if Path::new(&lock).exists() {
-        return Err(std::io::Error::other("the old store is locked"));
-    }
-    if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::rename(from, to)?;
-    Ok(true)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,50 +302,6 @@ mod tests {
         assert_eq!(l.maps(), p("/h/logs/maps"));
         assert_eq!(l.skills(), p("/h/skills"));
         assert_eq!(l.memory(), p("/h/memory"));
-    }
-
-    /// The first use moves a workspace's old harness dirs under `.tengu/`:
-    /// the attachments dir whole, the vector store's file alone (an agent's
-    /// own files stay in `memory/`); a moved or fresh workspace opens the
-    /// new path.
-    #[test]
-    fn old_workspace_state_moves_under_dot_tengu_once() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let ws = tmp.path();
-        std::fs::create_dir_all(ws.join("memory")).unwrap();
-        std::fs::write(ws.join("memory/vectors.bin"), b"v").unwrap();
-        std::fs::write(ws.join("memory/notes.md"), b"mine").unwrap();
-        std::fs::create_dir_all(ws.join(".tengu-attachments")).unwrap();
-        std::fs::write(ws.join(".tengu-attachments/a.pdf"), b"a").unwrap();
-
-        assert_eq!(WS_MEMORY.open(ws), ws.join(".tengu/memory"));
-        assert_eq!(
-            std::fs::read(ws.join(".tengu/memory/vectors.bin")).unwrap(),
-            b"v"
-        );
-        assert!(ws.join("memory/notes.md").exists(), "an agent's file stays");
-        assert!(!ws.join("memory/vectors.bin").exists());
-        assert_eq!(WS_ATTACHMENTS.open(ws), ws.join(".tengu/attachments"));
-        assert!(ws.join(".tengu/attachments/a.pdf").exists());
-        assert!(!ws.join(".tengu-attachments").exists());
-        // Again: nothing left to move.
-        assert_eq!(WS_MEMORY.open(ws), ws.join(".tengu/memory"));
-
-        // A locked old store stays where it is, and stays in use.
-        let old = tmp.path().join("locked");
-        std::fs::create_dir_all(old.join("memory")).unwrap();
-        std::fs::write(old.join("memory/vectors.bin"), b"v").unwrap();
-        std::fs::write(old.join("memory/vectors.bin.lock"), b"").unwrap();
-        assert_eq!(WS_MEMORY.open(&old), old.join("memory"));
-        assert!(old.join("memory/vectors.bin").exists());
-
-        // A fresh workspace: the new path, nothing created.
-        let fresh = tmp.path().join("fresh");
-        assert_eq!(
-            WS_ATTACHMENTS.open(&fresh),
-            fresh.join(".tengu/attachments")
-        );
-        assert!(!fresh.exists());
     }
 
     /// `--sandbox <name>` and the same file by absolute path (the bridge's

@@ -80,7 +80,7 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
             vec![],
         ),
         "team" => {
-            let ws = format!("~/tengu-lab/{sandbox}/ws");
+            let ws = format!("~/tengu-work/{sandbox}");
             (
                 vec![
                     sb,

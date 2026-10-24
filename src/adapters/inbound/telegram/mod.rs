@@ -8,7 +8,7 @@
 //!   `[telegram] tool_approvals` / `approve_only` keys fail the load.
 //! - **Typing indicator** — runs as an independent `tokio::spawn` task.
 //! - **File attachments** — documents and photos downloaded and saved to
-//!   `{workspace}/.tengu/attachments/`.
+//!   `{workspace}/.tengu-attachments/`.
 //! - **Message chunking** — long responses split at `\n\n` boundaries, max 4000
 //!   chars per chunk (Telegram's 4096 limit with safety margin).
 //! - **Per-user state** — each Telegram user gets their own `ChatLoopState`.

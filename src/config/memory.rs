@@ -16,7 +16,7 @@ pub struct MemoryConfig {
     #[serde(default = "default_max_recall_tokens")]
     pub max_recall_tokens: usize,
     /// Vector store dir of agents without a workspace (an agent with one
-    /// keeps `<workspace>/.tengu/memory/`). Unset = `<TENGU_HOME>/memory/`, so a lab
+    /// keeps `<workspace>/memory/`). Unset = `<TENGU_HOME>/memory/`, so a lab
     /// `TENGU_HOME` never writes the operator's store; `~` is expanded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_path: Option<String>,
