@@ -434,7 +434,8 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
       <tbody>
         <tr><td><code>src/ports/engine.rs</code></td><td><code>Engine</code>, <code>EngineContext</code>, <code>ToolExecutor</code>; default output cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/mod.rs</code></td><td><code>build_engine</code>, <code>build_step_engine</code>, <code>StepOpts</code></td></tr>
-        <tr><td><code>src/adapters/outbound/engines/openrouter.rs</code></td><td>HTTP JSON, retry once, truncation marker</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/openai_compat.rs</code></td><td>the chat-completions wire layer both HTTP engines share: request, messages, tools, POST, events, truncation marker</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/openrouter.rs</code></td><td>egress client, auth + attribution headers, retry once</td></tr>
         <tr><td><code>src/adapters/outbound/engines/local.rs</code></td><td>OpenAI-compatible server, no proxy, result cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI args, env strip, the NDJSON parser (<code>NdjsonRun</code>), transcript</td></tr>
         <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td><code>codex exec</code> args, <code>web_search</code>, env strip, the JSONL parser (<code>JsonRun</code>), the 900 s idle floor</td></tr>

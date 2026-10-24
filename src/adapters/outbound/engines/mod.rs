@@ -5,6 +5,7 @@ pub(crate) mod claude_code;
 pub(crate) mod cli_run;
 pub(crate) mod codex;
 pub(crate) mod local;
+mod openai_compat;
 pub(crate) mod openrouter;
 
 use anyhow::Result;

@@ -1,5 +1,5 @@
-//! OpenRouter engine — OpenAI-compatible chat completions with streaming
-//! and tool calls, via the egress `llm_api_client`.
+//! OpenRouter engine — chat completions with tool calls (wire layer:
+//! `engines/openai_compat.rs`), via the egress `llm_api_client`.
 //!
 //! | Turn | Handling |
 //! |---|---|
@@ -19,13 +19,16 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream;
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use std::pin::Pin;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, warn};
 
-use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolDef};
+use super::openai_compat::{post_chat, ChatRequest, ChatResponse};
+use crate::domain::message::{Message, ModelInfo, StreamEvent, ToolDef};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::{Engine, EngineContext, EngineDiagnostics};
+
+/// Names this engine in error text and logs.
+const PROVIDER: &str = "OpenRouter";
 
 /// Raw-body excerpt logged for an empty turn (after redaction).
 const EMPTY_TURN_LOG_CHARS: usize = 2_000;
@@ -53,82 +56,6 @@ pub struct OpenRouterEngine {
     /// The process secrets + this engine's API key: redacts the raw body an
     /// empty turn logs.
     secrets: SecretRegistry,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenRouterChatRequest {
-    model: String,
-    messages: Vec<serde_json::Value>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<OpenRouterToolDef>,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenRouterToolDef {
-    #[serde(rename = "type")]
-    kind: String,
-    function: OpenRouterFunction,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenRouterFunction {
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterChatResponse {
-    #[serde(default)]
-    choices: Vec<OpenRouterChoice>,
-    #[serde(default)]
-    usage: Option<OpenRouterUsage>,
-    /// An upstream failure OpenRouter reports inside a 200 body.
-    #[serde(default)]
-    error: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterChoice {
-    message: OpenRouterOutputMessage,
-    #[serde(default)]
-    finish_reason: Option<String>,
-    /// The provider's own reason (Gemini: `STOP`, `MALFORMED_FUNCTION_CALL`, …).
-    #[serde(default)]
-    native_finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterOutputMessage {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    tool_calls: Option<Vec<OpenRouterResponseToolCall>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenRouterResponseToolCall {
-    id: String,
-    #[serde(rename = "type")]
-    kind: Option<String>,
-    function: OpenRouterResponseFunction,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenRouterResponseFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterUsage {
-    #[serde(default)]
-    prompt_tokens: u32,
-    #[serde(default)]
-    completion_tokens: u32,
 }
 
 impl OpenRouterEngine {
@@ -166,42 +93,6 @@ impl OpenRouterEngine {
         })
     }
 
-    /// The turn produced nothing to act on (module table): no tool call and
-    /// either no text (not cut by length / filtered), an `error` finish, or
-    /// only an upstream `error` object.
-    fn is_failed_turn(response: &OpenRouterChatResponse) -> bool {
-        let choice = response.choices.first();
-        let has_calls = choice
-            .and_then(|c| c.message.tool_calls.as_ref())
-            .is_some_and(|calls| !calls.is_empty());
-        if has_calls {
-            return false;
-        }
-        let finish = choice.and_then(|c| c.finish_reason.as_deref());
-        let deterministic = matches!(finish, Some("length" | "max_tokens" | "content_filter"));
-        let has_text = choice
-            .and_then(|c| c.message.content.as_deref())
-            .is_some_and(|t| !t.is_empty());
-        Self::error_finish(response) || (!deterministic && !has_text)
-    }
-
-    /// `finish_reason = "error"` without a tool call: the provider failed
-    /// mid-turn; any text is not an answer.
-    fn error_finish(response: &OpenRouterChatResponse) -> bool {
-        response.choices.first().is_some_and(|c| {
-            c.finish_reason.as_deref() == Some("error")
-                && c.message.tool_calls.as_ref().map_or(true, |t| t.is_empty())
-        })
-    }
-
-    /// `(prompt, completion)` tokens the response reports.
-    fn usage_of(response: &OpenRouterChatResponse) -> (u32, u32) {
-        response
-            .usage
-            .as_ref()
-            .map_or((0, 0), |u| (u.prompt_tokens, u.completion_tokens))
-    }
-
     /// `raw` redacted and cut at a char boundary for a log line.
     fn log_excerpt(&self, raw: &str) -> String {
         let redacted = self.secrets.redact(raw);
@@ -211,204 +102,23 @@ impl OpenRouterEngine {
         }
     }
 
-    fn convert_tools(tools: &[ToolDef]) -> Vec<OpenRouterToolDef> {
-        tools
-            .iter()
-            .map(|t| OpenRouterToolDef {
-                kind: "function".to_string(),
-                function: OpenRouterFunction {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.parameters.clone(),
-                },
-            })
-            .collect()
-    }
-
-    fn convert_messages(
-        messages: &[Message],
-        system_prompt: Option<&str>,
-    ) -> Vec<serde_json::Value> {
-        convert_messages_openai_compatible(messages, system_prompt)
-    }
-
-    fn extract_text(response: &OpenRouterChatResponse) -> String {
-        response
-            .choices
-            .iter()
-            .filter_map(|choice| choice.message.content.as_deref())
-            .next()
-            .unwrap_or_default()
-            .to_string()
-    }
-
-    /// Events of one parsed response; `earlier` = the tokens of an empty
-    /// attempt retried before it, added to this turn's `Usage`.
-    fn success_events(response: &OpenRouterChatResponse, earlier: (u32, u32)) -> Vec<StreamEvent> {
-        let mut events = Vec::new();
-        let mut text = Self::extract_text(response);
-
-        // An upstream failure inside a 200 (no choices): an error, not an
-        // empty answer.
-        if response.choices.is_empty() {
-            if let Some(err) = &response.error {
-                let message = err
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .map_or_else(|| err.to_string(), str::to_string);
-                events.push(StreamEvent::Error {
-                    message: format!("OpenRouter upstream error: {message}"),
-                });
-            }
-        }
-        // An `error` finish: the provider failed mid-turn — its text (Gemini:
-        // `<ctrl46>`) is no answer.
-        if Self::error_finish(response) {
-            let native = response
-                .choices
-                .first()
-                .and_then(|c| c.native_finish_reason.as_deref())
-                .unwrap_or("-");
-            events.push(StreamEvent::Error {
-                message: format!(
-                    "OpenRouter: the provider ended the turn with an error (native_finish_reason {native})"
-                ),
-            });
-            text.clear();
-        }
-
-        // Log finish_reason so we can detect output-token truncation.
-        let truncated = if let Some(choice) = response.choices.first() {
-            if let Some(ref reason) = choice.finish_reason {
-                info!(
-                    finish_reason = %reason,
-                    native_finish_reason = choice.native_finish_reason.as_deref().unwrap_or("-"),
-                    text_len = text.len(),
-                    "OpenRouter finish reason"
-                );
-                matches!(reason.as_str(), "length" | "max_tokens")
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if truncated {
-            tracing::warn!(
-                "Model output truncated by output token limit (finish_reason=length/max_tokens)"
-            );
-        }
-
-        // Signal truncation via a special marker in the text stream so the tool
-        // loop can detect it and auto-continue.
-        if truncated && text.is_empty() {
-            // Truncated with no text at all — nothing useful to send.
-        } else if truncated {
-            events.push(StreamEvent::TextDelta {
-                text: format!("{}\n\n[OUTPUT_TRUNCATED]", text),
-            });
-        } else if !text.is_empty() {
-            events.push(StreamEvent::TextDelta { text });
-        }
-
-        if let Some(tool_calls) = response
-            .choices
-            .first()
-            .and_then(|c| c.message.tool_calls.as_ref())
-        {
-            for tc in tool_calls {
-                events.push(StreamEvent::ToolCallStart {
-                    id: tc.id.clone(),
-                    name: tc.function.name.clone(),
-                });
-                events.push(StreamEvent::ToolCallDelta {
-                    id: tc.id.clone(),
-                    arguments_delta: tc.function.arguments.clone(),
-                });
-                events.push(StreamEvent::ToolCallEnd { id: tc.id.clone() });
-            }
-        }
-
-        if response.usage.is_some() || earlier != (0, 0) {
-            let (input, output) = Self::usage_of(response);
-            events.push(StreamEvent::Usage {
-                input_tokens: input.saturating_add(earlier.0),
-                output_tokens: output.saturating_add(earlier.1),
-                cached_input_tokens: 0,
-            });
-        }
-        events.push(StreamEvent::Done);
-        events
-    }
-
-    /// One POST of `request`: the raw body and its parse, or the error
-    /// events this turn ends with (HTTP status, body read, JSON parse).
+    /// One POST of `request` with this engine's auth + attribution headers
+    /// (`openai_compat::post_chat`).
     async fn post(
         &self,
-        request: &OpenRouterChatRequest,
-    ) -> anyhow::Result<std::result::Result<(String, OpenRouterChatResponse), Vec<StreamEvent>>>
-    {
+        request: &ChatRequest,
+    ) -> anyhow::Result<std::result::Result<(String, ChatResponse), Vec<StreamEvent>>> {
         let mut req = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key));
-
         if let Some(ref referer) = self.referer {
             req = req.header("HTTP-Referer", referer);
         }
         if let Some(ref title) = self.title {
             req = req.header("X-OpenRouter-Title", title);
         }
-
-        let response = req.json(request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            error!(%status, %body, "OpenRouter request failed");
-            return Ok(Err(vec![StreamEvent::Error {
-                message: format!("OpenRouter error {}: {}", status, body),
-            }]));
-        }
-
-        let raw_body = match response.text().await {
-            Ok(body) => body,
-            Err(e) => {
-                // reqwest's Display is always "error decoding response body";
-                // the real cause (timeout, reset) lives in the source chain,
-                // which anyhow's `{:#}` prints.
-                let e = format!("{:#}", anyhow::Error::from(e));
-                error!(model = %self.model, error = %e, "Failed to read OpenRouter response body");
-                return Ok(Err(vec![StreamEvent::Error {
-                    message: format!("OpenRouter response body read failed: {}", e),
-                }]));
-            }
-        };
-        let preview = |n: usize| {
-            crate::domain::token::truncate_at_boundary(&raw_body, n)
-                .map_or(raw_body.as_str(), |(prefix, _)| prefix)
-                .to_string()
-        };
-        debug!(
-            model = %self.model,
-            body_len = raw_body.len(),
-            body_preview = %preview(500),
-            "OpenRouter raw response"
-        );
-        match serde_json::from_str::<OpenRouterChatResponse>(&raw_body) {
-            Ok(parsed) => Ok(Ok((raw_body, parsed))),
-            Err(e) => {
-                error!(
-                    model = %self.model,
-                    error = %e,
-                    body_preview = %preview(300),
-                    "Failed to parse OpenRouter response"
-                );
-                Ok(Err(vec![StreamEvent::Error {
-                    message: format!("Failed to parse OpenRouter response: {}", e),
-                }]))
-            }
-        }
+        Ok(post_chat(req, request, PROVIDER).await?)
     }
 }
 
@@ -472,14 +182,14 @@ impl Engine for OpenRouterEngine {
         tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
-        let request = OpenRouterChatRequest {
-            model: self.model.clone(),
-            messages: Self::convert_messages(messages, context.system_prompt.as_deref()),
-            stream: false,
+        let request = ChatRequest::new(
+            &self.model,
+            messages,
+            context.system_prompt.as_deref(),
+            tools,
             // Sent only when configured; unset -> the model/provider default.
-            max_tokens: self.max_output_tokens_override,
-            tools: Self::convert_tools(tools),
-        };
+            self.max_output_tokens_override,
+        );
 
         if request.messages.is_empty() {
             return Ok(Box::pin(stream::iter(vec![StreamEvent::Error {
@@ -501,10 +211,10 @@ impl Engine for OpenRouterEngine {
                 Ok(ok) => ok,
                 Err(events) => return Ok(Box::pin(stream::iter(events))),
             };
-            if attempt == 1 && Self::is_failed_turn(&parsed) {
+            if attempt == 1 && parsed.is_failed_turn() {
                 // A malformed call repeats when asked the same way: say so
                 // (this request only — the caller's history is untouched).
-                if Self::error_finish(&parsed) {
+                if parsed.error_finish() {
                     request.messages.push(serde_json::json!({
                         "role": "user",
                         "content": MALFORMED_CALL_HINT,
@@ -520,112 +230,26 @@ impl Engine for OpenRouterEngine {
                     raw = %self.log_excerpt(&raw_body),
                     "OpenRouter turn failed (no tool call; no text or an error finish) — retrying once"
                 );
-                earlier = Self::usage_of(&parsed);
+                earlier = parsed.usage();
                 continue;
             }
-            if attempt == 2 && Self::is_failed_turn(&parsed) {
+            if attempt == 2 && parsed.is_failed_turn() {
                 warn!(
                     model = %self.model,
                     raw = %self.log_excerpt(&raw_body),
                     "OpenRouter turn failed again after the retry"
                 );
             }
-            return Ok(Box::pin(stream::iter(Self::success_events(
-                &parsed, earlier,
-            ))));
+            return Ok(Box::pin(stream::iter(parsed.events(earlier, PROVIDER))));
         }
         unreachable!("the second attempt always returns")
     }
 }
 
-// ---------------------------------------------------------------------------
-// Message conversion helpers (OpenAI-compatible format)
-// ---------------------------------------------------------------------------
-
-/// Convert runtime messages to an OpenAI-compatible JSON message array. A
-/// system message equal to `system_prompt` is skipped: `run-agent`, `tengu
-/// tool turn`, the doctor and webhooks send the prompt both ways, and it
-/// would be paid for twice per turn (as `engines/local.rs` does).
-fn convert_messages_openai_compatible(
-    messages: &[Message],
-    system_prompt: Option<&str>,
-) -> Vec<serde_json::Value> {
-    let mut result: Vec<serde_json::Value> = Vec::new();
-
-    let system_prompt = system_prompt.filter(|s| !s.trim().is_empty());
-    if let Some(prompt) = system_prompt {
-        result.push(serde_json::json!({
-            "role": "system",
-            "content": prompt
-        }));
-    }
-
-    for m in messages {
-        if matches!(m.role, Role::System) && Some(m.content.as_str()) == system_prompt {
-            continue;
-        }
-        match m.role {
-            Role::Tool => {
-                let mut msg = serde_json::json!({
-                    "role": "tool",
-                    "content": m.content
-                });
-                if let Some(ref id) = m.tool_call_id {
-                    msg["tool_call_id"] = serde_json::json!(id);
-                }
-                result.push(msg);
-            }
-            Role::Assistant if m.tool_calls.is_some() => {
-                let tool_calls: Vec<serde_json::Value> = m
-                    .tool_calls
-                    .as_ref()
-                    .map(|calls| {
-                        calls
-                            .iter()
-                            .map(|tc| {
-                                serde_json::json!({
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc.name,
-                                        "arguments": tc.arguments.to_string()
-                                    }
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let mut msg = serde_json::json!({
-                    "role": "assistant",
-                    "tool_calls": tool_calls
-                });
-                if !m.content.is_empty() {
-                    msg["content"] = serde_json::json!(m.content);
-                }
-                result.push(msg);
-            }
-            _ => {
-                let role = match m.role {
-                    Role::System => "system",
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                    Role::Tool => unreachable!(),
-                };
-                result.push(serde_json::json!({
-                    "role": role,
-                    "content": m.content
-                }));
-            }
-        }
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::message::Role;
     use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -854,29 +478,6 @@ mod tests {
     }
 
     #[test]
-    fn max_tokens_omitted_when_unset_sent_when_configured() {
-        let mk = |req: &OpenRouterChatRequest| serde_json::to_value(req).unwrap();
-
-        let unset = OpenRouterChatRequest {
-            model: "m".into(),
-            messages: vec![],
-            stream: false,
-            max_tokens: None,
-            tools: vec![],
-        };
-        assert!(
-            mk(&unset).get("max_tokens").is_none(),
-            "max_tokens must be omitted when no cap is configured"
-        );
-
-        let set = OpenRouterChatRequest {
-            max_tokens: Some(8192),
-            ..unset
-        };
-        assert_eq!(mk(&set)["max_tokens"], serde_json::json!(8192));
-    }
-
-    #[test]
     fn budget_reservation_reflects_configured_cap() {
         let capped =
             OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, Some(8192)).unwrap();
@@ -885,42 +486,5 @@ mod tests {
         // Unset falls back to the context-scaled reservation estimate.
         let unset = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, None).unwrap();
         assert_eq!(unset.max_output_tokens_per_turn(), 16_384);
-    }
-
-    /// A system message equal to the context's `system_prompt` (run-agent,
-    /// `tool turn`, doctor, webhooks send it both ways) goes out once; other
-    /// system messages stay, and without a context prompt every one does.
-    #[test]
-    fn system_prompt_is_sent_once() {
-        let msg = |role, content: &str| Message {
-            role,
-            content: content.to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        };
-        let messages = vec![
-            msg(Role::System, "SYS"),
-            msg(Role::User, "goal"),
-            msg(Role::System, "memory block"),
-        ];
-        let out = convert_messages_openai_compatible(&messages, Some("SYS"));
-        let roles: Vec<(&str, &str)> = out
-            .iter()
-            .map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap()))
-            .collect();
-        assert_eq!(
-            roles,
-            vec![
-                ("system", "SYS"),
-                ("user", "goal"),
-                ("system", "memory block")
-            ]
-        );
-        assert_eq!(convert_messages_openai_compatible(&messages, None).len(), 3);
-        assert_eq!(
-            convert_messages_openai_compatible(&messages, Some("  ")).len(),
-            3,
-            "a blank context prompt is no prompt"
-        );
     }
 }

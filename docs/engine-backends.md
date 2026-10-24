@@ -6,7 +6,7 @@ Tengu supports four engine backends (`openrouter`, `local`, `claude_code`, `code
 
 **Transport:** HTTP JSON to OpenRouter API
 **Feature flag:** none — always built (the `openrouter` cargo feature is a no-op, kept for old build commands)
-**File:** `src/adapters/outbound/engines/openrouter.rs` (`build_engine` in `engines/mod.rs`)
+**File:** `src/adapters/outbound/engines/openrouter.rs` (`build_engine` in `engines/mod.rs`); the wire layer it shares with `local` is `engines/openai_compat.rs`
 
 The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.).
 
@@ -33,7 +33,7 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 
 **Transport:** HTTP JSON to a locally hosted OpenAI-compatible server (`POST /v1/chat/completions`, OpenAI `tools`)
 **Feature flag:** none (always built)
-**File:** `src/adapters/outbound/engines/local.rs` (`LocalEngine`)
+**File:** `src/adapters/outbound/engines/local.rs` (`LocalEngine`; wire layer `engines/openai_compat.rs`, as OpenRouter — an upstream `error` object or an `error` finish is an error event, never text)
 
 | Server | Start | `base_url` | Key |
 |---|---|---|---|

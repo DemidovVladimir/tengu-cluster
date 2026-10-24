@@ -5,7 +5,7 @@
 //!
 //! | Aspect | Behaviour |
 //! |---|---|
-//! | Endpoint | `POST {base_url}/v1/chat/completions`, OpenAI `tools`; a `base_url` ending in `/v1` is accepted (the suffix is dropped) |
+//! | Endpoint | `POST {base_url}/v1/chat/completions`, OpenAI `tools` (wire layer: `engines/openai_compat.rs`); a `base_url` ending in `/v1` is accepted (the suffix is dropped) |
 //! | Auth | `Authorization: Bearer $<api_key_env>` when that env is set (Unsloth `sk-unsloth-…`); none otherwise |
 //! | Network | Direct connection, never via the `[egress]` proxy — the server is on this host, not the internet |
 //! | Config | `[agents.<n>.local] base_url`, `api_key_env` (`config::AgentLocalConfig`) |
@@ -15,14 +15,17 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::stream;
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use tracing::{debug, error};
 
+use super::openai_compat::{post_chat, ChatRequest};
 use crate::config::AgentLocalConfig;
-use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolDef};
+use crate::domain::message::{Message, ModelInfo, StreamEvent, ToolDef};
 use crate::domain::token::tool_result_char_budget;
 use crate::ports::engine::{Engine, EngineContext, EngineDiagnostics};
+
+/// Names this engine in error text and logs.
+const PROVIDER: &str = "Local LLM";
 
 pub struct LocalEngine {
     base_url: String,
@@ -33,60 +36,6 @@ pub struct LocalEngine {
     /// `[limits] max_output_tokens_per_turn`; `None` omits `max_tokens`.
     max_output_tokens_override: Option<u32>,
     client: reqwest::Client,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<serde_json::Value>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    #[serde(default)]
-    choices: Vec<Choice>,
-    #[serde(default)]
-    usage: Option<Usage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Choice {
-    message: OutputMessage,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OutputMessage {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    tool_calls: Option<Vec<ToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolCall {
-    id: String,
-    function: ToolCallFunction,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolCallFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Usage {
-    #[serde(default)]
-    prompt_tokens: u32,
-    #[serde(default)]
-    completion_tokens: u32,
 }
 
 impl LocalEngine {
@@ -120,52 +69,6 @@ impl LocalEngine {
 
     fn error(message: String) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         Box::pin(stream::iter(vec![StreamEvent::Error { message }]))
-    }
-
-    fn success_events(response: &ChatResponse) -> Vec<StreamEvent> {
-        let mut events = Vec::new();
-        let choice = response.choices.first();
-        let text = choice
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_default();
-        let truncated = choice
-            .and_then(|c| c.finish_reason.as_deref())
-            .is_some_and(|r| matches!(r, "length" | "max_tokens"));
-        if truncated {
-            tracing::warn!("Local model output truncated (finish_reason=length)");
-        }
-        // Same `[OUTPUT_TRUNCATED]` marker the tool loop auto-continues on.
-        if truncated && !text.is_empty() {
-            events.push(StreamEvent::TextDelta {
-                text: format!("{text}\n\n[OUTPUT_TRUNCATED]"),
-            });
-        } else if !truncated && !text.is_empty() {
-            events.push(StreamEvent::TextDelta { text });
-        }
-        for tc in choice
-            .and_then(|c| c.message.tool_calls.as_ref())
-            .into_iter()
-            .flatten()
-        {
-            events.push(StreamEvent::ToolCallStart {
-                id: tc.id.clone(),
-                name: tc.function.name.clone(),
-            });
-            events.push(StreamEvent::ToolCallDelta {
-                id: tc.id.clone(),
-                arguments_delta: tc.function.arguments.clone(),
-            });
-            events.push(StreamEvent::ToolCallEnd { id: tc.id.clone() });
-        }
-        if let Some(usage) = &response.usage {
-            events.push(StreamEvent::Usage {
-                input_tokens: usage.prompt_tokens,
-                output_tokens: usage.completion_tokens,
-                cached_input_tokens: 0,
-            });
-        }
-        events.push(StreamEvent::Done);
-        events
     }
 }
 
@@ -229,25 +132,13 @@ impl Engine for LocalEngine {
         tools: &[ToolDef],
         context: &EngineContext,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
-        let request = ChatRequest {
-            model: self.model.clone(),
-            messages: convert_messages(messages, context.system_prompt.as_deref()),
-            stream: false,
-            max_tokens: self.max_output_tokens_override,
-            tools: tools
-                .iter()
-                .map(|t| {
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        }
-                    })
-                })
-                .collect(),
-        };
+        let request = ChatRequest::new(
+            &self.model,
+            messages,
+            context.system_prompt.as_deref(),
+            tools,
+            self.max_output_tokens_override,
+        );
         if request.messages.is_empty() {
             return Ok(Self::error("Local LLM request has no messages".into()));
         }
@@ -259,38 +150,15 @@ impl Engine for LocalEngine {
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }
-        let response = match req.json(&request).send().await {
-            Ok(r) => r,
+        match post_chat(req, &request, PROVIDER).await {
+            Ok(Ok((_, parsed))) => Ok(Box::pin(stream::iter(parsed.events((0, 0), PROVIDER)))),
+            Ok(Err(events)) => Ok(Box::pin(stream::iter(events))),
             Err(e) => {
                 let e = format!("{:#}", anyhow::Error::from(e));
                 error!(base_url = %self.base_url, error = %e, "Local LLM unreachable");
-                return Ok(Self::error(format!(
+                Ok(Self::error(format!(
                     "Local LLM at {} unreachable (is the server running?): {e}",
                     self.base_url
-                )));
-            }
-        };
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            error!(%status, %body, "Local LLM request failed");
-            return Ok(Self::error(format!("Local LLM error {status}: {body}")));
-        }
-        let raw_body = match response.text().await {
-            Ok(body) => body,
-            Err(e) => {
-                let e = format!("{:#}", anyhow::Error::from(e));
-                return Ok(Self::error(format!(
-                    "Local LLM response body read failed: {e}"
-                )));
-            }
-        };
-        match serde_json::from_str::<ChatResponse>(&raw_body) {
-            Ok(parsed) => Ok(Box::pin(stream::iter(Self::success_events(&parsed)))),
-            Err(e) => {
-                error!(model = %self.model, error = %e, "Failed to parse local LLM response");
-                Ok(Self::error(format!(
-                    "Failed to parse local LLM response: {e}"
                 )))
             }
         }
@@ -307,61 +175,10 @@ fn server_root(base_url: &str) -> String {
         .to_string()
 }
 
-/// Runtime messages → OpenAI chat-completions message array. A system
-/// message equal to `system_prompt` is skipped (`run-agent` sends the prompt
-/// both ways): a local window cannot afford it twice.
-fn convert_messages(messages: &[Message], system_prompt: Option<&str>) -> Vec<serde_json::Value> {
-    let mut out = Vec::new();
-    let system_prompt = system_prompt.filter(|s| !s.trim().is_empty());
-    if let Some(prompt) = system_prompt {
-        out.push(serde_json::json!({ "role": "system", "content": prompt }));
-    }
-    for m in messages {
-        if matches!(m.role, Role::System) && Some(m.content.as_str()) == system_prompt {
-            continue;
-        }
-        let msg = match m.role {
-            Role::Tool => serde_json::json!({
-                "role": "tool",
-                "content": m.content,
-                "tool_call_id": m.tool_call_id,
-            }),
-            Role::Assistant if m.tool_calls.is_some() => {
-                let calls: Vec<serde_json::Value> = m
-                    .tool_calls
-                    .iter()
-                    .flatten()
-                    .map(|tc| {
-                        serde_json::json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": { "name": tc.name, "arguments": tc.arguments.to_string() }
-                        })
-                    })
-                    .collect();
-                let mut msg = serde_json::json!({ "role": "assistant", "tool_calls": calls });
-                if !m.content.is_empty() {
-                    msg["content"] = serde_json::json!(m.content);
-                }
-                msg
-            }
-            _ => {
-                let role = match m.role {
-                    Role::System => "system",
-                    Role::User => "user",
-                    _ => "assistant",
-                };
-                serde_json::json!({ "role": role, "content": m.content })
-            }
-        };
-        out.push(msg);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::message::Role;
     use futures::StreamExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -494,36 +311,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(engine.tool_result_char_cap(), Some(8_192));
-    }
-
-    #[test]
-    fn system_prompt_is_sent_once() {
-        let msg = |role, content: &str| Message {
-            role,
-            content: content.to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        };
-        let messages = vec![
-            msg(Role::System, "SYS"),
-            msg(Role::User, "goal"),
-            msg(Role::System, "memory block"),
-        ];
-        let out = convert_messages(&messages, Some("SYS"));
-        let roles: Vec<(&str, &str)> = out
-            .iter()
-            .map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap()))
-            .collect();
-        assert_eq!(
-            roles,
-            vec![
-                ("system", "SYS"),
-                ("user", "goal"),
-                ("system", "memory block")
-            ]
-        );
-        // Without a context prompt every system message is kept.
-        assert_eq!(convert_messages(&messages, None).len(), 3);
     }
 
     #[tokio::test]

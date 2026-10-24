@@ -1544,7 +1544,8 @@ const FILE_MAP = [
   ["src/adapters/inbound/webhooks.rs", "channel", "tengu webhooks — HMAC / header auth, one-shot orchestrator turns or loop events; takes the tengu run leases"],
   // ── engines + bridge ──
   ["src/adapters/outbound/engines/mod.rs", "engine", "build_engine (openrouter / local / claude_code / codex), build_step_engine (a run-agent step's engine), bridges_tools (claude_code, codex)"],
-  ["src/adapters/outbound/engines/openrouter.rs", "engine", "OpenRouterEngine — OpenAI-compatible streaming + tool calls"],
+  ["src/adapters/outbound/engines/openai_compat.rs", "engine", "OpenAI chat-completions wire layer shared by openrouter + local: request, messages, tools, POST, events"],
+  ["src/adapters/outbound/engines/openrouter.rs", "engine", "OpenRouterEngine — egress client, auth headers, one retry of a failed turn"],
   ["src/adapters/outbound/engines/local.rs", "engine", "LocalEngine — Unsloth / Ollama / llama.cpp / vLLM over /v1/chat/completions, direct; tool results fit the window"],
   ["src/adapters/outbound/engines/claude_code.rs", "engine", "ClaudeCodeEngine — Claude CLI subprocess; cli_args (--strict-mcp-config, profile none isolation), build_mcp_config_json (no secret values), HTTPS_PROXY from egress::claude_cli_env"],
   ["src/adapters/inbound/mcp_bridge.rs", "mcp", "MCP bridge server — exposes tengu tools + passed [[mcp_servers]] to the Claude Code and Codex CLIs, as the calling agent"],
