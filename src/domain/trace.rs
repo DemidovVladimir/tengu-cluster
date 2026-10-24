@@ -25,10 +25,6 @@
 //! Studio reads two rules from here, never from the page: a status's colour
 //! ([`Status::tone`] → [`Tone`]) and a run's state ([`RunState`]: live ·
 //! closed by [`closes_run`] · open).
-//!
-//! [`recorded_call`] reads back the call a `tool.*` event recorded — agent,
-//! tool, args — for `tengu tool call --from-trace <run_id>:<seq>`, and says
-//! when its args cannot be run as recorded (scrubbed or dropped by the bound).
 
 use std::collections::BTreeSet;
 
@@ -614,101 +610,6 @@ impl RunSummary {
     }
 }
 
-/// The tool call a `tool.*` event recorded ([`recorded_call`]).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RecordedCall {
-    /// From the node `tool:<agent>/<tool>`.
-    pub agent: String,
-    pub tool: String,
-    /// The recorded args (`Null` when the bound dropped them).
-    pub args: Value,
-    /// The recorded call id (the replay mints none).
-    pub call_id: Option<String>,
-    /// Why `args` are not the args the call ran with: a value hidden by the
-    /// scrub (`[REDACTED]`, `<url>`) or dropped by the bound. `None` = as run.
-    pub unusable: Option<String>,
-}
-
-/// The call event `seq` of a run recorded (`events`: the run's events up to
-/// at least `seq`). A `tool.completed` / `tool.failed` reads its
-/// `tool.started` (its parent), which holds the args. `Err` = no such event,
-/// or not a tool call.
-pub(crate) fn recorded_call(events: &[ExecutionEvent], seq: u64) -> Result<RecordedCall, String> {
-    let ev = events
-        .iter()
-        .find(|e| e.seq == seq)
-        .ok_or_else(|| format!("no event {seq} in the run"))?;
-    if !ev.kind.starts_with("tool.") {
-        return Err(format!("event {seq} is `{}`, not a tool call", ev.kind));
-    }
-    let started = if ev.kind == "tool.started" {
-        ev
-    } else {
-        let parent = ev.parent_event_id.as_deref().unwrap_or_default();
-        events
-            .iter()
-            .find(|e| e.event_id == parent && e.kind == "tool.started")
-            .ok_or_else(|| {
-                format!(
-                    "event {seq} (`{}`): its `tool.started` is not in the run",
-                    ev.kind
-                )
-            })?
-    };
-    let (agent, node_tool) = started
-        .node_id
-        .as_deref()
-        .and_then(|n| n.strip_prefix("tool:"))
-        .and_then(|n| n.split_once('/'))
-        .ok_or_else(|| format!("event {}: no `tool:<agent>/<tool>` node", started.seq))?;
-    let tool = started.payload["tool"].as_str().unwrap_or(node_tool);
-    let args = started.payload.get("args").cloned().unwrap_or(Value::Null);
-    let dropped = started.payload["_dropped"]
-        .as_array()
-        .is_some_and(|d| d.iter().any(|f| f == "args"));
-    let unusable = if dropped || args.is_null() {
-        Some(format!(
-            "the trace dropped the args (payload {} bytes over the bound)",
-            started.payload["_bytes"].as_u64().unwrap_or_default()
-        ))
-    } else {
-        let mut hidden = BTreeSet::new();
-        scrub_marks(&args, &mut hidden);
-        (!hidden.is_empty()).then(|| {
-            let marks: Vec<&str> = hidden.into_iter().collect();
-            format!("the trace hid values in the args ({})", marks.join(", "))
-        })
-    };
-    Ok(RecordedCall {
-        agent: agent.to_string(),
-        tool: tool.to_string(),
-        args,
-        call_id: started.call_id.clone(),
-        unusable,
-    })
-}
-
-/// The marks [`scrub_value`] leaves (`[REDACTED]`, `<url>`) in any string or
-/// object key of `v`.
-fn scrub_marks(v: &Value, out: &mut BTreeSet<&'static str>) {
-    fn check(s: &str, out: &mut BTreeSet<&'static str>) {
-        for mark in ["[REDACTED]", "<url>"] {
-            if s.contains(mark) {
-                out.insert(mark);
-            }
-        }
-    }
-    match v {
-        Value::String(s) => check(s, out),
-        Value::Array(a) => a.iter().for_each(|x| scrub_marks(x, out)),
-        Value::Object(o) => o.iter().for_each(|(k, x)| {
-            check(k, out);
-            scrub_marks(x, out);
-        }),
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,72 +929,5 @@ mod tests {
         newer["a_future_field"] = json!(1);
         let back: ExecutionEvent = serde_json::from_value(newer).unwrap();
         assert_eq!(back, e);
-    }
-
-    /// `--from-trace`: a call's start or its finish gives agent, tool and
-    /// args; args the scrub hid or the bound dropped are named, and an event
-    /// that is not a call is refused.
-    #[test]
-    fn recorded_call_reads_back_a_tool_call() {
-        let c = ctx();
-        let start = |args: Value| {
-            EventDraft::new(Component::Tool, "tool.started", Status::Running)
-                .call("lab:decide-lab-1:1")
-                .node("tool:lab/http_request")
-                .payload(json!({"tool": "http_request", "args": args}))
-        };
-        let events = vec![
-            c.stamp(
-                1,
-                0,
-                EventDraft::new(Component::Runtime, RUN_OPENED, Status::Ok),
-            ),
-            c.stamp(2, 0, start(json!({"method": "GET", "path": "/info"}))),
-            c.stamp(
-                3,
-                0,
-                EventDraft::new(Component::Tool, "tool.failed", Status::Failed)
-                    .parent(event_id(&c.run_id, 2))
-                    .node("tool:lab/http_request")
-                    .payload(json!({"tool": "http_request", "error": "HTTP 500"})),
-            ),
-            c.stamp(
-                4,
-                0,
-                start(json!({"url": "<url>", "headers": {"k": "[REDACTED]"}})),
-            ),
-            c.stamp(
-                5,
-                0,
-                EventDraft::new(Component::Tool, "tool.started", Status::Running)
-                    .node("tool:lab/write_file")
-                    .payload(json!({"tool": "write_file", "_dropped": ["args"], "_bytes": 9000})),
-            ),
-        ];
-        let want = RecordedCall {
-            agent: "lab".into(),
-            tool: "http_request".into(),
-            args: json!({"method": "GET", "path": "/info"}),
-            call_id: Some("lab:decide-lab-1:1".into()),
-            unusable: None,
-        };
-        assert_eq!(recorded_call(&events, 2), Ok(want.clone()));
-        assert_eq!(recorded_call(&events, 3), Ok(want));
-        assert_eq!(
-            recorded_call(&events, 4).unwrap().unusable.as_deref(),
-            Some("the trace hid values in the args (<url>, [REDACTED])")
-        );
-        let dropped = recorded_call(&events, 5).unwrap();
-        assert_eq!(
-            (dropped.tool.as_str(), &dropped.args),
-            ("write_file", &Value::Null)
-        );
-        assert!(dropped.unusable.unwrap().contains("9000 bytes"));
-        assert!(recorded_call(&events, 1)
-            .unwrap_err()
-            .contains("not a tool call"));
-        assert!(recorded_call(&events, 9)
-            .unwrap_err()
-            .contains("no event 9"));
     }
 }

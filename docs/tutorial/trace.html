@@ -542,9 +542,6 @@
 <span class="ln o"># seq 8 to 12 only: the resume point</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
 <span class="ln o"># every event, then each new one as it lands, until Ctrl-C; resume with --after &lt;last seq&gt;</span>
-<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox control-loop-lab --from-trace 71650e67-fb10-4aac-8a5a-a1c837c1cee8:7</span>
-<span class="ln o"># the call behind event 7 (a tool.completed reads its tool.started) run again as its agent, with the recorded args;</span>
-<span class="ln o"># refused when the trace hid them (&lt;url&gt;, [REDACTED]) or the bound dropped them, unless --args gives them</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run ../etc</span>
 <span class="ln o er">Error: run id `../etc`: not a run id (a lowercase UUID, as `tengu trace runs` prints)</span>
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>

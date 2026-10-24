@@ -7,7 +7,6 @@
 //! |---|---|
 //! | `tengu tool list` | every catalog tool name, all opt-ins included (the harness's completeness source), one JSON array |
 //! | `tengu tool call --agent <a> --tool <t> [--args '<json>'] [--call-id <id>] [--transcript <file>] [--sandbox <s>] [-c <file>]` | one `{"text", "observation", "is_error"}` |
-//! | `tengu tool call --from-trace <run_id>:<seq> [--agent <a>] [--args '<json>'] [--sandbox <s>]` | the call a `tool.*` event of the sandbox's trace recorded (a `tool.completed` / `tool.failed` reads its `tool.started`): agent and tool from its node, its args — refused when the trace hid or dropped them (`<url>`, `[REDACTED]`, over the bound) unless `--args` gives them; no call id (the recorded one goes to stderr); one `{"text", "observation", "is_error"}` |
 //! | `tengu tool call --agent <a> --batch …` | stdin: one `{"tool", "args", "call_id"}` per line, all through ONE executor (like a `run-agent` step or a bridge session); stdout: one result object per line |
 //! | `tengu tool turn --agent <a> --goal <text> [--sandbox <s>] [-c <file>]` | one engine turn as `[agents.<a>]` in this process (`bootstrap::turn::run_once`, as an A2A agent endpoint) — the `@<agent>` chat path (`chat/tool_loop.rs`: `chat:` call ids), so a private agent (no `description`: exec tools) runs too; its `tools` (`agent_base_tools`), shell skills (`skill_packages`) and `[[mcp_servers]]` tools, configured scopes as they are (no workspace grant), the bridge for `claude_code`; one `{"status", "output", "tools": [{name, ok}], "metrics"}` (the `run-agent` IPC fields the engine matrix reads) |
 //!
@@ -41,7 +40,6 @@ use crate::config::Config;
 use crate::domain::message::ToolCall;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
-use crate::ports::trace::TraceReader;
 
 #[derive(Subcommand)]
 pub(super) enum ToolAction {
@@ -49,21 +47,15 @@ pub(super) enum ToolAction {
     List,
     /// Run tools as `[agents.<agent>]`; print `{text, observation, is_error}` per call.
     Call {
-        /// The `[agents.<name>]` block whose executor runs the tools (with
-        /// `--from-trace`: the recorded node's agent when absent).
-        #[arg(long, required_unless_present = "from_trace")]
-        agent: Option<String>,
-        /// Tool name (must be in that agent's tool set).
-        #[arg(long, required_unless_present_any = ["batch", "from_trace"])]
-        tool: Option<String>,
-        /// Tool arguments, a JSON object (default `{}`; with `--from-trace`:
-        /// instead of the recorded ones).
+        /// The `[agents.<name>]` block whose executor runs the tools.
         #[arg(long)]
-        args: Option<String>,
-        /// Run again the call event `<run_id>:<seq>` of this sandbox's trace
-        /// recorded (`tengu trace show`).
-        #[arg(long, conflicts_with_all = ["batch", "tool"])]
-        from_trace: Option<String>,
+        agent: String,
+        /// Tool name (must be in that agent's tool set).
+        #[arg(long, required_unless_present = "batch")]
+        tool: Option<String>,
+        /// Tool arguments, a JSON object.
+        #[arg(long, default_value = "{}")]
+        args: String,
         /// `ToolCtx.call_id` (none when absent).
         #[arg(long)]
         call_id: Option<String>,
@@ -115,50 +107,18 @@ pub(super) async fn run_tool_command(
             args,
             call_id,
             transcript,
-            from_trace,
             batch,
             sandbox,
             config,
         } => {
             let config = load_config(config.or(top_config), sandbox)?;
-            let recorded = match &from_trace {
-                Some(at) => Some(recorded_call(&config, at)?),
-                None => None,
-            };
-            let agent = match (agent, &recorded) {
-                (Some(agent), _) => agent,
-                (None, Some(r)) => r.agent.clone(),
-                (None, None) => anyhow::bail!("--agent is required"),
-            };
             let mut tools = AgentTools::build(&config, &agent).await?;
             tools.transcript = transcript;
             if batch {
                 return run_batch(&tools).await;
             }
-            let parse = |a: &str| -> Result<Value> {
-                serde_json::from_str(a).context("--args is not JSON")
-            };
-            let (tool, args) = match recorded {
-                Some(r) => {
-                    let args = match (&args, &r.unusable) {
-                        (Some(a), _) => parse(a)?,
-                        (None, Some(why)) => {
-                            anyhow::bail!("{why}: give them with --args (recorded: {})", r.args)
-                        }
-                        (None, None) => r.args,
-                    };
-                    eprintln!(
-                        "replaying {} as [agents.{agent}] (recorded call id {})",
-                        r.tool,
-                        r.call_id.as_deref().unwrap_or("none")
-                    );
-                    (r.tool, args)
-                }
-                None => (
-                    tool.context("--tool is required without --batch")?,
-                    parse(args.as_deref().unwrap_or("{}"))?,
-                ),
-            };
+            let args: Value = serde_json::from_str(&args).context("--args is not JSON")?;
+            let tool = tool.context("--tool is required without --batch")?;
             let id = call_id.map_or(Value::Null, Value::String);
             let id = crate::adapters::inbound::mcp_bridge::call_id(&id);
             println!("{}", tools.call(&tool, args, id).await);
@@ -179,21 +139,6 @@ pub(super) async fn run_tool_command(
             Ok(())
         }
     }
-}
-
-/// The call `<run_id>:<seq>` recorded in the config's sandbox trace
-/// (`domain::trace::recorded_call`).
-fn recorded_call(config: &Config, at: &str) -> Result<crate::domain::trace::RecordedCall> {
-    let (run, seq) = at
-        .rsplit_once(':')
-        .and_then(|(run, seq)| Some((run, seq.parse::<u64>().ok()?)))
-        .with_context(|| format!("--from-trace `{at}`: not <run_id>:<seq>"))?;
-    let sandbox = crate::bootstrap::runtime::runner_name(config);
-    let events = crate::bootstrap::trace::reader(&sandbox)?
-        .events(run, 0, usize::try_from(seq).unwrap_or(usize::MAX))
-        .with_context(|| format!("read run {run} of sandbox {sandbox}"))?;
-    crate::domain::trace::recorded_call(&events, seq)
-        .map_err(|e| anyhow::anyhow!("--from-trace {at}: {e}"))
 }
 
 /// System prompt of `tengu tool turn`.
