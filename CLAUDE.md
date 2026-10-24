@@ -1006,6 +1006,9 @@ These are not preferences. They're load-bearing.
   trace runs` · `show --run <id> [--after <seq>] [--follow]` read it in every
   build, no config (`--sandbox default` for a `-c` config); only `tengu prune`
   deletes runs (`--sandbox <s>`: `trace/<s>/`; without: all of `<TENGU_HOME>/logs`).
+  `tengu tool call --sandbox <s> --from-trace <run_id>:<seq>` runs a recorded
+  call again as its agent (refused when the trace hid or dropped its args,
+  unless `--args`).
 - **Worktrees inherit the main checkout's `.env` (2026-10-09)** — `main` calls
   `dotenvy::dotenv()` (`adapters/inbound/cli/mod.rs`): the nearest `.env` up from
   the cwd, never overriding an exported var. A `tengu` started under
