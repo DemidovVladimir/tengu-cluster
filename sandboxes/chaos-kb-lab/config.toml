@@ -1,0 +1,170 @@
+# Tengu Cluster — "chaos-kb-lab" sandbox (2026-10-24, exercise)
+# Does a personal knowledge base change what an agent builds for you? The same
+# request ("build me a simple to-do list website") goes to two agents that
+# differ in one thing: `persona` also has the four chaos-kb tools, which read
+# a vault of notes about you; `plain` has none. Both share one model, one
+# identity text and the same file tools, each in its own workspace.
+#
+#   scribe   (Claude Code, none)   stores the facts you give it in the vault (kb_remember)
+#   plain    (Claude Code, none)   builds the site from the request alone
+#   persona  (Claude Code, none)   builds it after reading the vault (kb_search / kb_check)
+#
+# chaos-kb (Chaos Substrate v2, ~/development/chaos-substrate/v2) is an
+# external [[mcp_servers]] entry: an Obsidian-style Markdown vault, a redb
+# index, BLAKE3 fingerprints in a Merkle tree, embeddings from the local Ollama
+# (embeddinggemma on 127.0.0.1:11434). Install it with
+# `cargo install --path v2` from that repository, then `ollama pull embeddinggemma`.
+# Subscriptions only (the Claude plan), no OpenRouter, no spend.
+#
+# Run from the repo root (build with --features claude_code; `claude` logged
+# in). The driver, the vault and every result live outside the repo:
+#   ~/tengu-lab/chaos-kb/driver.sh     # fresh vault → scribe → plain + persona → screenshots
+# By hand:
+#   export TENGU_HOME=~/tengu-lab/chaos-kb/home
+#   export TENGU_CHAOS_KB_LAB_TOKEN=$(cat ~/tengu-lab/chaos-kb/token)
+#   tengu a2a serve --sandbox chaos-kb-lab
+#   tengu a2a send --sandbox chaos-kb-lab --remote persona --wait 1800 "…"
+# Results: ~/tengu-lab/chaos-kb/runs/<time>/ (RESULT.md, the two sites, screenshots).
+
+runtime_profile = "auto"
+
+# Open: every endpoint here is on this machine (Ollama, the A2A server); the
+# Claude CLI reaches Anthropic as usual.
+[egress]
+network = "open"
+
+# Tengu's own memory stays off, so the vault is the only memory in the exercise.
+[memory]
+enabled = false
+
+# The vault is outside every agent's workspace: the agents reach it only
+# through these tools (chaos_kb__kb_sync, __kb_remember, __kb_check,
+# __kb_search). chaos-kb writes nothing but `remember` into the notes and keeps
+# its index in <vault>/.chaos-kb/.
+[[mcp_servers]]
+name = "chaos_kb"
+transport = "stdio"
+command = ["chaos-kb", "--vault", "${HOME}/tengu-lab/chaos-kb/vault", "mcp"]
+
+# --- Scribe: puts what you say about yourself into the vault ------------------
+[agents.scribe]
+default = true
+engine = "claude_code"
+model = "claude-haiku-5-5"
+description = """
+Scribe: stores facts the user states about themselves in their chaos-kb
+vault, one fact per kb_remember call, after kb_check shows the fact is not
+there yet. Stores only what the user said."""
+example_queries = ["Remember that I prefer short answers."]
+workspace = "~/tengu-lab/chaos-kb/scribe"
+# Only [[mcp_servers]] tools, and no catalog tool: the scribe gets exactly these
+# three (before 2026-10-24 such an agent got no tools at all).
+tools = ["chaos_kb__kb_remember", "chaos_kb__kb_check", "chaos_kb__kb_sync"]
+
+[agents.scribe.claude_code]
+builtin_tools_profile = "none"   # bridge tools only: no settings, hooks, plugins, skills or CLAUDE.md
+
+[agents.scribe.identity]
+name = "scribe"
+instructions = """You keep the user's knowledge base. Store exactly what the user states about
+themselves, one fact per kb_remember call, in the note and under the heading they name. Check
+each fact with kb_check first and skip one that is already stored. Never invent or embellish a
+fact. Reply with one line per fact: stored, or already known."""
+
+# --- The two builders: one identity text, one model, different tools ----------
+[agents.plain]
+engine = "claude_code"
+model = "claude-sonnet-5-5"
+workspace = "~/tengu-lab/chaos-kb/plain"
+description = """
+Builder without memory: writes small static websites into its workspace with
+write_file. It knows only the request."""
+example_queries = ["Build me a simple to-do list website."]
+tools = ["write_file", "read_file", "list_directory"]
+
+[agents.plain.claude_code]
+builtin_tools_profile = "none"
+
+[agents.plain.identity]
+name = "builder"
+instructions = """You build small static websites. Write every file into your working directory
+with write_file; use no other folder. If a knowledge base about the user is among your tools,
+consult it before any choice that depends on who they are or what they like."""
+
+[agents.plain.limits]
+max_tool_rounds = 60
+step_timeout_secs = 1800
+stream_event_timeout_secs = 600
+
+[agents.plain.scopes.write_file]
+fs_roots = ["~/tengu-lab/chaos-kb/plain"]
+
+[agents.plain.scopes.read_file]
+fs_roots = ["~/tengu-lab/chaos-kb/plain"]
+
+[agents.plain.scopes.list_directory]
+fs_roots = ["~/tengu-lab/chaos-kb/plain"]
+
+[agents.persona]
+engine = "claude_code"
+model = "claude-sonnet-5-5"
+workspace = "~/tengu-lab/chaos-kb/persona"
+description = """
+Builder with memory: writes small static websites into its workspace with
+write_file, after reading what the user's chaos-kb vault says about them."""
+example_queries = ["Build me a simple to-do list website."]
+tools = ["write_file", "read_file", "list_directory", "chaos_kb__kb_search", "chaos_kb__kb_check"]
+
+[agents.persona.claude_code]
+builtin_tools_profile = "none"
+
+[agents.persona.identity]
+name = "builder"
+instructions = """You build small static websites. Write every file into your working directory
+with write_file; use no other folder. If a knowledge base about the user is among your tools,
+consult it before any choice that depends on who they are or what they like."""
+
+[agents.persona.limits]
+max_tool_rounds = 60
+step_timeout_secs = 1800
+stream_event_timeout_secs = 600
+
+[agents.persona.scopes.write_file]
+fs_roots = ["~/tengu-lab/chaos-kb/persona"]
+
+[agents.persona.scopes.read_file]
+fs_roots = ["~/tengu-lab/chaos-kb/persona"]
+
+[agents.persona.scopes.list_directory]
+fs_roots = ["~/tengu-lab/chaos-kb/persona"]
+
+# --- The agents' process: A2A server (agents only, no planner) ----------------
+[a2a.server]
+port = 8740
+token_env = "TENGU_CHAOS_KB_LAB_TOKEN"
+name = "tengu chaos-kb-lab"
+description = "The chaos-kb exercise: one request, a builder with memory and one without."
+orchestrator = false
+agents = ["scribe", "plain", "persona"]
+max_running = 2
+run_timeout_secs = 1800
+
+[a2a.remotes.scribe]
+url = "http://127.0.0.1:8740/a2a/agents/scribe"
+description = "The scribe."
+bearer_env = "TENGU_CHAOS_KB_LAB_TOKEN"
+timeout_secs = 600
+
+[a2a.remotes.plain]
+url = "http://127.0.0.1:8740/a2a/agents/plain"
+description = "The builder without memory."
+bearer_env = "TENGU_CHAOS_KB_LAB_TOKEN"
+timeout_secs = 1800
+max_result_chars = 20000
+
+[a2a.remotes.persona]
+url = "http://127.0.0.1:8740/a2a/agents/persona"
+description = "The builder with memory."
+bearer_env = "TENGU_CHAOS_KB_LAB_TOKEN"
+timeout_secs = 1800
+max_result_chars = 20000

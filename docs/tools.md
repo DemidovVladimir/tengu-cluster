@@ -119,7 +119,7 @@ command = ["npx", "-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }
 ```
 
-List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one. A server tool outside a non-empty `tools` runs on no surface (in-process or bridged). A server tool whose schema leaves § Tool schema subset is dropped at discovery with a warn (`mcp: tool schema outside the subset …`, naming server, tool and rule).
+List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one. A `tools` list may hold only server tools: that agent gets exactly those and no catalog tool or shell skill (`mcp_client::lists_server_tool`; before 2026-10-24 it got no tools at all). A server tool outside a non-empty `tools` runs on no surface (in-process or bridged). A server tool whose schema leaves § Tool schema subset is dropped at discovery with a warn (`mcp: tool schema outside the subset …`, naming server, tool and rule).
 
 | Agent kind | Sees `[[mcp_servers]]` tools? | How |
 |---|---|---|
@@ -129,5 +129,6 @@ List them in an agent's `tools` like any other tool (`tools = ["github__create_i
 | In-process Claude Code agent (TUI, Telegram) | yes | servers listed once at agent setup and added to the bridge list; bridge proxies them |
 | Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`bootstrap::tools::bridge_inputs`) |
 | Eval / evolve agent, `engine = "claude_code"` | yes | same (`bridge_inputs`); its bridge loads the expanded eval config (`eval.rs::bridge_config_file`); stubbed rows refused (`docs/mcp-bridge.md` § Known Limitations) |
+| A2A agent (`tengu a2a serve`) | yes | same (`bridge_inputs`) for Claude Code / Codex, the executor for the others; proven live by `sandboxes/chaos-kb-lab` (a scribe with only `chaos_kb__*` tools) |
 
 Names use `__` because model APIs reject `.` in tool names.

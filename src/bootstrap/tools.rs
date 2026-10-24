@@ -108,7 +108,14 @@ pub(crate) fn build_tool_executor(
     // Defense in depth for `[generation]`: `Config::load` already refuses a
     // config listing a tool outside the bound generation.
     let tools = &within_generation(agent_config, tools);
-    if tools.is_empty() {
+    // No catalog tool is not no tools: an agent may list only
+    // `[[mcp_servers]]` tools, registered below.
+    if tools.is_empty()
+        && !crate::adapters::outbound::mcp_client::lists_server_tool(
+            &agent_config.tools,
+            mcp_servers,
+        )
+    {
         return None;
     }
     // The workspace-tool opt-ins the agent lists in `tools` are on for its
@@ -148,30 +155,34 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
     };
 
-    // Register the tool catalog (`outbound/tools/mod.rs`) — the same call
-    // the MCP bridge makes, so a new catalog row reaches both.
-    futures::executor::block_on(crate::adapters::outbound::tools::register_catalog(
-        &mut registry,
-        &plugin_ctx,
-        &allowed_names,
-        &allowed_list,
-        crate::adapters::outbound::tools::CatalogOpts {
-            cancel: cancel.clone(),
-            memory_config,
-        },
-    ));
+    // An empty allow-list registers every plugin tool, so an agent with only
+    // `[[mcp_servers]]` tools skips the catalog and the skills entirely.
+    if !tools.is_empty() {
+        // Register the tool catalog (`outbound/tools/mod.rs`) — the same call
+        // the MCP bridge makes, so a new catalog row reaches both.
+        futures::executor::block_on(crate::adapters::outbound::tools::register_catalog(
+            &mut registry,
+            &plugin_ctx,
+            &allowed_names,
+            &allowed_list,
+            crate::adapters::outbound::tools::CatalogOpts {
+                cancel: cancel.clone(),
+                memory_config,
+            },
+        ));
 
-    // SkillPlugin — in-process only (the bridge has no skill registry).
-    // Registers one `SkillShellTool` per active shell skill. Doc/API skills
-    // stay in the system-prompt path and do not create tools.
-    let skill_plugin = SkillPlugin::from_registry(skill_registry);
-    register_plugin_safe(
-        &mut registry,
-        &skill_plugin,
-        &plugin_ctx,
-        &allowed_list,
-        "Failed to register skill plugin — shell skills unavailable",
-    );
+        // SkillPlugin — in-process only (the bridge has no skill registry).
+        // Registers one `SkillShellTool` per active shell skill. Doc/API skills
+        // stay in the system-prompt path and do not create tools.
+        let skill_plugin = SkillPlugin::from_registry(skill_registry);
+        register_plugin_safe(
+            &mut registry,
+            &skill_plugin,
+            &plugin_ctx,
+            &allowed_list,
+            "Failed to register skill plugin — shell skills unavailable",
+        );
+    }
 
     // MCP plugin — connects to each configured external server and registers
     // its tools as `{server_name}__{tool_name}`: all of them when the agent's
@@ -350,13 +361,16 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
 /// when `allow` (the agent's `tools`) is empty, else only the listed ones —
 /// which the bridge then proxies (the engine passes the servers along via
 /// `EngineContext.mcp_servers`). Listed once at agent setup — live
-/// `tools/list`, fail-soft per server.
+/// `tools/list`, fail-soft per server. An empty `base` dials no server
+/// unless `allow` names a server tool (an agent with only server tools).
 pub(crate) async fn with_mcp_bridge_tools(
     mut base: Vec<ToolDef>,
     allow: &[String],
     mcp_servers: &[McpServerConfig],
 ) -> Vec<ToolDef> {
-    if !base.is_empty() {
+    if !base.is_empty()
+        || crate::adapters::outbound::mcp_client::lists_server_tool(allow, mcp_servers)
+    {
         base.extend(
             crate::adapters::outbound::mcp_client::enumerate_tools(mcp_servers)
                 .await
@@ -1083,6 +1097,45 @@ mod golden_tests {
         assert!(listed.contains(&"read_file".to_string()));
     }
 
+    // An agent whose `tools` are all `[[mcp_servers]]` tools has no catalog
+    // tools. It used to get no executor, so an A2A, webhook or eval turn ran
+    // with no tools at all. An agent with no tools (an orchestrator) still
+    // gets none, and its servers are not dialled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_with_only_server_tools_gets_an_executor() {
+        let tmp = TempDir::new().unwrap();
+        let servers = vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+            "fake",
+        )];
+        let mut agent = Config::default().agents.get("main").unwrap().clone();
+        let build = |agent: &AgentConfig| {
+            build_tool_executor(
+                tmp.path(),
+                &[],
+                &crate::application::skills::registry::SkillRegistry::new(Vec::new()),
+                &None,
+                &Arc::new(SecretRegistry::new()),
+                Arc::new(StubActivity),
+                None,
+                None,
+                agent,
+                &servers,
+            )
+        };
+
+        agent.tools = vec!["fake__echo".to_string()];
+        let exec = build(&agent).expect("an executor for the server tool");
+        let names: Vec<String> = exec
+            .additional_tool_defs(&[])
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(names, ["fake__echo"]);
+
+        agent.tools.clear();
+        assert!(build(&agent).is_none(), "no tools listed: no executor");
+    }
+
     // Claude Code webhook and eval agents used to get `bridge_tools: None` —
     // no tengu tools and no `[[mcp_servers]]` tools at all.
     #[test]
@@ -1127,6 +1180,11 @@ mod golden_tests {
         // A `tools` list keeps only the listed server tools.
         let listed = with_mcp_bridge_tools(base, &["read_file".to_string()], &servers).await;
         assert_eq!(listed.len(), 1, "fake__echo is not in the agent's tools");
+        // An agent that lists only server tools has no catalog tools, and
+        // still gets them.
+        let only = with_mcp_bridge_tools(Vec::new(), &["fake__echo".to_string()], &servers).await;
+        let names: Vec<&str> = only.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["fake__echo"]);
         // No bridge (non-Claude-Code agent) stays empty — servers not dialled.
         assert!(with_mcp_bridge_tools(Vec::new(), &[], &servers)
             .await

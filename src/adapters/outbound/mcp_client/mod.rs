@@ -177,6 +177,18 @@ pub(crate) fn qualified_tool_name(server: &str, tool: &str) -> String {
     format!("{server}{MCP_NAME_SEPARATOR}{tool}")
 }
 
+/// Whether an agent's `tools` list names a tool of one of `servers`
+/// (`{server}__{tool}`). Such an agent has tools even when it lists no
+/// catalog tool.
+pub(crate) fn lists_server_tool(tools: &[String], servers: &[McpServerConfig]) -> bool {
+    tools.iter().any(|name| {
+        name.split_once(MCP_NAME_SEPARATOR)
+            .is_some_and(|(server, tool)| {
+                !tool.is_empty() && servers.iter().any(|s| s.name == server)
+            })
+    })
+}
+
 /// Environment variables a server config reads through `$VAR` values
 /// (`env` entries and the http bearer token). A child process that
 /// reconnects to the server (the MCP bridge) needs them forwarded.

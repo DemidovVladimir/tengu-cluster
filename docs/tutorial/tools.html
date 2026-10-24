@@ -251,7 +251,7 @@
     <div class="bar"><span class="lbl">a2a</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
   </div>
   <div class="famcards" id="famcards"></div>
-  <p class="note">Not in the catalog: <code>compress_and_store</code> (added to every plan step, answered by the runner), shell skills (from <code>skill_packages</code>, see <a href="skills.html">Skills</a>) and <code>[[mcp_servers]]</code> tools named <code>{server}__{tool}</code>, filtered by the same <code>tools</code> list.</p>
+  <p class="note">Not in the catalog: <code>compress_and_store</code> (added to every plan step, answered by the runner), shell skills (from <code>skill_packages</code>, see <a href="skills.html">Skills</a>) and <code>[[mcp_servers]]</code> tools named <code>{server}__{tool}</code>, filtered by the same <code>tools</code> list. An agent may list only server tools: it gets those and no catalog tool.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-code">
@@ -392,7 +392,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
@@ -466,7 +466,8 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
       verdict.textContent = count + " tool" + (count === 1 ? "" : "s") + " advertised" + (surf === "step" ? " (incl. compress_and_store)" : "");
       if (!uses) n.push("No workspace: a chat surface gives this agent no tools at all.");
       tools.filter(function (t) { return ALL.indexOf(t) < 0; }).forEach(function (t) {
-        n.push("`" + t + "` matches no catalog row: the config load warns, and it is dropped unless a shell skill the agent loads defines it. An [[mcp_servers]] tool named server__tool would be kept.");
+        if (t.indexOf("__") > 0) n.push("`" + t + "` is an [[mcp_servers]] tool: kept when server `" + t.split("__")[0] + "` is configured, even when it is the only tool listed. It is not counted above.");
+        else n.push("`" + t + "` matches no catalog row: the config load warns, and it is dropped unless a shell skill the agent loads defines it. An [[mcp_servers]] tool named server__tool would be kept.");
       });
       if (opted.indexOf("persistent_store") >= 0 && !mem.checked) n.push("persistent_store needs a memory backend: without one it is not advertised.");
       if (out.indexOf("agentic_memory") >= 0) n.push("agentic_memory exists only in a build with the postgres_memory feature.");

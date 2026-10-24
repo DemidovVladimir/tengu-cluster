@@ -6,6 +6,21 @@
 
 ---
 
+## 2026-10-24: an agent with only `[[mcp_servers]]` tools gets them — branch `fix/mcp-only-agent-tools` (from `feature/xpower-sandbox` 9805470d751bc7fb18b4fa96153c1b095cdb73e6); new `sandboxes/chaos-kb-lab`
+
+Found by the chaos-kb exercise (Chaos Substrate v2, a personal knowledge base, as an `[[mcp_servers]]` entry): a scribe whose `tools` were all `chaos_kb__*` saw no tools and answered that the knowledge-base tools were not available. All agents on the subscription (`claude_code`), embeddings on the local Ollama, $0. Driver, vault, results and an evidence page in `~/tengu-lab/chaos-kb/` (outside the repo; `node ~/tengu-lab/chaos-kb/serve-evidence.mjs` → http://127.0.0.1:4300/evidence/).
+
+| Change | Where | Tests / evidence |
+|---|---|---|
+| `build_tool_executor` returned `None` for an empty catalog list, so an MCP-only agent (A2A, webhook, eval turns) had no executor. Now it builds one when `tools` names a configured server's tool, and skips the catalog and the skills then — an empty allow-list would otherwise register every catalog tool (the first attempt did: signing tools included; the test caught it) | `bootstrap/tools.rs::build_tool_executor`, `mcp_client::lists_server_tool` | `agent_with_only_server_tools_gets_an_executor` (exactly `fake__echo`; no tools listed → still `None`) |
+| The in-process Claude Code bridge list (TUI, Telegram) dialled no server for an empty catalog list | `bootstrap/tools.rs::with_mcp_bridge_tools` | `in_process_claude_code_agent_gets_mcp_tools_and_servers` (MCP-only allow-list case) |
+| `sandboxes/chaos-kb-lab`: scribe (haiku, `none`, only `chaos_kb__kb_remember` / `kb_check` / `kb_sync`), plain and persona builders (sonnet, `none`), same request, persona also has `kb_search` / `kb_check` | `sandboxes/chaos-kb-lab/config.toml` | live run 2026-10-24 19:51 after the fix: scribe 4 calls (check ×2, remember ×2), persona `kb_search` ×2, the plain builder none; both sites pass add / tick / reload / delete (`~/tengu-lab/chaos-kb/runs/20261024-195139/`) |
+
+| Item | State |
+|---|---|
+| Full suite | 2,341 passed, 1 failed, 116 ignored; the failure, `lineage_cli::the_repo_registry_is_frozen_and_every_pin_recomputes` (W1 pins `tool_schema:backtest`, `tool_schema:market_history`), fails identically without this change — on `feature/xpower-sandbox` already; re-sealing W1 is the operator's call |
+| Lint | `cargo fmt --check` clean; `cargo clippy --all-features` (CI) passes, none of its warnings in the changed lines; `docs/code-map.html` regenerated |
+
 ## 2026-10-19 → 20: `sandboxes/xpower` — electricity for a crypto-only trader (overnight run), branch `feature/xpower-sandbox`; one `src/` change: the 30m bar interval
 
 Operator ask: a YouTube episode said EU power can be traded on Hyperliquid / Robinhood — find a DEX route (Solana first), check last week's history and news vs moves, run overnight like xmarket / xlab. All agents on the subscriptions (`claude_code`, `codex`), $0 OpenRouter. Driver, data, notes and `REPORT.md` in `~/tengu-lab/xpower/` (outside the repo).

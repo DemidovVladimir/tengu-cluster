@@ -187,7 +187,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>A run with Tengu tools: the engine writes a temp <code>--mcp-config</code>. No <code>workspace</code> set: the run gets a temp dir as its workspace. One server, <code>tengu-tools</code> = this binary + <code>mcp-bridge</code>, plus an env block of names and paths.</li>
+        <li>A run with Tengu tools (<code>[[mcp_servers]]</code> tools alone count: an agent may list only those): the engine writes a temp <code>--mcp-config</code>. No <code>workspace</code> set: the run gets a temp dir as its workspace. One server, <code>tengu-tools</code> = this binary + <code>mcp-bridge</code>, plus an env block of names and paths.</li>
         <li>The CLI starts the bridge on stdio. <code>--allowedTools</code> names each tool as <code>mcp__tengu-tools__&lt;name&gt;</code>; <code>--strict-mcp-config</code> keeps every other MCP server out.</li>
         <li>The bridge loads <code>TENGU_CONFIG</code> exactly like any Tengu process and takes <code>[agents.&lt;TENGU_BRIDGE_AGENT&gt;]</code>: scopes, sandbox sections, no-shell rule, memory.</li>
         <li>No config file or no such agent: a warning, then the built-in <code>main</code> agent with <code>TENGU_BRIDGE_SCOPES</code> (the engine's copy of its scopes); a loaded config's <code>[generation]</code> still applies.</li>
@@ -371,7 +371,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>
