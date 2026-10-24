@@ -5,7 +5,9 @@
 //! | Port | Contract |
 //! |---|---|
 //! | [`TraceSink`] | one recording: stamps `seq` / ids / time, redacts and bounds the payload, writes each event once, in `seq` order; fail-soft (a trace error never stops a run) |
-//! | [`TraceReader`] | one sandbox's recordings: list runs, page events after a `seq`, the newest `seq`, follow a run live (bounded channel: a slow reader waits, loses nothing, resumes by `seq`) |
+//! | [`TraceReader`] | one sandbox's recordings: list runs, page events after a `seq`, a whole run shared ([`TraceReader::run_events`]: a reader may keep it parsed), the newest `seq`, follow a run live (bounded channel: a slow reader waits, loses nothing, resumes by `seq`) |
+
+use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::mpsc::Receiver;
@@ -28,6 +30,13 @@ pub(crate) trait TraceReader: Send + Sync {
     /// Up to `limit` events of `run_id` with `seq > after_seq`, in `seq`
     /// order. A partial last line (a write in progress) is not returned.
     fn events(&self, run_id: &str, after_seq: u64, limit: usize) -> Result<Vec<ExecutionEvent>>;
+    /// Every complete event of `run_id` in `seq` order, shared: a reader
+    /// that keeps runs parsed hands each caller the same copy (Studio pages
+    /// through a run without parsing it again).
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
+    fn run_events(&self, run_id: &str) -> Result<Arc<Vec<ExecutionEvent>>> {
+        Ok(Arc::new(self.events(run_id, 0, usize::MAX)?))
+    }
     /// The `seq` of the newest complete event of `run_id` (0 before the
     /// first); `Err` for a run that does not exist. Studio's live stream
     /// tells the backlog (≤ it) from what is written after.

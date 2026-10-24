@@ -5,7 +5,7 @@
 //! |---|---|
 //! | [`JsonlTraceSink::open`] | a fresh `run_id` (UUID v4) = a new file, first line `run.opened` (`{kind, pid}`; node `runtime:<sandbox>` for a `tengu run`, none for a decide — its `trigger.*` root names the trigger); a restart never appends to an old run |
 //! | [`JsonlTraceSink::emit`](TraceSink::emit) | under one lock: next `seq`, stamp (`RunContext::stamp`), payload redacted — `domain::trace::scrub_value`: every string and object key, secrets then URLs — then bounded ([`MAX_PAYLOAD_BYTES`], whole fields dropped), one `write_all` on an append-mode file (`decision_loop::append_line`); a failed write keeps the `seq` (no gap) and only warns |
-//! | [`JsonlTraceReader`] | one sandbox dir; a `run_id` must be a lowercase UUID (no path from a request reaches the disk); unparsable lines and a partial last line are skipped; `last_seq` = the last complete line's (no full parse); `follow` tails the file every 250 ms into a bounded channel (256): a slow reader holds the tail, nothing is dropped, a reconnect resumes by `seq` |
+//! | [`JsonlTraceReader`] | one sandbox dir; a `run_id` must be a lowercase UUID (no path from a request reaches the disk); unparsable lines and a partial last line are skipped; the last [`RUN_CACHE`] runs read stay parsed, keyed by run id + bytes read: a grown file parses only what was appended, a shorter one is read again; `runs` = first + last complete line and the line count of each file (no full parse); `last_seq` = the last complete line's (the file's tail only); `follow` tails the file every 250 ms into a bounded channel (256): a slow reader holds the tail, nothing is dropped, a reconnect resumes by `seq` |
 //! | [`JournalSink`] · [`append_journal_metrics`] · [`read_journal`] | a `run-agent` step's journal (`AgentIpcInput.journal`: a 0600 temp file the parent makes per step and removes once read): one JSON line per tool event (`{"event": {id, draft}}` — from the child and from its Claude Code / Codex bridge, `TENGU_BRIDGE_JOURNAL`) or engine turn (`{"metrics": …}`, the child), each one `write_all` on an append-mode file; the parent reads it after the child exits however it exits — clean, failed, an engine error, killed at the timeout — replays the events under the step (`trace_exec::replay_child`) and, when no IPC reply came, forwards the metrics |
 //!
 //! Nothing here deletes a run; `tengu prune` removes `<TENGU_HOME>/logs`
@@ -38,6 +38,11 @@ use crate::ports::trace::{TraceReader, TraceSink};
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
 /// Events a follower may hold unread before the tail waits.
 const FOLLOW_CAPACITY: usize = 256;
+/// Runs a [`JsonlTraceReader`] keeps parsed (the run Studio shows + one).
+pub(crate) const RUN_CACHE: usize = 2;
+/// Bytes read from a file's end for its last event (a line is a bounded
+/// payload + the envelope, far below this).
+const TAIL_BYTES: u64 = 64 * 1024;
 
 /// `<home>/logs/trace`.
 pub(crate) fn trace_root(home: &Path) -> PathBuf {
@@ -178,6 +183,16 @@ pub(crate) struct JsonlTraceReader {
     dir: PathBuf,
     poll: Duration,
     capacity: usize,
+    /// The last runs read, newest last (≤ [`RUN_CACHE`]).
+    cache: Mutex<Vec<ParsedRun>>,
+}
+
+/// A run as far as it was read: its events and the bytes they came from
+/// (up to the last newline; a partial line is read again next time).
+struct ParsedRun {
+    run_id: String,
+    read: u64,
+    events: Arc<Vec<ExecutionEvent>>,
 }
 
 impl JsonlTraceReader {
@@ -188,6 +203,7 @@ impl JsonlTraceReader {
             dir: root.join(sandbox),
             poll: FOLLOW_POLL,
             capacity: FOLLOW_CAPACITY,
+            cache: Mutex::new(Vec::new()),
         })
     }
 
@@ -204,11 +220,107 @@ impl JsonlTraceReader {
         Ok(self.dir.join(format!("{run_id}.jsonl")))
     }
 
-    fn read_all(path: &Path) -> Result<Vec<ExecutionEvent>> {
-        let mut bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let mut evs = drain_events(&mut bytes);
-        order_events(&mut evs);
-        Ok(evs)
+    /// `path`'s summary from its first and last complete lines and its
+    /// line count; `None` for a file with no complete event.
+    fn summary(path: &Path) -> Result<Option<RunSummary>> {
+        let ctx = || format!("read {}", path.display());
+        let file = std::fs::File::open(path).with_context(ctx)?;
+        let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
+        let (mut lines, mut first, mut head) = (0u64, None, Vec::new());
+        loop {
+            let buf = std::io::BufRead::fill_buf(&mut reader).with_context(ctx)?;
+            if buf.is_empty() {
+                break;
+            }
+            let (n, mut start) = (buf.len(), 0);
+            for (i, b) in buf.iter().enumerate() {
+                if *b != b'\n' {
+                    continue;
+                }
+                lines += 1;
+                if first.is_none() {
+                    // `head` holds the line's start from earlier buffers.
+                    head.extend_from_slice(&buf[start..=i]);
+                    first = drain_events(&mut head).into_iter().next();
+                    head.clear();
+                }
+                start = i + 1;
+            }
+            if first.is_none() {
+                head.extend_from_slice(&buf[start..]);
+            }
+            std::io::BufRead::consume(&mut reader, n);
+        }
+        let (Some(first), Some(last)) = (first, Self::last_event(path)?) else {
+            return Ok(None);
+        };
+        Ok(Some(RunSummary::from_ends(&first, &last, lines)))
+    }
+
+    /// The last complete line of `path` that parses, from its tail.
+    fn last_event(path: &Path) -> Result<Option<ExecutionEvent>> {
+        let mut f =
+            std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
+        let len = f.metadata()?.len();
+        let start = len.saturating_sub(TAIL_BYTES);
+        let mut bytes = Vec::new();
+        f.seek(SeekFrom::Start(start))?;
+        f.read_to_end(&mut bytes)?;
+        let Some(end) = bytes.iter().rposition(|b| *b == b'\n') else {
+            return Ok(None);
+        };
+        // From a mid-file start the first piece is a cut line: it never parses.
+        Ok(bytes[..end]
+            .rsplit(|b| *b == b'\n')
+            .find_map(|l| serde_json::from_slice::<ExecutionEvent>(l).ok()))
+    }
+
+    /// `run_id`'s events (module table): the cached copy, plus what was
+    /// appended since it was read.
+    fn parsed(&self, run_id: &str) -> Result<Arc<Vec<ExecutionEvent>>> {
+        let path = self.file(run_id)?;
+        let ctx = || format!("read {}", path.display());
+        let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
+        let cached = cache
+            .iter()
+            .position(|c| c.run_id == run_id)
+            .map(|i| cache.remove(i));
+        let mut f = std::fs::File::open(&path).with_context(ctx)?;
+        let len = f.metadata().with_context(ctx)?.len();
+        let (mut read, mut events) = match cached {
+            Some(c) if c.read <= len => (c.read, c.events),
+            _ => (0, Arc::new(Vec::new())),
+        };
+        if read < len {
+            let mut bytes = Vec::new();
+            f.seek(SeekFrom::Start(read)).with_context(ctx)?;
+            f.take(len - read)
+                .read_to_end(&mut bytes)
+                .with_context(ctx)?;
+            let complete = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+            bytes.truncate(complete);
+            read += complete as u64;
+            let new = drain_events(&mut bytes);
+            if !new.is_empty() {
+                let all = Arc::make_mut(&mut events);
+                let tail = all.last().map_or(0, |e| e.seq);
+                let in_order = new.windows(2).all(|w| w[0].seq < w[1].seq)
+                    && new.first().is_some_and(|e| e.seq > tail);
+                all.extend(new);
+                if !in_order {
+                    order_events(all);
+                }
+            }
+        }
+        cache.push(ParsedRun {
+            run_id: run_id.to_string(),
+            read,
+            events: Arc::clone(&events),
+        });
+        if cache.len() > RUN_CACHE {
+            cache.remove(0);
+        }
+        Ok(events)
     }
 }
 
@@ -232,7 +344,7 @@ impl TraceReader for JsonlTraceReader {
             if check_run_id(stem).is_err() {
                 continue;
             }
-            if let Some(s) = RunSummary::of(&Self::read_all(&path)?) {
+            if let Some(s) = Self::summary(&path)? {
                 out.push(s);
             }
         }
@@ -241,25 +353,18 @@ impl TraceReader for JsonlTraceReader {
     }
 
     fn events(&self, run_id: &str, after_seq: u64, limit: usize) -> Result<Vec<ExecutionEvent>> {
-        let path = self.file(run_id)?;
-        Ok(Self::read_all(&path)?
-            .into_iter()
-            .filter(|e| e.seq > after_seq)
-            .take(limit)
-            .collect())
+        let all = self.parsed(run_id)?;
+        let from = all.partition_point(|e| e.seq <= after_seq);
+        Ok(all[from..].iter().take(limit).cloned().collect())
+    }
+
+    fn run_events(&self, run_id: &str) -> Result<Arc<Vec<ExecutionEvent>>> {
+        self.parsed(run_id)
     }
 
     fn last_seq(&self, run_id: &str) -> Result<u64> {
-        let path = self.file(run_id)?;
-        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         // The last complete line that parses: `seq` is file order (one lock).
-        let Some(end) = bytes.iter().rposition(|b| *b == b'\n') else {
-            return Ok(0);
-        };
-        Ok(bytes[..end]
-            .rsplit(|b| *b == b'\n')
-            .find_map(|l| serde_json::from_slice::<ExecutionEvent>(l).ok())
-            .map_or(0, |e| e.seq))
+        Ok(Self::last_event(&self.file(run_id)?)?.map_or(0, |e| e.seq))
     }
 
     fn follow(&self, run_id: &str, after_seq: u64) -> Result<Receiver<ExecutionEvent>> {
@@ -729,6 +834,59 @@ mod tests {
         assert_eq!(r.last_seq(&run).unwrap(), 4, "partial line");
         assert!(r.last_seq("5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e").is_err());
         assert!(r.last_seq("../x").is_err());
+    }
+
+    /// A run stays parsed: read twice unchanged = the same copy; appended
+    /// events are added to it (a partial line only once it is complete); a
+    /// shorter file is read again; at most `RUN_CACHE` runs kept. `runs`
+    /// summarizes from the ends: same summary as a full parse.
+    #[test]
+    fn a_run_stays_parsed_and_grows_by_its_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = sink(tmp.path(), SecretRegistry::new());
+        let r = reader(tmp.path());
+        let run = s.run_id().unwrap().to_string();
+        s.emit(step(0)).unwrap();
+        let a = r.run_events(&run).unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(Arc::ptr_eq(&a, &r.run_events(&run).unwrap()), "cache hit");
+        s.emit(step(1)).unwrap();
+        append_line(s.path(), "{\"schema_version\":1,\"seq\":4").unwrap();
+        let b = r.run_events(&run).unwrap();
+        assert_eq!(b.iter().map(|e| e.seq).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(a.len(), 2, "a copy handed out never changes");
+        assert_eq!(r.events(&run, 1, 1).unwrap()[0].seq, 2);
+        let full = RunSummary::of(&b).unwrap();
+        assert_eq!(r.runs().unwrap(), [full], "as a full parse");
+        // The partial line completes, then another run pushes past the cap.
+        let text = std::fs::read_to_string(s.path()).unwrap();
+        let cut = text.rfind("{\"schema_version\":1,\"seq\":4").unwrap();
+        std::fs::write(s.path(), &text[..cut]).unwrap();
+        s.emit(step(2)).unwrap();
+        assert_eq!(
+            r.run_events(&run).unwrap().len(),
+            4,
+            "truncated: read again"
+        );
+        let others: Vec<String> = (0..RUN_CACHE)
+            .map(|_| {
+                sink(tmp.path(), SecretRegistry::new())
+                    .run_id()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        for o in &others {
+            r.run_events(o).unwrap();
+        }
+        let kept: Vec<String> = r
+            .cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.run_id.clone())
+            .collect();
+        assert_eq!(kept, others);
     }
 
     /// The review's open issue (ST-12): `jev.completed` lost its legal set

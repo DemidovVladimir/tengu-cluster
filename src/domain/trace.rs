@@ -589,16 +589,23 @@ pub(crate) struct RunSummary {
 
 impl RunSummary {
     /// The summary of one run's events (any order); `None` when empty.
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
     pub(crate) fn of(events: &[ExecutionEvent]) -> Option<Self> {
         let first = events.iter().min_by_key(|e| e.seq)?;
         let last = events.iter().max_by_key(|e| e.seq)?;
-        let kind = events
-            .iter()
-            .find(|e| e.kind == RUN_OPENED)
-            .and_then(|e| e.payload.get("kind"))
+        Some(Self::from_ends(first, last, events.len() as u64))
+    }
+
+    /// The summary from a run's first and last events and its event count
+    /// (a store that counts lines instead of parsing them); `kind` from the
+    /// first when it is [`RUN_OPENED`], as every run's first event is.
+    pub(crate) fn from_ends(first: &ExecutionEvent, last: &ExecutionEvent, events: u64) -> Self {
+        let kind = (first.kind == RUN_OPENED)
+            .then(|| first.payload.get("kind"))
+            .flatten()
             .and_then(Value::as_str)
             .map(str::to_string);
-        Some(Self {
+        Self {
             run_id: first.run_id.clone(),
             sandbox: first.sandbox.clone(),
             kind,
@@ -606,11 +613,11 @@ impl RunSummary {
             config_hash: first.config_hash.clone(),
             started_ms: first.ts_ms,
             last_ms: last.ts_ms,
-            events: events.len() as u64,
+            events,
             last_seq: last.seq,
             last_kind: last.kind.clone(),
             last_status: last.status,
-        })
+        }
     }
 }
 
