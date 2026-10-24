@@ -1126,7 +1126,7 @@ Full procedural instructions here...</pre>
     <div>
       <div class="gap-title">Messaging Platform Breadth</div>
       <div class="gap-desc">Tengu supports Telegram + an inbound webhooks listener (<code>tengu webhooks</code>, HMAC-verified). Hermes supports 6 platforms (Telegram, Discord, Slack, WhatsApp, Signal). Each additional platform multiplies reach significantly.</div>
-      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>adapters/inbound/telegram.rs</code> / <code>adapters/inbound/webhooks.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
+      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>adapters/inbound/telegram/</code> / <code>adapters/inbound/webhooks.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
     </div>
   </div>
 

@@ -252,7 +252,7 @@ Provider keys live only as secrets of the `tengu-seal` Cloudflare Worker; tengu 
 | Load rule | |
 |---|---|
 | `PRIVY_API_URL` in `[keys.env]` needs `PRIVY_APP_SECRET` in `strip` (`FALLBACK_KEYS`: no session never falls back to a local secret) | `config/keys.rs` |
-| a failed session at startup unsets every `[keys.env]` var and the session vars (warn); `tengu telegram` with `TELEGRAM_API_URL` routed and no session refuses to start | `outbound/keys`, `inbound/telegram.rs` |
+| a failed session at startup unsets every `[keys.env]` var and the session vars (warn); `tengu telegram` with `TELEGRAM_API_URL` routed and no session refuses to start | `outbound/keys`, `inbound/telegram/` |
 
 ## A2A — `[a2a]`
 
@@ -565,8 +565,8 @@ tengu sources --sandbox soe list                          # the source registry;
 | `OPENROUTER_BASE_URL` | `engines/mod.rs`, `outbound/decisions.rs`, `tools/agentic_memory/` | `https://openrouter.ai/api` | API base |
 | `OPENROUTER_REFERER` · `OPENROUTER_TITLE` | `engines/openrouter.rs` | unset | `HTTP-Referer` · `X-OpenRouter-Title` headers |
 | `UNSLOTH_API_KEY` | `engines/local.rs` (the default `[agents.<a>.local] api_key_env`) | unset = no auth header | local server key |
-| `TELEGRAM_BOT_TOKEN` | `inbound/telegram.rs` | — (required for `telegram`) | bot token |
-| `TENGU_TELEGRAM_ALLOWED_USERS` | `inbound/telegram.rs` | unset | comma-separated ids merged with `[telegram] allowed_users` |
+| `TELEGRAM_BOT_TOKEN` | `inbound/telegram/` | — (required for `telegram`) | bot token |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | `inbound/telegram/` | unset | comma-separated ids merged with `[telegram] allowed_users` |
 | `TENGU_HOME` | `config/paths.rs::resolve_tengu_home` | `~/.tengu` (`~/` expanded) | state root: config, vault, logs, `state/` |
 | `TENGU_CONFIG` | `config/paths.rs::default_config_path` | `<TENGU_HOME>/config.toml` | config file; `-c` wins; pinned for children by the CLI |
 | `TENGU_MASTER_PASSWORD` | `outbound/secrets.rs` | unset (prompt) | vault password; always redacted |

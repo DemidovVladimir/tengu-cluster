@@ -915,7 +915,7 @@ These are not preferences. They're load-bearing.
   an unlisted sender gets "Unauthorized.". A private agent (no `description`,
   not `default` — the exec-tool / signing owners) is never `@<id>:` /
   `@<role>:`-routable, never the default and not listed in `/agents` or the
-  team block (`telegram.rs::telegram_reachable`). No tool call waits for an
+  team block (`telegram/mod.rs::telegram_reachable`). No tool call waits for an
   approval, on any engine or surface: `[telegram] tool_approvals` /
   `approve_only` gated nothing and were removed (2026-10-23) — `[telegram]` is
   `deny_unknown_fields`, so an old key fails the load.

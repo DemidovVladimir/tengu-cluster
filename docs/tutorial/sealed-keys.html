@@ -252,7 +252,7 @@
         <tr><td><code>src/adapters/outbound/keys/mod.rs</code></td><td>session for the routes asked, <code>install</code> (strip, env export at sandbox load and in children, fail closed), canonical proxy origin, <code>auth_header_for</code>, <code>header_mode</code></td></tr>
         <tr><td><code>src/adapters/outbound/keys/agent.rs</code></td><td>SSH-agent client: list keys, sign</td></tr>
         <tr><td><code>src/adapters/inbound/cli/keys.rs</code></td><td><code>tengu keys setup · status · check</code></td></tr>
-        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>Telegram through the proxy (placeholder token, <code>Tengu-Route</code>); refuses to start without a session</td></tr>
+        <tr><td><code>src/adapters/inbound/telegram/</code></td><td>Telegram through the proxy (placeholder token, <code>Tengu-Route</code>); refuses to start without a session</td></tr>
         <tr><td><code>src/adapters/outbound/tools/crypto/helpers.rs</code></td><td>Privy wallet tools: <code>PRIVY_API_URL</code> on the proxy → the session, no app secret here (<code>privy_request</code>)</td></tr>
         <tr><td><code>src/adapters/outbound/solana/privy.rs</code> · <code>src/config/solana.rs</code></td><td>Solana write tools sign with <code>[solana] privy_wallet_id</code> on the same route (<code>signTransaction</code>; message unchanged, wallet slot verified); with a signer no agent may read the session</td></tr>
         <tr><td><code>sandboxes/sealed-check/config.toml</code></td><td>end-to-end proof: Jev, loop, <code>tengu run</code>, Studio only through the Worker (<code>docs/sealed-check-2026-10-09.md</code>)</td></tr>
@@ -262,7 +262,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

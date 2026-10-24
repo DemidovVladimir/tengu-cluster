@@ -351,7 +351,7 @@ If anything fails:
 - §1 or §2 fail → code regression. Don't proceed.
 - §3 fails < 9/9 → prompt calibration or LLM-level issue. Paste failing row transcript.
 - §4 fails → retention bug. Easy fix.
-- §5 fails → channel wiring bug in `adapters/inbound/telegram.rs` or `tui/mod.rs`. Harder, needs a targeted PR.
+- §5 fails → channel wiring bug in `adapters/inbound/telegram/` or `tui/mod.rs`. Harder, needs a targeted PR.
 
 ---
 

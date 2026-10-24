@@ -203,7 +203,7 @@ over IPC as a single final response. No LLM ever sees the orchestration machiner
 <pre class="mermaid">
 flowchart TB
     subgraph CH["Channel layer"]
-      TG["Telegram<br/>adapters/inbound/telegram.rs"]
+      TG["Telegram<br/>adapters/inbound/telegram/"]
       TUI["TUI<br/>tui/mod.rs"]
       WH["Webhooks<br/>adapters/inbound/webhooks.rs"]
       EV["Eval runner<br/>adapters/inbound/eval/"]
@@ -318,7 +318,7 @@ sequenceDiagram
 <table>
   <thead><tr><th>Step</th><th>File</th><th>Line</th></tr></thead>
   <tbody>
-    <tr><td>Channel builds the orchestrator (TG, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/telegram.rs</td><td>813 (planner_llm at startup), orchestrator_for 1444, execute_orchestrator_turn 1468</td></tr>
+    <tr><td>Channel builds the orchestrator (TG, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/telegram/</td><td>session.rs (planner_llm at startup), turn.rs (orchestrator_for, execute_orchestrator_turn)</td></tr>
     <tr><td>Channel builds the orchestrator (TUI, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/tui/mod.rs</td><td>242 (planner_llm + build_orchestrator) / 846 (handle)</td></tr>
     <tr><td>Channel dispatch (Webhooks, 2026-10-22)</td><td class="file-ref">src/adapters/inbound/webhooks.rs</td><td>run_one_shot 699 (planner_llm per turn, build_orchestrator 723)</td></tr>
     <tr><td>planner_llm / build_orchestrator</td><td class="file-ref">src/bootstrap/orchestrator.rs</td><td>123 / 212</td></tr>
@@ -708,7 +708,7 @@ between retention sweeps.
     <tr><td>Plan topology</td><td class="file-ref">domain/plan.rs</td><td><code>Step</code>, <code>AgentCompose</code>, <code>Plan::{ready_steps,leaves}</code>; <code>validate</code> (every plan, in <code>replan::drive</code>), <code>single_leaf</code> (tests only)</td></tr>
     <tr><td>Events</td><td class="file-ref">application/orchestrator/events.rs</td><td><code>OrchestratorEvent</code>, <code>EventBus</code>, <code>new_bus()</code></td></tr>
     <tr><td>Planner engine (2026-10-22)</td><td class="file-ref">bootstrap/orchestrator.rs</td><td><code>planner_llm(config)</code> → <code>PlannerLlm</code>, <code>build_orchestrator(config, llm, session_id, trace)</code>; <code>ChatServiceFactory</code> (<code>run_turn</code> only) serves <code>tengu evolve</code> alone</td></tr>
-    <tr><td>Channel dispatch (Telegram)</td><td class="file-ref">adapters/inbound/telegram.rs</td><td><code>planner_llm</code> at startup, <code>orchestrator_for</code> @ 1444, <code>execute_orchestrator_turn</code> @ 1468</td></tr>
+    <tr><td>Channel dispatch (Telegram)</td><td class="file-ref">adapters/inbound/telegram/</td><td><code>planner_llm</code> at startup (<code>session.rs</code>), <code>orchestrator_for</code> + <code>execute_orchestrator_turn</code> (<code>turn.rs</code>)</td></tr>
     <tr><td>Channel dispatch (TUI)</td><td class="file-ref">adapters/inbound/tui/mod.rs</td><td><code>planner_llm</code> + <code>build_orchestrator</code> @ 242; <code>orch.handle</code> in the engine thread @ 846</td></tr>
     <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">adapters/inbound/webhooks.rs</td><td><code>run_one_shot</code> @ 699: <code>planner_llm</code> + <code>build_orchestrator</code> per POST</td></tr>
     <tr><td>Eval dispatch + retention</td><td class="file-ref">adapters/inbound/eval/</td><td><code>run_row_via_orchestrator</code> (<code>PlannerLlm</code> per row; steps are <code>run-agent</code> children; judge observations from <code>RowObserver</code>), <code>prune_old_run_dirs</code>, <code>RunSkillOptions</code></td></tr>

@@ -230,7 +230,7 @@ Helpers in `bootstrap/` today:
 - `build_orchestrator(config, llm, session_id, trace) -> Option<Orchestrator>` — builds the full stack.
 - `RuntimeChatServiceFactory` (`build_cli_chat_factory`) — the `ChatServiceFactory` impl `tengu evolve` uses.
 
-**Telegram** (`adapters/inbound/telegram.rs`): holds `planner_llm: Option<PlannerLlm>`; `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. It gets the sender's orchestrator (`orchestrator_for`, built on first use), awaits `handle`, sends the reply chunked + secret-redacted. No snapshots, no per-message skill reload on this path (the plain chat path still reloads skills).
+**Telegram** (`adapters/inbound/telegram/`, turns in `turn.rs`): holds `planner_llm: Option<PlannerLlm>`; `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. It gets the sender's orchestrator (`orchestrator_for`, built on first use), awaits `handle`, sends the reply chunked + secret-redacted. No snapshots, no per-message skill reload on this path (the plain chat path still reloads skills).
 
 **TUI** (`tui/mod.rs`): builds the orchestrator at startup from `planner_llm`; the `ChatRequest::UserMessage` branch runs `rt.block_on(orch.handle(text))`.
 
@@ -421,18 +421,18 @@ Note: the turn future is dropped mid-step: a running `run-agent` child is killed
 
 When the TL;DR isn't enough. Follow these paths in order.
 
-> Stale as of 2026-10-02: the line numbers below are from the PR #8 tree, and `ChatWorker` / `OrchestratorAgentPlanner` no longer exist; `OrchestratorChatPort`, `ChatOrchestratorPortImpl`, the per-agent snapshots, `injector` / `writer` and `prefetch_all` / `sync_all` were removed 2026-10-22 (the planner calls `PlannerLlm::call`). The functions `route_and_chat`, `execute_chat_turn` and `execute_orchestrator_turn` are still in `src/adapters/inbound/telegram.rs`. Current end-to-end trace: `docs/architecture-2026-04-27.md` § 5.
+> Stale as of 2026-10-02: the line numbers below are from the PR #8 tree, and `ChatWorker` / `OrchestratorAgentPlanner` no longer exist; `OrchestratorChatPort`, `ChatOrchestratorPortImpl`, the per-agent snapshots, `injector` / `writer` and `prefetch_all` / `sync_all` were removed 2026-10-22 (the planner calls `PlannerLlm::call`). The functions `route_and_chat`, `execute_chat_turn` and `execute_orchestrator_turn` are still in `src/adapters/inbound/telegram/turn.rs`. Current end-to-end trace: `docs/architecture-2026-04-27.md` § 5.
 
 ### 11.1 A user message arrives in Telegram
 
-1. `adapters/inbound/telegram.rs:878` — dispatcher calls `route_and_chat(msg, sender_id)`.
-2. `adapters/inbound/telegram.rs:1026` — `route_and_chat` parses `@role:` prefix via `adapters::inbound::channel::parse_agent_routing`. Resolves `target_agent_id`.
-3. `adapters/inbound/telegram.rs:1072` — `execute_chat_turn` is called. Hot-reloads skills, rebuilds tools/prompt if dirty.
-4. `adapters/inbound/telegram.rs:1146` — orchestrator-gate check:
+1. `adapters/inbound/telegram/session.rs` (`handle_message`) — dispatcher calls `route_and_chat(msg, sender_id)`.
+2. `adapters/inbound/telegram/turn.rs` — `route_and_chat` parses `@role:` prefix via `adapters::inbound::channel::parse_agent_routing`. Resolves `target_agent_id`.
+3. `adapters/inbound/telegram/turn.rs` — `execute_chat_turn` is called. Hot-reloads skills, rebuilds tools/prompt if dirty.
+4. `adapters/inbound/telegram/turn.rs` — orchestrator-gate check:
    - orchestrator configured AND (default agent OR `route_explicit_agents=true`) → branches to `execute_orchestrator_turn`
    - otherwise → direct dispatch below
-5. **Direct path:** `adapters/inbound/telegram.rs:1258` injects activity context, builds `ChatRuntimeService<'a>` inline, calls `process_user_text`.
-6. **Orchestrator path:** `adapters/inbound/telegram.rs:1384` is `execute_orchestrator_turn`:
+5. **Direct path:** `adapters/inbound/telegram/turn.rs` injects activity context, builds `ChatRuntimeService<'a>` inline, calls `process_user_text`.
+6. **Orchestrator path:** `adapters/inbound/telegram/turn.rs` is `execute_orchestrator_turn`:
    - Hot-reload every agent (lines 1392–1407).
    - For each agent, build a `ChatTurnInputs` snapshot (lines 1416–1486) with per-agent `current_tools`, `current_system_prompt` + activity context, per-agent `OwnedSanitizedToolExecutor`, the shared memory manager.
    - Publish the snapshots atomically (lines 1492–1508).

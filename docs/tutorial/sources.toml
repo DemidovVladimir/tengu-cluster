@@ -165,7 +165,7 @@ sources = [
 [pages.channels]
 sources = [
   "src/adapters/inbound/tui/",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "src/adapters/inbound/webhooks.rs",
   "src/adapters/inbound/run.rs",
   "src/adapters/inbound/channel.rs",
@@ -243,7 +243,7 @@ sources = [
   "src/adapters/outbound/subprocess_runner.rs",
   "src/adapters/outbound/engines/claude_code.rs",
   "src/adapters/inbound/cli/doctor.rs",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "deploy/tor/",
   "docker-compose.tor.yml",
   "Makefile",
@@ -258,7 +258,7 @@ sources = [
   "src/adapters/outbound/tools/http/request.rs",
   "src/adapters/inbound/mcp_bridge.rs",
   "src/adapters/inbound/tui/mod.rs",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "src/bootstrap/decision.rs",
 ]
 
@@ -269,7 +269,7 @@ sources = [
   "src/adapters/outbound/keys/agent.rs",
   "src/adapters/inbound/cli/keys.rs",
   "src/bootstrap/sandbox.rs",
-  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/telegram/",
   "src/adapters/outbound/solana/rpc.rs",
   "src/adapters/outbound/solana/privy.rs",
   "src/config/solana.rs",

@@ -495,7 +495,7 @@
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td>installs the sandbox's policy, warns on a dead proxy</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>hands <code>TENGU_EGRESS</code> to <code>run-agent</code></td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI <code>HTTPS_PROXY</code>, bridge <code>TENGU_EGRESS</code> (<code>engines/codex.rs</code> the same for Codex)</td></tr>
-        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>the bot's proxied client, 30 s / 60 s timeouts</td></tr>
+        <tr><td><code>src/adapters/inbound/telegram/pipe.rs</code></td><td>the bot's proxied client, 30 s / 60 s timeouts</td></tr>
         <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor</code> egress block and <code>--tor</code></td></tr>
         <tr><td><code>deploy/tor/</code></td><td>Arti + lyrebird-rs image, <code>arti.toml</code>, standalone compose</td></tr>
         <tr><td><code>docker-compose.tor.yml</code></td><td>internal <code>tor-front</code> network for Docker tengu</td></tr>

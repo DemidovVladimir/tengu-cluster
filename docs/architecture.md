@@ -184,7 +184,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 | Module | Purpose |
 |--------|---------|
 | `adapters/inbound/tui/mod.rs` | Terminal UI adapter (cursive) |
-| `adapters/inbound/telegram.rs` | Telegram bot adapter |
+| `adapters/inbound/telegram/` | Telegram bot adapter |
 | `adapters/inbound/webhooks.rs` | Inbound webhook listener (feature `webhooks`) |
 
 ### Orchestration

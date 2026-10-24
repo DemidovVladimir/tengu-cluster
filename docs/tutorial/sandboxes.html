@@ -583,7 +583,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     rounds: ["max_tool_rounds", ["default 70"], "Tool cap per chat turn or plan step. OpenRouter and local count engine turns; claude_code and codex count tool calls.", "src/config/mod.rs · default_max_tool_rounds"],
     timeout: ["step_timeout_secs", ["default 600", "must be > 0"], "Wall clock for one plan step run as tengu run-agent; the parent kills the child after it.", "src/config/mod.rs · default_step_timeout_secs"],
     cc: ["claude_code.builtin_tools_profile", ["default none"], "none, read_only, research (WebSearch only, run at Anthropic; no WebFetch), editor or editor_shell (config::CLAUDE_CODE_PROFILES). A sandbox with [risk], [soe] or a Solana signer requires none: built-in tools ignore Tengu scopes.", "src/config/hardening.rs · claude_code_errors"],
-    "private": ["A private agent", ["no description", "not default"], "Never routable by the planner or Telegram. Only such an agent may hold exec tools like paper_order. Feeds run its tools.", "src/config/risk.rs · src/adapters/inbound/telegram.rs"]
+    "private": ["A private agent", ["no description", "not default"], "Never routable by the planner or Telegram. Only such an agent may hold exec tools like paper_order. Feeds run its tools.", "src/config/risk.rs · src/adapters/inbound/telegram/"]
   };
   var lines = Array.prototype.slice.call(document.querySelectorAll("#toml li[data-k]"));
   var tt = document.getElementById("a-title"), tc = document.getElementById("a-chips"), tx = document.getElementById("a-text"), tf = document.getElementById("a-file");

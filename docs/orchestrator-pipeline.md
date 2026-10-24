@@ -43,7 +43,7 @@ gitGraph
 ```mermaid
 flowchart TB
     subgraph Channel["Channel layer"]
-        TG["Telegram<br/><code>adapters/inbound/telegram.rs</code>"]
+        TG["Telegram<br/><code>adapters/inbound/telegram/</code>"]
         TUI["TUI<br/><code>tui/mod.rs</code>"]
         WH["Webhooks<br/><code>adapters/inbound/webhooks.rs</code>"]
         Eval["Eval runner<br/><code>adapters/inbound/eval.rs</code>"]
@@ -187,7 +187,7 @@ sequenceDiagram
 
 | Step in diagram | File | Line |
 |---|---|---|
-| Channel builds the orchestrator (2026-10-22) | `adapters/inbound/telegram.rs` | 813 (`planner_llm` at startup), `orchestrator_for` 1444, `execute_orchestrator_turn` 1468 |
+| Channel builds the orchestrator (2026-10-22) | `adapters/inbound/telegram/` | `session.rs` (`planner_llm` at startup), `turn.rs` (`orchestrator_for`, `execute_orchestrator_turn`) |
 |  | `adapters/inbound/tui/mod.rs` | 242 (`planner_llm` + `build_orchestrator`), 846 (handle) |
 |  | `adapters/inbound/webhooks.rs` | `run_one_shot` 699 (`planner_llm` per turn, 723 `build_orchestrator`) |
 | `planner_llm` / `build_orchestrator` | `bootstrap/orchestrator.rs` | 123 / 212 |
@@ -498,7 +498,7 @@ flowchart LR
 
 | Channel | When `PlannerLlm` is built | On error | Code |
 |---|---|---|---|
-| Telegram | once at startup (field `planner_llm`); one orchestrator per sender, on first message | refuses to start | `adapters/inbound/telegram.rs` 813, `orchestrator_for` 1444, `execute_orchestrator_turn` 1468 |
+| Telegram | once at startup (field `planner_llm`); one orchestrator per sender, on first message | refuses to start | `adapters/inbound/telegram/`: `session.rs` (`planner_llm`), `turn.rs` (`orchestrator_for`, `execute_orchestrator_turn`) |
 | TUI | once at startup | refuses to start | `tui/mod.rs` 242; the engine thread just calls `rt.block_on(orch.handle(text))` (846) |
 | Webhooks + loop escalations | per turn | warn, skip; the listener never fails | `adapters/inbound/webhooks.rs::run_one_shot` 699; `session_id = webhook-<name>-<uuid>`; canonical doc `docs/webhooks-2026-05-11.md` |
 | Eval | per orchestrated row | the row fails | `adapters/inbound/eval.rs::run_row_via_orchestrator` (2075) |
@@ -630,7 +630,7 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 | **Plan types + topology** | `src/domain/plan.rs` | `Step`, `StepId`, `AgentCompose`, `Plan::ready_steps`, `Plan::leaves`; `Plan::validate` (every plan, in `replan::drive`), `Plan::single_leaf` (tests only) |
 | **Events** | `src/application/orchestrator/events.rs` | `OrchestratorEvent`, `EventBus`, `new_bus()` |
 | **Planner engine** | `src/bootstrap/orchestrator.rs` | `planner_llm(config) -> anyhow::Result<Option<PlannerLlm>>`, `build_orchestrator(config, llm, session_id, trace)`. `ChatServiceFactory` (`src/ports/orchestration.rs`, `run_turn` only) serves `tengu evolve` alone (`RuntimeChatServiceFactory`, `build_cli_chat_factory`) |
-| **Telegram channel dispatch** | `src/adapters/inbound/telegram.rs` | `planner_llm` field, `orchestrator_for` (line 1444), `execute_orchestrator_turn` (line 1468) |
+| **Telegram channel dispatch** | `src/adapters/inbound/telegram/` | `planner_llm` field (`session.rs`), `orchestrator_for` + `execute_orchestrator_turn` (`turn.rs`) |
 | **TUI channel dispatch** | `src/adapters/inbound/tui/mod.rs` | `planner_llm` + `build_orchestrator` (line 242), `orch.handle` in the engine thread (line 846) |
 | **Webhook channel dispatch** | `src/adapters/inbound/webhooks.rs` | `run_one_shot` (line 699): `planner_llm` + `build_orchestrator` per POST |
 | **Eval channel dispatch** | `src/adapters/inbound/eval.rs` | `run_row_via_orchestrator`, `RowObserver` |
