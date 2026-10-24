@@ -8,7 +8,7 @@
 //! | `domain` | `domain` (and no IO crates) |
 //! | `ports` | `domain`, `config` |
 //! | `config` | `domain` |
-//! | `application` | `domain`, `ports`, `config`, `application` |
+//! | `application` | `domain`, `ports`, `config`, `application` (IO crates only in the shrink-only `APPLICATION_IO`) |
 //! | `adapters/outbound` | all but `adapters::inbound`, `bootstrap` (`FORBIDDEN`) |
 //! | `bootstrap` | all but `adapters::inbound` (`FORBIDDEN`) |
 //! | `adapters/inbound`, `main.rs` | everything |
@@ -93,8 +93,9 @@ const FORBIDDEN: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Crates that do IO; `domain` must not name them.
-const DOMAIN_IO_CRATES: &[&str] = &[
+/// Crates that do IO: `domain` must not name them, `application` only in
+/// [`APPLICATION_IO`].
+const IO_CRATES: &[&str] = &[
     "reqwest::",
     "tokio::fs",
     "tokio::net",
@@ -109,6 +110,32 @@ const DOMAIN_IO_CRATES: &[&str] = &[
 /// Known violations: (file relative to `src/`, forbidden path prefix).
 /// Remove entries as they are fixed; never add without a plan entry.
 const EXCEPTIONS: &[(&str, &str)] = &[];
+
+/// `application` files (relative to `src/`) whose non-test code still names
+/// an IO crate. IO belongs in an outbound adapter behind a port: a file leaves
+/// this list when its IO moves out; nothing joins (shrink-only,
+/// `application_io_list_only_shrinks`).
+const APPLICATION_IO: &[&str] = &[
+    "application/backtest/gate.rs",
+    "application/backtest/mod.rs",
+    "application/backtest/run_dir.rs",
+    "application/decision_loop/mod.rs",
+    "application/orchestrator/shared_files.rs",
+    "application/ranking/mod.rs",
+    "application/ranking/store.rs",
+    "application/runtime/health.rs",
+    "application/skills/lifecycle/audit.rs",
+    "application/skills/lifecycle/evolve.rs",
+    "application/skills/lifecycle/fixtures.rs",
+    "application/skills/lifecycle/metric_kinds/description_trigger.rs",
+    "application/skills/lifecycle/metric_kinds/llm_judge.rs",
+    "application/skills/lifecycle/metrics.rs",
+    "application/skills/lifecycle/scanner.rs",
+    "application/skills/lifecycle/scratch_worktree.rs",
+    "application/skills/lifecycle/storage.rs",
+    "application/skills/registry.rs",
+    "application/tools/registry.rs",
+];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -299,11 +326,15 @@ fn violations() -> Vec<String> {
                 }
                 found.push(format!("src/{rel}:{n}: `{layer}` must not use `{path}`"));
             }
-            if *layer == "domain" {
+            let checks_io = *layer == "domain"
+                || (*layer == "application" && !APPLICATION_IO.contains(&rel.as_str()));
+            if checks_io {
                 for (n, line) in code_lines(text) {
-                    for io in DOMAIN_IO_CRATES {
+                    for io in IO_CRATES {
                         if line.contains(io) {
-                            found.push(format!("src/{rel}:{n}: `domain` must not do IO (`{io}`)"));
+                            found.push(format!(
+                                "src/{rel}:{n}: `{layer}` must not do IO (`{io}`): add a port"
+                            ));
                         }
                     }
                 }
@@ -402,4 +433,22 @@ fn cfg_test_module_files_are_test_code() {
     ] {
         assert!(!tests.contains(f), "{f} counted as test code");
     }
+}
+
+#[test]
+fn application_io_list_only_shrinks() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let stale: Vec<_> = APPLICATION_IO
+        .iter()
+        .filter(|file| {
+            let text = fs::read_to_string(src.join(file)).unwrap_or_default();
+            !code_lines(&text)
+                .into_iter()
+                .any(|(_, l)| IO_CRATES.iter().any(|io| l.contains(io)))
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these files no longer do IO — remove them from APPLICATION_IO: {stale:?}"
+    );
 }

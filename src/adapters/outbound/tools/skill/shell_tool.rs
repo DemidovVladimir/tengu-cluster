@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::domain::message::ToolDef;
+use crate::domain::scope::shell_quote;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Thin wrapper that renders a shell skill's command template and runs it.
@@ -75,11 +76,11 @@ pub(crate) fn render_command(template: &str, arguments: &Value) -> Result<String
 
             let value = arguments.get(placeholder);
             let rendered = match value {
-                Some(Value::String(s)) => shell_escape(s),
+                Some(Value::String(s)) => shell_quote(s),
                 Some(Value::Number(n)) => n.to_string(),
                 Some(Value::Bool(b)) => b.to_string(),
                 Some(Value::Null) | None => String::new(),
-                Some(other) => shell_escape(&other.to_string()),
+                Some(other) => shell_quote(&other.to_string()),
             };
 
             result.replace_range(abs_start..abs_end + 2, &rendered);
@@ -90,11 +91,6 @@ pub(crate) fn render_command(template: &str, arguments: &Value) -> Result<String
     }
 
     Ok(result)
-}
-
-fn shell_escape(s: &str) -> String {
-    let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
 }
 
 #[cfg(test)]

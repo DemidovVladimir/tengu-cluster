@@ -99,7 +99,7 @@ A skill's `metrics:` block declares accuracy characteristics the harness measure
 | `shell_check` | Runs a command, matches exit code + stdout regex. For deterministic outcomes (tx confirmed, file exists). |
 | `llm_judge` | Loads a `rubric_file`, lets a judge LLM score the fixture transcript against narrative criteria. For qualitative quality. |
 | `tool_assertion` | Dispatches a workspace tool (e.g. `persistent_store`) and asserts on its output via `value_matches` / `value_equals` / `value_in`. |
-| `script` | Invokes `sh <path>` with fixture data in env vars; parses stdout JSON `{pass, score, notes?}`. Escape hatch for custom checks. |
+| `script` | Runs `sh <path>` through the shell port (the `[egress]` wrapper, 300 s timeout) in the workspace, with `PROMPT` / `TRANSCRIPT` / `EXPECTED_OUTCOME` set; parses stdout JSON `{pass, score, notes?}`; a failed run or non-zero exit fails the row. Escape hatch for custom checks. |
 | `dialog_replay` | Reflective eval: scores the current dialog slice from `from_message_index` by delegating to a sibling `llm_judge` / `tool_assertion` metric (`delegate_metric`). |
 | `description_trigger` | Judge LLM decides whether the planner would route to this skill for each query in `queries_file` (`{queries: [{query, should_trigger}]}`); `runs_per_query` (3), `holdout` (0.4). |
 

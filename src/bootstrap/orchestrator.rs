@@ -277,6 +277,7 @@ pub(crate) fn build_orchestrator(
     let planner: Arc<dyn Planner> = Arc::new(RegistryPlanner::new(
         cfg.agent.clone(),
         llm,
+        planner_prompt(),
         config.memory.clone(),
         crate::application::orchestrator::shared_files::routable_agents(&config.agents),
         Arc::new(crate::adapters::outbound::tools::CatalogDirectory {
@@ -289,6 +290,37 @@ pub(crate) fn build_orchestrator(
 
     let policy = RetryPolicy::new(cfg.max_attempts_per_step);
     Some(Orchestrator::new(planner, worker, policy, cfg.max_replans, bus).with_metrics(metrics))
+}
+
+/// The planner's system prompt: the body of `skills/orchestrator/SKILL.md`
+/// (cwd-relative, after its YAML frontmatter), else the inline fallback.
+fn planner_prompt() -> String {
+    const PATH: &str = "skills/orchestrator/SKILL.md";
+    match std::fs::read_to_string(PATH) {
+        Ok(content) => skill_body(&content).to_string(),
+        Err(e) => {
+            tracing::warn!(
+                path = PATH,
+                error = %e,
+                "planner skill unreadable; using the fallback inline planner prompt"
+            );
+            crate::application::orchestrator::planner::FALLBACK_PLANNER_PROMPT.to_string()
+        }
+    }
+}
+
+/// `content` after its `---` frontmatter (the whole text when it has none).
+fn skill_body(content: &str) -> &str {
+    let Some(after_first) = content.strip_prefix("---") else {
+        return content;
+    };
+    match after_first.find("\n---") {
+        Some(end) => {
+            let rest = &after_first[end + 4..];
+            rest.strip_prefix('\n').unwrap_or(rest).trim_start()
+        }
+        None => content,
+    }
 }
 
 /// Build a minimal `ChatServiceFactory` suitable for CLI commands that need to
@@ -370,5 +402,14 @@ mod tests {
         let (model, warning) = open_brain_embedding_model("text-embedding-3-large");
         assert_eq!(model, pinned);
         assert!(warning.unwrap().contains("workspace memory only"));
+    }
+
+    #[test]
+    fn planner_prompt_is_the_skill_body_after_its_frontmatter() {
+        let skill = "---\nname: orchestrator\ndescription: plans\n---\n\n# Planner\nEmit JSON.\n";
+        assert_eq!(skill_body(skill), "# Planner\nEmit JSON.\n");
+        assert_eq!(skill_body("# No frontmatter\n"), "# No frontmatter\n");
+        // An unclosed frontmatter keeps the whole text.
+        assert_eq!(skill_body("---\nname: x\n"), "---\nname: x\n");
     }
 }

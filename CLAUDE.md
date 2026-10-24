@@ -748,9 +748,11 @@ These are not preferences. They're load-bearing.
   (`mcp_client::linted_tool`, 2026-10-01).
 - **Layering is lint-enforced (2026-09-23)** — `tests/layering_lint.rs` fails
   when `domain` / `ports` / `config` / `application` import an adapter, or
-  outbound imports inbound/bootstrap. Need something from an adapter in a use
-  case? Add a port in `src/ports/`, implement it in `adapters/outbound/`, wire
-  it in `src/bootstrap/`.
+  outbound imports inbound/bootstrap, and when `domain` names an IO crate
+  (`std::fs`, `reqwest`, …) or an `application` file outside the shrink-only
+  `APPLICATION_IO` list does (2026-10-24). Need something from an adapter in a
+  use case? Add a port in `src/ports/`, implement it in `adapters/outbound/`,
+  wire it in `src/bootstrap/`.
 - **`compress_and_store` with Claude Code subagents** — served through the
   bridge since 2026-10-01: a `run-agent` step's bridge writes the `summary`
   to the step's `TENGU_BRIDGE_SUMMARY_FILE`, read back as the IPC summary

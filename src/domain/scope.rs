@@ -201,6 +201,12 @@ pub(crate) fn protected_write_in(rel: &Path, hardened: bool) -> Option<&'static 
     })
 }
 
+/// `s` as one single-quoted `sh` word (`'` written `'\''`): a path or an
+/// argument spliced into a command line, never expanded by the shell.
+pub(crate) fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// The word [`ToolScope::check_shell_bin`] gates for a shell command line
 /// (`run_command`, shell skills): its first command word.
 ///

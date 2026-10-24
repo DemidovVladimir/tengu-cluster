@@ -441,7 +441,7 @@ Example queries:
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>PlannerLlm</code> (the engine call); <code>RegistryPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
+        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>PlannerLlm</code> (the engine call); <code>RegistryPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code>; the system prompt comes in from <code>bootstrap/orchestrator.rs</code> (<code>planner_prompt</code>)</td></tr>
         <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, the plan render (<code>plan_state</code>)</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt)</td></tr>
         <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus (records before it broadcasts)</td></tr>
@@ -457,7 +457,7 @@ Example queries:
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use super::SkillAction;
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::Config;
+use crate::domain::scope::shell_quote;
 
 // Memory inspection: Open Brain (Postgres `agentic_memory`) is the only durable
 // memory backend. Inspect it with SQL against `TENGU_MEMORY_DATABASE_URL` or
@@ -599,11 +600,6 @@ async fn skill_export(name: &str, out: Option<&Path>) -> Result<()> {
         tracing::warn!(error = %e, "audit append failed (non-fatal)");
     }
     Ok(())
-}
-
-fn shell_quote(s: &str) -> String {
-    // Conservative single-quote escaping good enough for path args.
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// `tengu skill install` — quarantine -> extract -> symlink-aware validate ->

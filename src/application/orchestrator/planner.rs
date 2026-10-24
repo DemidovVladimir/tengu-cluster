@@ -237,6 +237,9 @@ impl RegistryPlanner {
     pub fn new(
         orchestrator_agent: String,
         llm: PlannerLlm,
+        // The planner's system prompt: `skills/orchestrator/SKILL.md`'s body,
+        // read by bootstrap (`planner_prompt`), else [`FALLBACK_PLANNER_PROMPT`].
+        system_prompt: String,
         memory_config: crate::config::MemoryConfig,
         agents: Vec<(String, crate::config::AgentConfig)>,
         tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
@@ -247,12 +250,6 @@ impl RegistryPlanner {
         // `compress_and_store` write use the same key.
         session_id: String,
     ) -> Self {
-        let system_prompt = load_orchestrator_skill_body().unwrap_or_else(|| {
-            tracing::warn!(
-                "skills/orchestrator/SKILL.md missing or unreadable; using fallback inline planner prompt"
-            );
-            FALLBACK_PLANNER_PROMPT.to_string()
-        });
         Self {
             orchestrator_agent,
             llm,
@@ -478,32 +475,9 @@ impl RegistryPlanner {
     }
 }
 
-/// Read `skills/orchestrator/SKILL.md` from cwd and return the body
-/// (everything after the YAML frontmatter, if present). Returns `None` if
-/// the file is missing or unreadable.
-fn load_orchestrator_skill_body() -> Option<String> {
-    let path = std::path::Path::new("skills/orchestrator/SKILL.md");
-    let content = std::fs::read_to_string(path).ok()?;
-    if content.starts_with("---") {
-        // Strip frontmatter: skip the opening `---`, then everything up to
-        // and including the next `---` line.
-        let after_first = &content[3..];
-        if let Some(end) = after_first.find("\n---") {
-            // +4 to skip "\n---" and any trailing newline.
-            let mut body_start = end + 4;
-            let bytes = after_first.as_bytes();
-            if body_start < bytes.len() && bytes[body_start] == b'\n' {
-                body_start += 1;
-            }
-            return Some(after_first[body_start..].trim_start().to_string());
-        }
-    }
-    Some(content)
-}
-
 /// Last-resort planner prompt used when `skills/orchestrator/SKILL.md` is
 /// missing on disk.
-const FALLBACK_PLANNER_PROMPT: &str = "You are the orchestrator for tengu-cluster.
+pub(crate) const FALLBACK_PLANNER_PROMPT: &str = "You are the orchestrator for tengu-cluster.
 
 For every user message you receive the available agents, skills, tools, and the user's message.
 
