@@ -265,7 +265,7 @@ cargo build --all-features
 
 ## Sandboxes
 
-One file per sandbox — channel settings, `[egress]`, the planner and every agent.
+One file per sandbox — channel settings, `[egress]`, the planner and every agent. This table is the one list of sandboxes: `tests/tutorial_map.rs` fails when a `sandboxes/<dir>` has no row, a row names no dir, or a row's network disagrees with the config's `[egress] network`.
 
 | Sandbox | Network | Purpose |
 |---|---|---|
@@ -278,6 +278,7 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 | `storage-test` | tor | `persistent_store` file storage + vector indexing; agent `storage` (`claude_code`, skill `telegram-rag-ingest`) |
 | `tor-check` | tor | Minimal probe of the egress path over Tor (Arti + lyrebird-rs) |
 | `unlimited` | `open` | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |
+| `venture-scan` | `open` (WebSearch / Codex search at the providers, `http_request` to any host) | Business-opportunity research on the subscriptions only: Claude Code scouts (`research` profile) and a Codex critic (live web search), served by `tengu a2a serve` (agents, no planner) and driven from outside the repo; no OpenRouter |
 | `xmarket` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Paper desk stage M0 ($100 `[risk]` budget) — § Paper desk |
 | `xmarket-weekend` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Rule W weekend run, floor profile (no LLM, no Jev); bound to W1 — § Paper desk |
 | `xlab` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]` | History-first harness (operator PRD v0.5); bound to W1 — § History-first research |

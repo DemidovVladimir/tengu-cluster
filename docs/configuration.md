@@ -537,7 +537,7 @@ Set only in `control-loop-lab`. Server: the default build (feature `studio`), lo
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Thirteen in the repo today: `a2a-lab`, `control-loop-lab`, `jev-exec`, `lping`, `sealed-check`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes. `tengu sandbox new` adds more (with a `builder.json`: `docs/studio-builder-2026-10-10.md`).
+`sandboxes/<name>/config.toml`, run from the repo root. The list, each with its network and purpose: README § Sandboxes. Configs that show a feature — purposes and networks in the README § Sandboxes. `tengu sandbox new` adds more (with a `builder.json`: `docs/studio-builder-2026-10-10.md`).
 
 | Sandbox | What its config shows |
 |---|---|

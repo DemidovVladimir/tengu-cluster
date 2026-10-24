@@ -7,6 +7,7 @@
 //! | sources exist | a `sources` path is gone (a directory prefix ends in `/`) — a file moved or was deleted |
 //! | src covered | a `src/**/*.rs` file is explained by no page and is not listed under `[glue]` |
 //! | pages well-formed | a page misses the shared assets or the `Checked against the code on` footer, or links a local `.html` that does not exist |
+//! | one sandbox list | README § Sandboxes has no row for a `sandboxes/<dir>`, a row for no dir, or a network cell that disagrees with `[egress] network`; the resolver on `sandboxes.html` does not offer one |
 //!
 //! Which pages to update after a code change: every `[pages.<slug>]` whose
 //! `sources` contains the changed file or one of its parent directories.
@@ -202,4 +203,72 @@ fn pages_are_well_formed() {
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// README § Sandboxes is the one list of sandboxes (module table): a row
+/// per `sandboxes/<dir>/config.toml` and no other, its network cell
+/// `` `open` …`` or `tor …` as the config's `[egress] network` (default
+/// tor); the resolver widget offers each one.
+#[test]
+fn readme_lists_every_sandbox() {
+    let mut dirs = BTreeMap::new();
+    for entry in fs::read_dir(root().join("sandboxes")).unwrap() {
+        let path = entry.unwrap().path().join("config.toml");
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let v: toml::Value =
+            toml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let network = v
+            .get("egress")
+            .and_then(|e| e.get("network"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("tor")
+            .to_string();
+        let name = path.parent().unwrap().file_name().unwrap();
+        dirs.insert(name.to_string_lossy().into_owned(), network);
+    }
+    let readme = fs::read_to_string(root().join("README.md")).unwrap();
+    let section = readme
+        .split("\n## Sandboxes\n")
+        .nth(1)
+        .and_then(|s| s.split("\n## ").next())
+        .expect("README § Sandboxes");
+    let row = Regex::new(r"(?m)^\| `([a-z0-9_-]+)` \| ([^|]*) \|").unwrap();
+    let rows: BTreeMap<String, String> = row
+        .captures_iter(section)
+        .map(|c| (c[1].to_string(), c[2].trim().to_string()))
+        .collect();
+    let page = fs::read_to_string(tutorial().join("sandboxes.html")).unwrap();
+    let mut wrong = Vec::new();
+    for (name, network) in &dirs {
+        match rows.get(name) {
+            None => wrong.push(format!("{name}: no README row")),
+            Some(cell) => {
+                let open = cell.starts_with("`open`");
+                if open != (network == "open") || (!open && !cell.starts_with("tor")) {
+                    wrong.push(format!(
+                        "{name}: README says {cell:?}, config says {network}"
+                    ));
+                }
+            }
+        }
+        let offered = [
+            format!("<option>{name}</option>"),
+            format!("<option selected>{name}</option>"),
+        ]
+        .iter()
+        .any(|o| page.contains(o.as_str()));
+        if !offered || !page.contains(&format!("\"{name}\":")) {
+            wrong.push(format!(
+                "{name}: not in the sandboxes.html resolver (option + NET)"
+            ));
+        }
+    }
+    for name in rows.keys().filter(|n| !dirs.contains_key(*n)) {
+        wrong.push(format!(
+            "{name}: README row for no sandboxes/{name}/config.toml"
+        ));
+    }
+    assert!(wrong.is_empty(), "sandbox list:\n{}", wrong.join("\n"));
 }

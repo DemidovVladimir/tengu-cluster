@@ -707,16 +707,11 @@ These are not preferences. They're load-bearing.
   to the store key), one that fits arrives whole
   (`Engine::tool_result_char_cap`, `Observation::compact_text`);
   `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
-- **Open-network sandboxes** — `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency),
-  `control-loop-lab` (Jev only), `a2a-lab` (Claude Code + loopback A2A) and `venture-scan`
-  (WebSearch / Codex search at the providers, `http_request` to any host) run `network = "open"`; `xmarket` (M0 stage) and
-  `xmarket-weekend` run `open` with `allow_hosts = ["api.hyperliquid.xyz"]`, `xlab` with
-  `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, `xlab-w2` with those two
-  and `www.sec.gov`, `data.sec.gov`, `soe` with `www.sec.gov`, `data.sec.gov`,
-  `api.ted.europa.eu`, `sealed-check` with `127.0.0.1`, `*.workers.dev` (Jev via the
-  seal proxy only), and must stay switchable to Tor
-  (every transport through `egress.rs`). `tor-check`, `storage-test` and the
-  base config run over Tor.
+- **Open-network sandboxes** — each sandbox's network (`open`, its
+  `allow_hosts`, or Tor) is in README § Sandboxes, the one list
+  (`tests/tutorial_map.rs` checks it against every `sandboxes/<dir>` and its
+  `[egress] network`). An `open` sandbox must stay switchable to Tor (every
+  transport through `egress.rs`); the base config runs over Tor.
 - **A Claude Code planner needs `builtin_tools_profile = "none"` (2026-10-14)** —
   a CLI engine takes its tools from the bridge per run; a planner call
   (`PlannerLlm::call`) gets no bridge tools and no `[[mcp_servers]]` as well as
