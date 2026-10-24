@@ -1,7 +1,9 @@
 //! Canonical JSON — one text per value, whatever the map insertion order —
 //! and its sha256: the identity of a strategy spec (a backtest run's
-//! `spec_sha256`, `application/backtest/`) and of a decisions request (the
-//! decision cache key, `outbound/decision_cache.rs`).
+//! `spec_sha256`, `application/backtest/`), of a decisions request (the
+//! decision cache key, `outbound/decision_cache.rs`) and of a TOML file
+//! ([`toml_digest`]: a loaded config's `source_sha256`, lineage records, the
+//! SOE profile) — comments and layout do not count.
 //!
 //! | Rule | Value |
 //! |---|---|
@@ -61,6 +63,16 @@ pub(crate) fn canonical_sha256(v: &Value) -> String {
     sha256_hex(&canonical_json(v))
 }
 
+/// TOML text → JSON (tables → objects, arrays kept in order).
+pub(crate) fn toml_to_json(text: &str) -> Result<Value, String> {
+    toml::from_str::<Value>(text).map_err(|e| format!("TOML: {e}"))
+}
+
+/// A TOML file's digest: [`canonical_sha256`] of the file parsed TOML → JSON.
+pub(crate) fn toml_digest(text: &str) -> Result<String, String> {
+    toml_to_json(text).map(|v| canonical_sha256(&v))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -97,5 +109,14 @@ mod tests {
             .bytes()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
         assert_ne!(h, canonical_sha256(&json!({"kind": "daily_window"})));
+    }
+
+    #[test]
+    fn a_toml_digest_ignores_comments_and_layout() {
+        let a = "# note\n[x]\nb = 1\na = { c = [1, 2] }\n";
+        let b = "x.a.c = [1, 2]\nx.b = 1\n";
+        assert_eq!(toml_digest(a).unwrap(), toml_digest(b).unwrap());
+        assert_ne!(toml_digest(a).unwrap(), toml_digest("x.b = 2").unwrap());
+        assert!(toml_digest("x = ").unwrap_err().starts_with("TOML: "));
     }
 }

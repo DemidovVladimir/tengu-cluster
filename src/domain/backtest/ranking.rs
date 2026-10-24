@@ -646,7 +646,7 @@ pub fn select(contract: &RankingContract, cutoff_ms: i64, runs: &[RunInput]) -> 
 /// What the coordinator stamps on a ranking.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RankingStamp {
-    /// `pins::toml_digest` of the contract file (= its `[[sealed]]` row).
+    /// `canonical::toml_digest` of the contract file (= its `[[sealed]]` row).
     pub contract_sha256: String,
     /// The ranking date in the contract's zone.
     pub date: NaiveDate,

@@ -453,7 +453,7 @@ fn load_records_the_source_sha256() {
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     assert_eq!(
         Some(a.clone()),
-        crate::domain::lineage::pins::toml_digest(toml).ok()
+        crate::domain::canonical::toml_digest(toml).ok()
     );
     std::fs::write(&path, format!("# a comment\n\n{toml}")).unwrap();
     assert_eq!(Config::load(&path).unwrap().source_sha256, Some(a.clone()));

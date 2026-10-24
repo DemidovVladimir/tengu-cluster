@@ -73,7 +73,7 @@ impl Config {
         config.generation_scope = scope.map(std::sync::Arc::new);
         config.ranking_section = ranking.map(std::sync::Arc::new);
         config.loaded_from = Some(path.to_path_buf());
-        config.source_sha256 = crate::domain::lineage::pins::toml_digest(&raw).ok();
+        config.source_sha256 = crate::domain::canonical::toml_digest(&raw).ok();
         config.fold_default_scopes();
         Ok(config)
     }

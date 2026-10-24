@@ -12,7 +12,7 @@
 //! | [`load_record_dir`] | `<id>.toml` per record (file stem = `id`); `*.md` and dotfiles skipped; another entry refused; sorted by id; every error names its file |
 //! | [`load_replay_set`] | one `soe.replay_set/1` file (O4 replay): problems listed (`invalid_replay_set`); `synthetic = true` ⇒ `synthetic_replay_set_refused` unless allowed; the operator's labels (`synthetic = false`) inside a git work tree ⇒ `replay_set_in_repo`, with a group / other permission bit ⇒ `replay_set_mode` — holdout outcomes stay private |
 //! | [`load_cited`] | a `--cited` file: `[[cited]]` `gates::CitedRecord` views (what each cited source record shows; the O2 as-of view builds them later) — record ids unique, unknown keys refused, problems listed |
-//! | digest | `lineage::pins::toml_digest` of the file text (the profile's is `profile_sha256`) |
+//! | digest | `canonical::toml_digest` of the file text (the profile's is `profile_sha256`) |
 //!
 //! `[soe]` — the weekly cycle of a Software Opportunity Engine sandbox
 //! (`application/soe/`, run by the `soe_cycle` job of a `kind = "job"` feed,
@@ -60,7 +60,7 @@ use super::egress::NETWORK_OPEN;
 use super::lineage::{parse, toml_files};
 use super::paths;
 use super::{AgentConfig, Config};
-use crate::domain::lineage::pins::toml_digest;
+use crate::domain::canonical::toml_digest;
 use crate::domain::soe::gates::{cited_problems, CitedRecord};
 use crate::domain::soe::opportunity::Opportunity;
 use crate::domain::soe::ops::TokenPrices;

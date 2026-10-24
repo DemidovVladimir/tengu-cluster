@@ -304,6 +304,7 @@ sources = [
 [pages.lineage]
 sources = [
   "src/domain/lineage/",
+  "src/domain/canonical.rs",
   "src/ports/lineage.rs",
   "src/application/lineage/",
   "src/adapters/outbound/lineage/",

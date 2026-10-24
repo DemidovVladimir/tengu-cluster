@@ -807,7 +807,7 @@ pub fn hold_week(head: WeekHead, all: &[Assessment]) -> Result<WeeklyPortfolio, 
 mod tests {
     use super::*;
     use crate::domain::canonical::canonical_json;
-    use crate::domain::lineage::pins::toml_digest;
+    use crate::domain::canonical::toml_digest;
     use crate::domain::soe::economics::tests::{economics, with_economics};
     use crate::domain::soe::gates::tests::{
         at, cited, complete, passing, revenue_share, view, SIGNAL,

@@ -242,7 +242,7 @@ pub struct Config {
     pub loaded_from: Option<PathBuf>,
 
     /// Runtime (never in TOML): sha256 of the file `Config::load` read —
-    /// `domain::lineage::pins::toml_digest` of its raw text (canonical JSON
+    /// `canonical::toml_digest` of its raw text (canonical JSON
     /// of the parsed TOML: comments and layout do not count, `${VAR}` not
     /// substituted), 64 hex, the hash family of the W1 pins. The
     /// `config_hash` of the Studio graph (`domain/workflow.rs`) and of every

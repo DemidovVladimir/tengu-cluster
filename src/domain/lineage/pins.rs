@@ -5,7 +5,7 @@
 //!
 //! | Target | sha256 (64 hex, never shortened) of |
 //! |---|---|
-//! | a record file ([`toml_digest`]) | the canonical JSON (`domain/canonical.rs`) of the file parsed TOML → JSON — comments and layout do not count |
+//! | a record file (`canonical::toml_digest`) | the canonical JSON (`domain/canonical.rs`) of the file parsed TOML → JSON — comments and layout do not count |
 //! | `config:<sandbox>/<dotted path>` ([`config_pin`]) | the canonical JSON of that value of `sandboxes/<sandbox>/config.toml` (raw text: `${VAR}` not substituted) |
 //! | `spec:<sandbox>/<strategy>` ([`spec_pin`]) | the normalized spec = a run's `spec_sha256` (`StrategySpec::from_value` → `spec::spec_sha256`) |
 //! | `tool_schema:<tool>` ([`schema_pin`]) | the canonical JSON of the catalog tool's input schema |
@@ -15,17 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::domain::backtest::spec::{spec_sha256, StrategySpec};
-use crate::domain::canonical::canonical_sha256;
-
-/// TOML text → JSON (tables → objects, arrays kept in order).
-pub fn toml_to_json(text: &str) -> Result<Value, String> {
-    toml::from_str::<Value>(text).map_err(|e| format!("TOML: {e}"))
-}
-
-/// A record file's digest (module table).
-pub fn toml_digest(text: &str) -> Result<String, String> {
-    toml_to_json(text).map(|v| canonical_sha256(&v))
-}
+use crate::domain::canonical::{canonical_sha256, toml_to_json};
 
 /// sha256 of bytes, 64 lowercase hex.
 pub fn bytes_sha256(bytes: &[u8]) -> String {
@@ -84,6 +74,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::domain::canonical::toml_digest;
 
     const CONFIG: &str = r#"
 # a comment never counts

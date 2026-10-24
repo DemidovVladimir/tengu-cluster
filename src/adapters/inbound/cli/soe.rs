@@ -46,8 +46,8 @@ use crate::config::soe::{
     default_profile_path, git_work_tree, load_cited, load_opportunity, load_profile,
     load_record_dir, Loaded, SOE_STATE,
 };
+use crate::domain::canonical::toml_digest;
 use crate::domain::canonical::{canonical_json, sha256_hex};
-use crate::domain::lineage::pins::toml_digest;
 use crate::domain::lineage::value::Time;
 use crate::domain::soe::allocate::{allocate, Candidate, Track};
 use crate::domain::soe::eval::{run_case, Answer, CaseClass, EvalCase};

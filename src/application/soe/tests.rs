@@ -684,7 +684,7 @@ impl Bench {
             (hours, tranche.parse().unwrap()),
             "budget lines not found"
         );
-        self.profile.sha256 = crate::domain::lineage::pins::toml_digest(&text).unwrap();
+        self.profile.sha256 = crate::domain::canonical::toml_digest(&text).unwrap();
         self.text = text;
         self
     }
