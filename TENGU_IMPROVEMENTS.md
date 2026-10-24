@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `4ce4d43bb607d9ed27f2e338dfe46d7d7b1a2838` (O2 + O3) · PR #59 open, not merged |
+| Last code commit | `88225e93aeb10b5f17ac5bef1e9bb1725a35a48f` (O1) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -58,6 +58,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | O8 | done: README § Sandboxes = the one list (+ `venture-scan`); `tests/tutorial_map.rs::readme_lists_every_sandbox` (rows both ways, network vs `[egress] network`, the `sandboxes.html` resolver kept and checked); the gotcha and `configuration.md` point to it. xpower must add its README row + resolver option on merge | `a2d6a8836ec68363815b277dd7bcde4c3ce6c678` |
 | O2 | done: 36 files to `docs/archive/<yyyy-mm>/` (IMPLEMENTATION_PLAN, `docs/superpowers/`, the xmarket backlog + build plan, the OpenRouter-spending runbooks, reports, snapshots) + `docs/archive/README.md` one row each; the metrics frontmatter rules moved into `docs/skills.md`; lineage-cited docs untouched | `4ce4d43bb607d9ed27f2e338dfe46d7d7b1a2838` |
 | O3 | done but the svg: 6 explorers archived; the architecture html keeps Walk a Turn + Other Flows (174 → 49 KB). Open: strip the 116 file names from `docs/architecture.svg` (needs a re-layout) | `4ce4d43bb607d9ed27f2e338dfe46d7d7b1a2838` |
+| O1 | done (renames + rule): 25 living docs undated (`runtime.md`, `observations.md`, `memory-*.md`, `ranking.md`, …), 7 more shipped docs archived, `memory-plugin.md` back out; rule = Output style "Doc names" in CLAUDE / AGENTS + `docs/archive/README.md`. Not done: one merged `memory.md`, `docs/gotchas.md` / `@AGENTS.md` (D1, operator), "Checked against the code" footers (added as each doc is next checked) | `88225e93aeb10b5f17ac5bef1e9bb1725a35a48f` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -98,7 +99,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | O1, O5, O7, O9, O10, O11, O3 svg |
+| 2 · everything else (current) | O5, O7, O9, O10, O11, O3 svg |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
