@@ -28,8 +28,9 @@ use anyhow::{anyhow, bail, Result};
 use crate::adapters::outbound::backfill::sec::{
     reply_json, user_agent_from, Reply, SecClient, SEC_DATA_URL, SEC_WWW_URL,
 };
-use crate::adapters::outbound::backfill::{BackfillReport, ReportRow, Retry};
+use crate::adapters::outbound::backfill::{BackfillReport, ReportRow};
 use crate::adapters::outbound::egress;
+use crate::adapters::outbound::http_class::Retry;
 use crate::adapters::outbound::http_class::{read_error, HttpError};
 use crate::adapters::outbound::sources::fetch_gate;
 use crate::config::sections::SandboxSections;

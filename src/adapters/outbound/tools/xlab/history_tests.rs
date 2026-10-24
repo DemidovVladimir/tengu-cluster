@@ -1,7 +1,7 @@
 //! Tests of `src/adapters/outbound/tools/xlab/history.rs`.
 
 use super::*;
-use crate::adapters::outbound::backfill::test_support::FAST;
+use crate::adapters::outbound::http_class::test_support::FAST;
 use crate::adapters::outbound::http_class::test_support::{
     canned, local_scope, serve, test_client,
 };

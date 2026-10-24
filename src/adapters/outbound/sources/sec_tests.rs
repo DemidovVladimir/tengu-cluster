@@ -7,7 +7,7 @@ use reqwest::header::HeaderValue;
 use serde_json::Value;
 
 use super::*;
-use crate::adapters::outbound::backfill::test_support::FAST;
+use crate::adapters::outbound::http_class::test_support::FAST;
 use crate::adapters::outbound::http_class::test_support::{
     canned, local_scope, serve, test_client, Canned,
 };

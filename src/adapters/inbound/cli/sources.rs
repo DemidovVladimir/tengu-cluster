@@ -25,9 +25,10 @@ use anyhow::{anyhow, bail, Result};
 use clap::{Subcommand, ValueEnum};
 
 use super::history::sections;
-use crate::adapters::outbound::backfill::{text_table, BackfillReport, Retry};
+use crate::adapters::outbound::backfill::{text_table, BackfillReport};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::egress::{audited_as, CallScope};
+use crate::adapters::outbound::http_class::Retry;
 use crate::adapters::outbound::sources::sec::{sec_source_fetch, source_sec_client, SecFetch};
 use crate::adapters::outbound::sources::ted::{
     source_ted_client, ted_import, ted_source_fetch, TedFetch,

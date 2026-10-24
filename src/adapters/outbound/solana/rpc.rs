@@ -4,7 +4,8 @@
 //! | Concern | Rule |
 //! |---|---|
 //! | URL | `$SOLANA_RPC_URL` when `ctx.scope.check_env_read` allows it and it is set, else `DEFAULT_RPC_URL` |
-//! | Egress | every request: `egress::policy().check_url` + `ctx.scope.check_net_host(host)` + one audit record (host only) on `ctx.http` |
+//! | Egress | every request through `http_class::GatedHttp` on `ctx.http`: `egress::policy().check_url` + `ctx.scope.check_net_host(host)`, one audit record (host + `rpc_method`, no path), the seal session on a proxy URL |
+//! | Budget | `[rate_limits.solana_rpc]` (`outbound/rate_limit.rs`): weight 1 per request, ≤ 10 s wait, else `RateLimited`; an HTTP 429 drains it; no section = unlimited |
 //! | Commitment | `confirmed` (the bot's) |
 //! | Errors | [`RpcError`]: class + message; the message never contains the URL (RPC URLs embed api keys) — [`SolanaRpc::host`] is the only rendering; transport errors, non-2xx bodies and JSON-RPC `error.message` (any HTTP status) all pass the endpoint [`Scrubber`] |
 //! | Retry | at most one, only `Transient` / `RateLimited`, backoff ≤ 1 s (`Retry-After` honoured up to 1 s) |
@@ -30,7 +31,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -39,16 +40,16 @@ use base64::Engine as _;
 use reqwest::Url;
 use serde_json::{json, Value};
 
-use crate::adapters::outbound::egress;
-use crate::adapters::outbound::http_class::is_quota_text;
+use crate::adapters::outbound::http_class::{is_quota_text, Budget, GatedHttp};
+use crate::adapters::outbound::rate_limit::{limiters, Limiters};
+use crate::config::rate_limits::RateLimitConfig;
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
 use crate::domain::solana::{AccountRead, AccountState, Pubkey, Signature};
 use crate::ports::tool::ToolCtx;
 
 pub(crate) use crate::adapters::outbound::http_class::{
-    display_url, http_status_error, read_error, reqwest_error, retry_after_ms,
-    HttpError as RpcError, Scrubber,
+    display_url, read_error, HttpError as RpcError, Scrubber,
 };
 
 /// Public mainnet endpoint used when `$SOLANA_RPC_URL` is absent / not allowed.
@@ -61,6 +62,11 @@ pub(crate) const GMA_CHUNK: usize = 100;
 pub(crate) const SIG_STATUS_LIMIT: usize = 256;
 /// Per-request timeout (RPC and `http_json`).
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// The `[rate_limits.<name>]` RPC requests budget against (weight 1 each;
+/// no section = unlimited).
+pub(crate) const RATE_LIMIT: &str = "solana_rpc";
+/// Longest wait for budget before a request fails `rate_limited`.
+const MAX_BUDGET_WAIT: Duration = Duration::from_secs(10);
 const COMMITMENT: &str = "confirmed";
 const DEFAULT_BACKOFF_MS: u64 = 400;
 const MAX_BACKOFF_MS: u64 = 1_000;
@@ -99,7 +105,9 @@ pub(crate) trait RpcTransport: Send + Sync {
     async fn call(&self, body: Value) -> std::result::Result<Value, RpcError>;
 }
 
-/// reqwest transport over the egress tool client (`ctx.http`).
+/// reqwest transport over the egress tool client (`ctx.http`), through
+/// `http_class::GatedHttp` (gate, `[rate_limits.solana_rpc]`, seal session,
+/// audit).
 pub(crate) struct HttpTransport {
     http: reqwest::Client,
     url: Url,
@@ -107,6 +115,8 @@ pub(crate) struct HttpTransport {
     scope: ToolScope,
     timeout: Duration,
     scrub: Scrubber,
+    budget: Option<RateLimitConfig>,
+    limiters: &'static Limiters,
 }
 
 impl HttpTransport {
@@ -115,6 +125,7 @@ impl HttpTransport {
         url: Url,
         scope: ToolScope,
         timeout: Duration,
+        budget: Option<RateLimitConfig>,
     ) -> Self {
         let host = url.host_str().unwrap_or("").to_string();
         let scrub = Scrubber::for_rpc(&url);
@@ -125,30 +136,15 @@ impl HttpTransport {
             scope,
             timeout,
             scrub,
+            budget,
+            limiters: limiters(),
         }
     }
 
-    fn audit(&self, method: &str, outcome: std::result::Result<u16, &RpcError>, ms: Option<u64>) {
-        let mut event = json!({
-            "tool": "solana_rpc",
-            "rpc_method": method,
-            "host": self.host,
-            "ms": ms,
-        });
-        match outcome {
-            Ok(status) => {
-                event["verdict"] = "allowed".into();
-                event["status"] = status.into();
-            }
-            Err(e) => {
-                event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
-                event["reason"] = e.message.clone().into();
-                if let Some(s) = e.http_status {
-                    event["status"] = s.into();
-                }
-            }
-        }
-        egress::policy().audit(event);
+    #[cfg(test)]
+    fn with_limiters(mut self, limiters: &'static Limiters) -> Self {
+        self.limiters = limiters;
+        self
     }
 
     /// A 2xx envelope's JSON-RPC `error.message` can echo the request path
@@ -168,61 +164,36 @@ impl HttpTransport {
 impl RpcTransport for HttpTransport {
     async fn call(&self, body: Value) -> std::result::Result<Value, RpcError> {
         let method = body["method"].as_str().unwrap_or("").to_string();
-        let gate = egress::policy()
-            .check_url(&self.url)
-            .and_then(|_| self.scope.check_net_host(&self.host));
-        if let Err(e) = gate {
-            let err = RpcError::new(ErrorClass::Fatal, self.scrub.scrub(&format!("{e:#}")));
-            self.audit(&method, Err(&err), None);
-            return Err(err);
-        }
-        let started = Instant::now();
-        let mut req = self
+        let req = self
             .http
             .post(self.url.clone())
             .timeout(self.timeout)
             .json(&body);
-        // `[keys]`: an RPC URL that is the seal proxy carries the session.
-        if let Some(auth) = crate::adapters::outbound::keys::auth_header_for(self.url.as_str()) {
-            req = req.header(reqwest::header::AUTHORIZATION, auth);
-        }
-        let sent = req.send().await;
-        let result = match sent {
-            Err(e) => Err(reqwest_error(e, &self.host, &self.scrub)),
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let retry_after = retry_after_ms(resp.headers());
-                match resp.text().await {
-                    Err(e) => Err(reqwest_error(e, &self.host, &self.scrub)),
-                    Ok(text) if !(200..300).contains(&status) => Err(http_status_error(
-                        status,
-                        retry_after,
-                        &text,
-                        &self.host,
-                        &self.scrub,
-                    )),
-                    Ok(text) => serde_json::from_str::<Value>(&text)
-                        .map(|v| (status, self.scrub_rpc_error(v)))
-                        .map_err(|e| {
-                            RpcError::new(
-                                ErrorClass::Decode,
-                                format!("{} returned a non-JSON body: {e}", self.host),
-                            )
-                        }),
-                }
-            }
-        };
-        let ms = Some(started.elapsed().as_millis() as u64);
-        match result {
-            Ok((status, v)) => {
-                self.audit(&method, Ok(status), ms);
-                Ok(v)
-            }
-            Err(e) => {
-                self.audit(&method, Err(&e), ms);
-                Err(e)
-            }
-        }
+        // No path in the record: an RPC URL may carry its key there.
+        GatedHttp::new(
+            &self.scope,
+            &self.scrub,
+            json!({"tool": "solana_rpc", "rpc_method": method}),
+        )
+        .budget(Budget {
+            limiters: self.limiters,
+            name: RATE_LIMIT,
+            config: self.budget.as_ref(),
+            weight: 1,
+            max_wait: MAX_BUDGET_WAIT,
+        })
+        .send(req, |r| {
+            let r = r.success(&self.host, &self.scrub)?;
+            serde_json::from_str::<Value>(&r.body)
+                .map(|v| self.scrub_rpc_error(v))
+                .map_err(|e| {
+                    RpcError::new(
+                        ErrorClass::Decode,
+                        format!("{} returned a non-JSON body: {e}", self.host),
+                    )
+                })
+        })
+        .await
     }
 }
 
@@ -255,9 +226,18 @@ pub(crate) fn rpc_url(scope: &ToolScope) -> String {
 }
 
 impl SolanaRpc {
-    /// Client for a tool call: URL per [`rpc_url`], `ctx.http`, `ctx.scope`.
+    /// Client for a tool call: URL per [`rpc_url`], `ctx.http`, `ctx.scope`,
+    /// the calling agent's `[rate_limits.solana_rpc]` (`AgentConfig::sandbox`).
     pub(crate) fn from_ctx(ctx: &ToolCtx<'_>) -> Result<Self> {
-        Self::from_parts(ctx.http.clone(), &rpc_url(ctx.scope), ctx.scope.clone())
+        let budget = ctx
+            .agent_config
+            .and_then(|a| a.sandbox.rate_limits.get(RATE_LIMIT).cloned());
+        Self::from_parts(
+            ctx.http.clone(),
+            &rpc_url(ctx.scope),
+            ctx.scope.clone(),
+            budget,
+        )
     }
 
     /// Client over `http` for `raw_url` (errors never echo the URL).
@@ -265,6 +245,7 @@ impl SolanaRpc {
         http: reqwest::Client,
         raw_url: &str,
         scope: ToolScope,
+        budget: Option<RateLimitConfig>,
     ) -> Result<Self> {
         let url = Url::parse(raw_url).map_err(|_| anyhow!("{RPC_URL_ENV} is not a valid URL"))?;
         let host = url
@@ -272,7 +253,7 @@ impl SolanaRpc {
             .filter(|h| !h.is_empty())
             .ok_or_else(|| anyhow!("{RPC_URL_ENV} has no host"))?
             .to_string();
-        let transport = HttpTransport::new(http, url, scope, REQUEST_TIMEOUT);
+        let transport = HttpTransport::new(http, url, scope, REQUEST_TIMEOUT, budget);
         Ok(Self::with_transport(Arc::new(transport), host))
     }
 
@@ -1260,6 +1241,8 @@ pub(crate) mod tests {
         }
     }
 
+    use crate::adapters::outbound::egress;
+
     // ── HttpTransport against a local HTTP server ───────────────────
 
     pub(crate) use crate::adapters::outbound::http_class::test_support::{
@@ -1269,8 +1252,51 @@ pub(crate) mod tests {
     fn http_rpc(base: &str, path_and_query: &str, scope: ToolScope, timeout_ms: u64) -> SolanaRpc {
         let url = Url::parse(&format!("{base}{path_and_query}")).unwrap();
         let host = url.host_str().unwrap().to_string();
-        let t = HttpTransport::new(test_client(), url, scope, Duration::from_millis(timeout_ms));
+        let t = HttpTransport::new(
+            test_client(),
+            url,
+            scope,
+            Duration::from_millis(timeout_ms),
+            None,
+        );
         SolanaRpc::with_transport(Arc::new(t), host).with_backoff_ms(0)
+    }
+
+    /// `[rate_limits.solana_rpc]`: an HTTP 429 drains the bucket, the next
+    /// request is refused before sending (the RPC used to have no budget).
+    #[tokio::test]
+    async fn a_429_drains_the_rpc_budget() {
+        use crate::adapters::outbound::rate_limit::Limiters;
+        let (base, seen) = serve(vec![Canned {
+            status: 429,
+            headers: "Retry-After: 30\r\n",
+            body: "too many".into(),
+            delay_ms: 0,
+        }])
+        .await;
+        let budget = RateLimitConfig {
+            per_minute: 600,
+            burst: None,
+            exec_reserve: 0,
+        };
+        let t = HttpTransport::new(
+            test_client(),
+            Url::parse(&format!("{base}/")).unwrap(),
+            local_scope(),
+            Duration::from_secs(5),
+            Some(budget),
+        )
+        .with_limiters(Box::leak(Box::new(Limiters::default())));
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "getSlot"});
+        let e = t.call(body.clone()).await.unwrap_err();
+        assert_eq!(
+            (e.class, e.retry_after_ms),
+            (ErrorClass::RateLimited, Some(30_000))
+        );
+        let e = t.call(body).await.unwrap_err();
+        assert_eq!(e.class, ErrorClass::RateLimited);
+        assert!(e.message.contains("[rate_limits.solana_rpc]"), "{e}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "held back, not sent");
     }
 
     const SECRET_PATH: &str = "/v1/SECRETPATHTOKEN42/";
@@ -1388,12 +1414,13 @@ pub(crate) mod tests {
     fn rpc_url_honours_env_scope() {
         // Scope without env_reads never reads the env var.
         assert_eq!(rpc_url(&ToolScope::default()), DEFAULT_RPC_URL);
-        let bad = SolanaRpc::from_parts(test_client(), "not a url", ToolScope::default());
+        let bad = SolanaRpc::from_parts(test_client(), "not a url", ToolScope::default(), None);
         assert!(bad.is_err_and(|e| !format!("{e}").contains("not a url")));
         let rpc = SolanaRpc::from_parts(
             test_client(),
             "https://rpc.example.com/SECRETPATHTOKEN42?api-key=SECRETKEY9876543",
             ToolScope::default(),
+            None,
         )
         .unwrap();
         assert_eq!(rpc.host(), "rpc.example.com");
@@ -1407,7 +1434,7 @@ pub(crate) mod tests {
             ..Default::default()
         };
         let http = egress::policy().tool_client(REQUEST_TIMEOUT).unwrap();
-        SolanaRpc::from_parts(http, DEFAULT_RPC_URL, scope).unwrap()
+        SolanaRpc::from_parts(http, DEFAULT_RPC_URL, scope, None).unwrap()
     }
 
     /// Anchor account discriminator: sha256("account:<Name>")[..8].

@@ -23,21 +23,21 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
-use reqwest::header::{HeaderValue, ACCEPT, CONTENT_TYPE};
+use reqwest::header::{HeaderValue, ACCEPT};
 use reqwest::Url;
 use serde_json::{json, Value};
 
 use crate::adapters::outbound::backfill::sec::{reply_json, Reply};
-use crate::adapters::outbound::backfill::{BackfillReport, ReportRow, Retry};
+use crate::adapters::outbound::backfill::{BackfillReport, ReportRow};
 use crate::adapters::outbound::egress;
 use crate::adapters::outbound::http_class::{
-    http_status_error, read_error, reqwest_error, retry_after_ms, HttpError, Scrubber,
+    read_error, Budget, GatedHttp, HttpError, Retry, Scrubber,
 };
-use crate::adapters::outbound::rate_limit::{limiters, Limiters, Priority};
+use crate::adapters::outbound::rate_limit::{limiters, Limiters};
 use crate::adapters::outbound::sources::fetch_gate;
 use crate::config::rate_limits::RateLimitConfig;
 use crate::config::sections::SandboxSections;
@@ -160,76 +160,38 @@ impl TedClient {
         let url = self.search_url();
         let host = url.host_str().unwrap_or_default().to_string();
         let scrub = Scrubber::for_api(&url);
-        let gate = egress::policy()
-            .check_url(&url)
-            .and_then(|_| self.scope.check_net_host(&host));
-        if let Err(e) = gate {
-            let err = HttpError::new(ErrorClass::Fatal, format!("{e:#}"));
-            self.audit(&url, &host, Err(&err), None);
-            return Err(err.into());
-        }
-        let budget = self.budget.as_ref();
-        if let Err(err) = self
-            .limiters
-            .acquire(
-                &self.budget_name,
-                budget,
-                1,
-                Priority::Read,
-                self.max_budget_wait,
-            )
-            .await
-        {
-            self.audit(&url, &host, Err(&err), None);
-            return Err(err.into());
-        }
-        let started = Instant::now();
-        let sent = self
+        let req = self
             .http
             .post(url.clone())
             .timeout(self.timeout)
             .header(ACCEPT, HeaderValue::from_static("application/json"))
-            .json(body)
-            .send()
-            .await;
-        let result = match sent {
-            Err(e) => Err(reqwest_error(e, &host, &scrub)),
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let retry_after = retry_after_ms(resp.headers());
-                let content_type = resp
-                    .headers()
-                    .get(CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("application/json")
-                    .to_string();
-                match resp.text().await {
-                    Err(e) => Err(reqwest_error(e, &host, &scrub)),
-                    Ok(body) if (200..300).contains(&status) => Ok(Reply {
-                        url: url.to_string(),
-                        status,
-                        content_type,
-                        body,
-                    }),
-                    Ok(body) => Err(http_status_error(status, retry_after, &body, &host, &scrub)),
-                }
-            }
-        };
-        let ms = Some(started.elapsed().as_millis() as u64);
-        match result {
-            Ok(reply) => {
-                self.audit(&url, &host, Ok(reply.status), ms);
-                Ok(reply)
-            }
-            Err(err) => {
-                if err.class == ErrorClass::RateLimited {
-                    self.limiters
-                        .penalize(&self.budget_name, budget, err.retry_after_ms);
-                }
-                self.audit(&url, &host, Err(&err), ms);
-                Err(err.into())
-            }
-        }
+            .json(body);
+        let gated = GatedHttp::new(
+            &self.scope,
+            &scrub,
+            json!({"tool": "ted_search", "path": url.path()}),
+        )
+        .budget(Budget {
+            limiters: self.limiters,
+            name: &self.budget_name,
+            config: self.budget.as_ref(),
+            weight: 1,
+            max_wait: self.max_budget_wait,
+        });
+        #[cfg(test)]
+        let gated = gated.tap(self.audit_tap.as_deref());
+        let reply = gated
+            .send(req, |r| {
+                let r = r.success(&host, &scrub)?;
+                Ok(Reply {
+                    url: url.to_string(),
+                    status: r.status,
+                    content_type: r.content_type().unwrap_or("application/json").to_string(),
+                    body: r.body,
+                })
+            })
+            .await?;
+        Ok(reply)
     }
 
     /// [`Self::search_reply`], a `timedOut` reply an error (`transient`).
@@ -247,40 +209,6 @@ impl TedClient {
             .into());
         }
         Ok(reply)
-    }
-
-    fn audit(
-        &self,
-        url: &Url,
-        host: &str,
-        outcome: std::result::Result<u16, &HttpError>,
-        ms: Option<u64>,
-    ) {
-        let mut event = json!({
-            "tool": "ted_search",
-            "host": host,
-            "path": url.path(),
-            "ms": ms,
-        });
-        match outcome {
-            Ok(status) => {
-                event["verdict"] = "allowed".into();
-                event["status"] = status.into();
-            }
-            Err(e) => {
-                event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
-                event["class"] = e.class.as_str().into();
-                event["reason"] = e.message.clone().into();
-                if let Some(s) = e.http_status {
-                    event["status"] = s.into();
-                }
-            }
-        }
-        #[cfg(test)]
-        if let Some(tap) = &self.audit_tap {
-            tap.lock().unwrap().push(event.clone());
-        }
-        egress::policy().audit(event);
     }
 }
 
@@ -858,7 +786,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::adapters::outbound::backfill::test_support::FAST;
+    use crate::adapters::outbound::http_class::test_support::FAST;
     use crate::adapters::outbound::http_class::test_support::{
         canned, local_scope, serve, test_client, Canned,
     };

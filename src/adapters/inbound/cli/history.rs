@@ -30,9 +30,10 @@ use crate::adapters::outbound::backfill::json::import_json;
 use crate::adapters::outbound::backfill::sec::{
     operator_sec, sec_filings, sec_ticker_map, SecPlan,
 };
-use crate::adapters::outbound::backfill::{text_table, BackfillReport, Retry};
+use crate::adapters::outbound::backfill::{text_table, BackfillReport};
 use crate::adapters::outbound::egress::{audited_as, CallScope};
 use crate::adapters::outbound::history_sqlite::SqliteHistoryStore;
+use crate::adapters::outbound::http_class::Retry;
 use crate::adapters::outbound::market_data::{market_state_dir, open_market_data};
 use crate::config::backtest::BacktestConfig;
 use crate::config::paths::resolve_tengu_home;

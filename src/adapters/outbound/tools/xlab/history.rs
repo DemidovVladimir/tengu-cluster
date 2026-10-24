@@ -24,8 +24,9 @@ use crate::adapters::outbound::backfill::gecko::{
     self, gecko_bars, network_of, GeckoClient, GeckoPlan,
 };
 use crate::adapters::outbound::backfill::hl::{hl_bars, hl_funding_history, HlPlan};
-use crate::adapters::outbound::backfill::{text_table, ReportRow, Retry};
+use crate::adapters::outbound::backfill::{text_table, ReportRow};
 use crate::adapters::outbound::http_class::read_error;
+use crate::adapters::outbound::http_class::Retry;
 use crate::adapters::outbound::hyperliquid::info::{self, HlInfo};
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::sections::SandboxSections;

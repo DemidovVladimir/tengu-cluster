@@ -1231,7 +1231,7 @@ const SUBSYSTEMS = [
       ["adapters/outbound/tools/soe/", "soe_view (read-only), soe_propose, soe_challenge — the weekly cycle's stage tools, writes through application::soe::submit"],
       ["adapters/outbound/tools/a2a/", "a2a — list · card · send · get · cancel on [a2a.remotes.<name>] only (A2A card)"],
       ["domain/tools.rs", "WORKSPACE_TOOLS (38), DEFAULT_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS, SOE_ALLOWED, SIDE_EFFECT_TOOLS"],
-      ["adapters/outbound/rate_limit.rs · http_class.rs · domain/backoff.rs", "named budgets per process · HTTP → ErrorClass + URL scrubber · backoff, token bucket, breaker"],
+      ["adapters/outbound/rate_limit.rs · http_class.rs · domain/backoff.rs", "named budgets per process · HTTP → ErrorClass + URL scrubber + GatedHttp (one request pipeline) + Retry · backoff, token bucket, breaker"],
     ],
     deep: "The hidden tengu tool list prints every catalog name: 51 in a build without postgres_memory (14 default + 37 opt-in; agentic_memory joins with it). In a [generation]-bound sandbox the executor and the bridge drop a tool the generation refuses (bootstrap::tools::within_generation). Every tool works under openrouter, local, claude_code and codex — see engine parity.",
   },
@@ -1555,7 +1555,7 @@ const FILE_MAP = [
   ["src/adapters/outbound/egress.rs", "egress", "[egress] policy: install/policy, tool_client / llm_api_client / mcp_client / peer_client, check_url, shell_command, guard_shell, claude_cli_env, claude_code_profile, warn_if_proxy_unreachable, JSONL audit, AttributedExecutor / CallScope"],
   ["src/adapters/outbound/secrets.rs", "tools", "vault + SanitizedToolExecutor (text, observations and errors redacted); process_secret_registry"],
   ["src/adapters/outbound/rate_limit.rs", "tools", "process-wide named budgets from [rate_limits.<name>] (weighted acquire, 429 penalize)"],
-  ["src/adapters/outbound/http_class.rs", "tools", "HTTP status / transport error → ErrorClass, credential Scrubber, display_url"],
+  ["src/adapters/outbound/http_class.rs", "tools", "HTTP status / transport error → ErrorClass, credential Scrubber, display_url; GatedHttp (gate → budget → seal session → send → audit) for every API client; Retry"],
   ["src/domain/backoff.rs", "tools", "backoff per ErrorClass (retry / park / stop), TokenBucket, CircuitBreaker — pure"],
   // ── tools ──
   ["src/adapters/outbound/tools/mod.rs", "tools", "catalog() — one ToolEntry per tool; register_catalog, advertised_defs, CatalogDirectory"],

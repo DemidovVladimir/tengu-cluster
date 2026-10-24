@@ -4,7 +4,7 @@
 //!
 //! | Concern | Rule |
 //! |---|---|
-//! | Gate | `egress::policy().check_url` + `ctx.scope.check_net_host(host)` before the request (denial = `Fatal`, nothing sent) |
+//! | Gate | `http_class::GatedHttp`: `egress::policy().check_url` + `ctx.scope.check_net_host(host)` before the request (denial = `Fatal`, nothing sent); the seal session on a proxy URL |
 //! | Client | `ctx.http` (egress tool client, redirects off), 20 s timeout (POST: the caller's), `Accept: application/json`; POST sends a JSON body |
 //! | 2xx | `Ok((status, json))`; a non-JSON body is `Decode` |
 //! | non-2xx | `Err(RpcError)` classified like RPC: 429 `RateLimited` (+`Retry-After`), 401/403 `AuthRequired`, 5xx `Transient`, quota text `QuotaExhausted`, else `Fatal` |
@@ -12,17 +12,12 @@
 //! | Audit | one egress record per request (host + path, no query) |
 //! | Retry | none (callers cache; `rpc::read_error` maps the error to a `ReadError`) |
 
-use std::time::Instant;
-
 use anyhow::Result;
 use reqwest::Url;
 use serde_json::{json, Value};
 
-use super::rpc::{
-    display_url, http_status_error, reqwest_error, retry_after_ms, RpcError, Scrubber,
-    REQUEST_TIMEOUT,
-};
-use crate::adapters::outbound::egress;
+use super::rpc::{display_url, RpcError, Scrubber, REQUEST_TIMEOUT};
+use crate::adapters::outbound::http_class::GatedHttp;
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
 use crate::ports::tool::ToolCtx;
@@ -56,87 +51,40 @@ pub(crate) async fn request_json(
     let host = url.host_str().unwrap_or("").to_string();
     let scrub = Scrubber::for_api(&url);
     let shown = display_url(&url);
-    let audit = |outcome: std::result::Result<u16, &RpcError>, ms: Option<u64>| {
-        let mut event = json!({
-            "tool": if body.is_some() { "post_json" } else { "fetch_json" },
-            "host": host,
-            "path": url.path(),
-            "ms": ms,
-        });
-        match outcome {
-            Ok(status) => {
-                event["verdict"] = "allowed".into();
-                event["status"] = status.into();
-            }
-            Err(e) => {
-                event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
-                event["reason"] = e.message.clone().into();
-                if let Some(s) = e.http_status {
-                    event["status"] = s.into();
-                }
-            }
-        }
-        egress::policy().audit(event);
-    };
-
-    let gate = egress::policy()
-        .check_url(&url)
-        .and_then(|_| scope.check_net_host(&host));
-    if let Err(e) = gate {
-        let err = RpcError::new(ErrorClass::Fatal, scrub.scrub(&format!("{e:#}")));
-        audit(Err(&err), None);
-        return Err(err.into());
-    }
-
-    let started = Instant::now();
     let request = match body {
         None => http.get(url.clone()),
         Some(b) => http.post(url.clone()).json(b),
     };
-    let sent = request
+    let req = request
         .timeout(timeout)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .await;
-    let result: std::result::Result<(u16, Value), RpcError> = match sent {
-        Err(e) => Err(reqwest_error(e, &host, &scrub)),
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let retry_after = retry_after_ms(resp.headers());
-            match resp.text().await {
-                Err(e) => Err(reqwest_error(e, &host, &scrub)),
-                Ok(body) if !(200..300).contains(&status) => {
-                    Err(http_status_error(status, retry_after, &body, &host, &scrub))
-                }
-                Ok(body) => serde_json::from_str::<Value>(&body)
-                    .map(|v| (status, v))
-                    .map_err(|e| {
-                        let mut err = RpcError::new(
-                            ErrorClass::Decode,
-                            scrub.scrub(&format!("{shown} returned a non-JSON body: {e}")),
-                        );
-                        err.http_status = Some(status);
-                        err
-                    }),
-            }
-        }
+        .header(reqwest::header::ACCEPT, "application/json");
+    let tool = if body.is_some() {
+        "post_json"
+    } else {
+        "fetch_json"
     };
-    let ms = Some(started.elapsed().as_millis() as u64);
-    match result {
-        Ok((status, v)) => {
-            audit(Ok(status), ms);
-            Ok((status, v))
-        }
-        Err(e) => {
-            audit(Err(&e), ms);
-            Err(e.into())
-        }
-    }
+    let reply = GatedHttp::new(scope, &scrub, json!({"tool": tool, "path": url.path()}))
+        .send(req, |r| {
+            let r = r.success(&host, &scrub)?;
+            serde_json::from_str::<Value>(&r.body)
+                .map(|v| (r.status, v))
+                .map_err(|e| {
+                    let mut err = RpcError::new(
+                        ErrorClass::Decode,
+                        scrub.scrub(&format!("{shown} returned a non-JSON body: {e}")),
+                    );
+                    err.http_status = Some(r.status);
+                    err
+                })
+        })
+        .await?;
+    Ok(reply)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::outbound::egress;
     use crate::adapters::outbound::solana::rpc::read_error;
     use crate::adapters::outbound::solana::rpc::tests::{
         canned, local_scope, serve, test_client, Canned,

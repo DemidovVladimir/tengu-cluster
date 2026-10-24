@@ -18,9 +18,10 @@ use reqwest::Url;
 use serde_json::json;
 
 use super::{
-    grid_ceil, grid_floor, missing_ranges, no_bars_note, resume_note, stored_span, ReportRow, Retry,
+    grid_ceil, grid_floor, missing_ranges, no_bars_note, resume_note, stored_span, ReportRow,
 };
 use crate::adapters::outbound::egress;
+use crate::adapters::outbound::http_class::Retry;
 use crate::adapters::outbound::hyperliquid::info::{
     api_url, HlInfo, InfoReply, API_URL_ENV, MAINNET_URL, RATE_LIMIT,
 };
@@ -236,7 +237,7 @@ async fn fetch_funding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::backfill::test_support::FAST;
+    use crate::adapters::outbound::http_class::test_support::FAST;
     use crate::adapters::outbound::http_class::test_support::{
         canned, local_scope, serve, test_client,
     };

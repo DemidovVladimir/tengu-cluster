@@ -57,7 +57,7 @@ Append-only time series of observations (xmarket tracker conventions 3 + 5): res
 
 ## Solana tools (`adapters/outbound/tools/solana/`, opt-in, one `solana` plugin)
 
-RPC = `$SOLANA_RPC_URL` if the scope may read it, else `https://api.mainnet-beta.solana.com`; rendered as host only (the URL may hold a key).
+RPC = `$SOLANA_RPC_URL` if the scope may read it, else `https://api.mainnet-beta.solana.com`; rendered as host only (the URL may hold a key). Budget: optional `[rate_limits.solana_rpc]` (weight 1 per request, ≤ 10 s wait, an HTTP 429 drains it; no section = unlimited).
 
 | Tool | Args (* required) | Key | TTL | Sources | Hosts |
 |---|---|---|---|---|---|

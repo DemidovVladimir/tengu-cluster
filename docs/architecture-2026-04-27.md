@@ -342,7 +342,7 @@ Doc: `docs/typed-observations-2026-09-24.md`.
 | SOE (3) | `soe_view` (`soe_view/1:<run>:<view>`, read-only), `soe_propose` (Architect draft, `<cycle>.pNN`), `soe_challenge` (Critic draft, `<cycle>.cNN`) — writes go through `application::soe::submit` into the open run dir; never a contact, spend or publish | `tools/soe/` (§2.17) |
 | A2A (1) | `a2a` (`list` · `card` · `send` · `get` · `cancel`; only `[a2a.remotes.<name>]`, only their hosts) | `tools/a2a/` · `outbound/a2a/` (§2.20) |
 
-Shared: `outbound/rate_limit.rs` (`[rate_limits.<name>]`, per process), `outbound/http_class.rs` (HTTP → `ErrorClass`, URL scrubber), `domain/backoff.rs`. The hidden `tengu tool list` prints every catalog name (51 in a default build: 14 default + 37 opt-in; `agentic_memory` joins with `postgres_memory`). In a `[generation]`-bound sandbox the executor and the bridge drop a tool the generation refuses (`bootstrap/tools.rs::within_generation`; `Config::load` refuses listing one).
+Shared: `outbound/rate_limit.rs` (`[rate_limits.<name>]`, per process), `outbound/http_class.rs` (HTTP → `ErrorClass`, URL scrubber, `GatedHttp` — gate → budget → seal session → send → audit for every API client, `Retry`), `domain/backoff.rs`. The hidden `tengu tool list` prints every catalog name (51 in a default build: 14 default + 37 opt-in; `agentic_memory` joins with `postgres_memory`). In a `[generation]`-bound sandbox the executor and the bridge drop a tool the generation refuses (`bootstrap/tools.rs::within_generation`; `Config::load` refuses listing one).
 
 ### 2.11 xmarket — risk gate, paper ledger, fill engine, kill switch, exits, weekend fade (2026-09-30 / 2026-10-01)
 

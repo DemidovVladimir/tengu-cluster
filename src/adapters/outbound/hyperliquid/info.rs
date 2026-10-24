@@ -29,18 +29,16 @@
 //! | timeout | `Timeout` |
 //! | 200, not JSON | `Decode` |
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use reqwest::Url;
 use serde_json::{json, Value};
 
-use crate::adapters::outbound::egress;
 use crate::adapters::outbound::http_class::{
-    body_snippet, http_status_error, redacted_path, reqwest_error, retry_after_ms, HttpError,
-    Scrubber,
+    body_snippet, http_status_error, redacted_path, Budget, GatedHttp, HttpError, Scrubber,
 };
-use crate::adapters::outbound::rate_limit::{limiters, Limiters, Priority};
+use crate::adapters::outbound::rate_limit::{limiters, Limiters};
 use crate::config::rate_limits::RateLimitConfig;
 use crate::domain::observation::ErrorClass;
 use crate::domain::scope::ToolScope;
@@ -264,125 +262,48 @@ impl HlInfo {
     /// tables). Errors carry an [`HttpError`] (`http_class::read_error`).
     pub(crate) async fn post(&self, body: &Value) -> Result<InfoReply> {
         let info_type = body["type"].as_str().unwrap_or("").to_string();
-        let weight = request_weight(&info_type);
         let scrub = Scrubber::for_keyed_path(&self.url);
-
-        let gate = egress::policy()
-            .check_url(&self.url)
-            .and_then(|_| self.scope.check_net_host(&self.host));
-        if let Err(e) = gate {
-            let err = HttpError::new(ErrorClass::Fatal, scrub.scrub(&format!("{e:#}")));
-            self.audit(&info_type, weight, Err(&err), None);
-            return Err(err.into());
-        }
-        let budget = self.budget.as_ref();
-        if let Err(err) = self
-            .limiters
-            .acquire(
-                RATE_LIMIT,
-                budget,
-                weight,
-                Priority::Read,
-                self.max_budget_wait,
-            )
-            .await
-        {
-            self.audit(&info_type, weight, Err(&err), None);
-            return Err(err.into());
-        }
-
-        let started = Instant::now();
-        let sent = self
+        let req = self
             .http
             .post(self.url.clone())
             .timeout(self.timeout)
             .header(reqwest::header::ACCEPT, "application/json")
-            .json(body)
-            .send()
-            .await;
-        let result = match sent {
-            Err(e) => Err(reqwest_error(e, &self.host, &scrub)),
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let retry_after = retry_after_ms(resp.headers());
-                match resp.text().await {
-                    Err(e) => Err(reqwest_error(e, &self.host, &scrub)),
-                    Ok(text) => classify_reply(status, retry_after, &text, &self.host, &scrub)
-                        .map(|r| (status, r)),
-                }
-            }
-        };
-        let ms = Some(started.elapsed().as_millis() as u64);
-        match result {
-            Ok((status, reply)) => {
-                let extra = reply_extra_weight(&info_type, &reply);
-                self.limiters.charge(RATE_LIMIT, budget, extra);
-                self.audit(&info_type, weight + extra, Ok(status), ms);
-                Ok(reply)
-            }
-            Err(err) => {
-                if err.class == ErrorClass::RateLimited {
-                    self.limiters
-                        .penalize(RATE_LIMIT, budget, err.retry_after_ms);
-                }
-                self.audit(&info_type, weight, Err(&err), ms);
-                Err(err.into())
-            }
-        }
+            .json(body);
+        let reply = GatedHttp::new(&self.scope, &scrub, self.audit_fields(&info_type))
+            .budget(Budget {
+                limiters: self.limiters,
+                name: RATE_LIMIT,
+                config: self.budget.as_ref(),
+                weight: request_weight(&info_type),
+                max_wait: self.max_budget_wait,
+            })
+            .send_weighted(
+                req,
+                |r| classify_reply(r.status, r.retry_after_ms, &r.body, &self.host, &scrub),
+                |reply| reply_extra_weight(&info_type, reply),
+            )
+            .await?;
+        Ok(reply)
     }
 
-    fn audit(
-        &self,
-        info_type: &str,
-        weight: u32,
-        outcome: std::result::Result<u16, &HttpError>,
-        ms: Option<u64>,
-    ) {
-        egress::policy().audit(self.audit_event(info_type, weight, outcome, ms));
-    }
-
-    /// The egress record of one request (module table: Audit) — the path
-    /// with a keyed segment `<redacted>` (review #15).
-    fn audit_event(
-        &self,
-        info_type: &str,
-        weight: u32,
-        outcome: std::result::Result<u16, &HttpError>,
-        ms: Option<u64>,
-    ) -> Value {
-        let mut event = json!({
+    /// This client's fields of the egress record (module table: Audit) — the
+    /// path with a keyed segment `<redacted>` (review #15).
+    fn audit_fields(&self, info_type: &str) -> Value {
+        json!({
             "tool": "hl_info",
             "info_type": info_type,
-            "host": self.host,
             "path": redacted_path(&self.url),
-            "weight": weight,
-            "ms": ms,
-        });
-        match outcome {
-            Ok(status) => {
-                event["verdict"] = "allowed".into();
-                event["status"] = status.into();
-            }
-            Err(e) => {
-                event["verdict"] = if ms.is_some() { "error" } else { "denied" }.into();
-                event["class"] = e.class.as_str().into();
-                event["reason"] = e.message.clone().into();
-                if let Some(s) = e.http_status {
-                    event["status"] = s.into();
-                }
-            }
-        }
-        event
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::http_class::read_error;
     use crate::adapters::outbound::http_class::test_support::{
         canned, local_scope, serve, test_client, Canned,
     };
+    use crate::adapters::outbound::http_class::{audit_record, read_error};
     use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
     use crate::domain::market::{decimal_field, InstrumentId};
     use crate::domain::observation::Field;
@@ -683,7 +604,7 @@ mod tests {
         let base = format!("https://hl.example.com/{key}");
         let hl = HlInfo::new(test_client(), &base, ToolScope::default(), None).unwrap();
         assert_eq!(hl.url.path(), format!("/{key}/info"));
-        let event = hl.audit_event("allMids", 2, Ok(200), Some(5));
+        let event = audit_record(hl.audit_fields("allMids"), Ok(200), Some(5), Some(2));
         assert_eq!(event["path"], "/<redacted>/info");
         assert!(!event.to_string().contains(key), "{event}");
         // A scope denial (nothing sent): the error, and its egress line.
@@ -699,10 +620,7 @@ mod tests {
         assert!(!alone.contains(key), "{alone}");
         // The public URL renders as before.
         let main = HlInfo::new(test_client(), MAINNET_URL, ToolScope::default(), None).unwrap();
-        assert_eq!(
-            main.audit_event("l2Book", 2, Ok(200), None)["path"],
-            "/info"
-        );
+        assert_eq!(main.audit_fields("l2Book")["path"], "/info");
         let text = "x https://api.hyperliquid.xyz/info y /info";
         assert_eq!(Scrubber::for_keyed_path(&main.url).scrub(text), text);
         // A malformed base is refused without echoing it.

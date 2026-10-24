@@ -425,6 +425,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # exec_reserve = 0                          # weight reads leave for order calls
 # [rate_limits.geckoterminal]               # GeckoTerminal pool OHLCV (`tengu history backfill --source gecko`): weight 1 per request
 # per_minute = 25                           # the free API allows ~30 calls / min
+# [rate_limits.solana_rpc]                  # Solana JSON-RPC (the Solana tools): weight 1 per request, ≤ 10 s wait
+# per_minute = 600                          # set it to your RPC plan (Helius free: 10 req / s)
 #
 # Hyperliquid tools (opt-in: list them in the agent's `tools`; args, keys,
 # weights: docs/typed-observations-2026-09-24.md § Hyperliquid tools). Each

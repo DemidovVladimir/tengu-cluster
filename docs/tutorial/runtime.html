@@ -320,7 +320,7 @@
     <div class="bands" id="b-bands" aria-label="Retry window per attempt"></div>
     <p class="note" id="b-feed"></p>
   </div>
-  <p class="note"><b>Budgets.</b> <code>[rate_limits.&lt;name&gt;]</code> is one token bucket per process (<code>per_minute</code>, <code>burst</code>, <code>exec_reserve</code>; xmarket: hyperliquid 600 / min). Reads leave the reserve for orders. A wait past the caller's limit is <code>rate_limited</code>, and nothing is sent. No section: unlimited.</p>
+  <p class="note"><b>Budgets.</b> <code>[rate_limits.&lt;name&gt;]</code> is one token bucket per process (<code>per_minute</code>, <code>burst</code>, <code>exec_reserve</code>; xmarket: hyperliquid 600 / min). Reads leave the reserve for orders. A wait past the caller's limit is <code>rate_limited</code>, and nothing is sent. No section: unlimited. Names read: <code>hyperliquid</code>, <code>geckoterminal</code>, <code>sec</code>, <code>ted</code>, <code>solana_rpc</code> (or a source row's own).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-cal">
@@ -417,7 +417,7 @@
         <tr><td><code>src/config/runtime.rs</code> · <code>feeds.rs</code> · <code>rate_limits.rs</code></td><td><code>[runtime]</code>, <code>[feeds.*]</code>, <code>[rate_limits.*]</code></td></tr>
         <tr><td><code>src/adapters/outbound/runtime_store.rs</code></td><td><code>runtime.db</code> leases, atomic heartbeat file</td></tr>
         <tr><td><code>src/adapters/outbound/sqlite.rs</code></td><td>every state db (<code>runtime.db</code>, <code>ledger.db</code>, <code>market.db</code>, …): mode 0600 with its WAL, busy timeout, one shared connection</td></tr>
-        <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes, system clock</td></tr>
+        <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes + the shared request pipeline (<code>GatedHttp</code>), system clock</td></tr>
         <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store, <code>RuntimeJob</code> (a job feed's run), <code>Ownership</code> (<code>ensure</code> before a write, <code>lost</code> to race a wait; <code>LeaseLost</code>, <code>Unleased</code>) and clock ports (<code>SimClock</code> for replay)</td></tr>
       </tbody>
     </table>

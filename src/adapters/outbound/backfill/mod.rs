@@ -2,8 +2,9 @@
 //! from public history and local files (xlab, `docs/xlab-2026-10-01.md` § 1,
 //! § 4, § 10). Network fetchers send every request through the egress policy
 //! (tool client, `check_url` = `[egress] allow_hosts`, audit line) and a
-//! `[rate_limits.<name>]` budget; a 429 / 5xx / timeout is retried per
-//! [`Retry`] (`domain::backoff::next_delay`, `Retry-After` respected). Rows go
+//! `[rate_limits.<name>]` budget (`http_class::GatedHttp`); a 429 / 5xx /
+//! timeout is retried per `http_class::Retry` (`domain::backoff::next_delay`,
+//! `Retry-After` respected). Rows go
 //! through the pure decoders of `domain/marketdata_decode.rs` (SEC:
 //! `domain/sec.rs`). Each run returns a [`BackfillReport`] (full ids).
 //!
@@ -27,88 +28,14 @@ pub(crate) mod hl_archive;
 pub(crate) mod json;
 pub(crate) mod sec;
 
-use std::future::Future;
-use std::time::Duration;
-
 use anyhow::Result;
 use serde::Serialize;
 
 use crate::adapters::outbound::http_class::read_error;
-use crate::adapters::outbound::rate_limit::jitter01;
-use crate::domain::backoff::{next_delay, BackoffPolicy, Delay};
 use crate::domain::marketdata::Interval;
 use crate::domain::observation::ErrorClass;
 use crate::domain::time::fmt_time;
 use crate::ports::market_data::MarketDataStore;
-
-/// Retry of one backfill request (module doc).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Retry {
-    pub policy: BackoffPolicy,
-    /// A `Park` (quota, a long `Retry-After`) up to this long is waited out;
-    /// longer fails the request.
-    pub max_park_ms: u64,
-}
-
-impl Retry {
-    /// Operator backfills: 5 retries, 1 s … 60 s full jitter, parks ≤ 5 min.
-    pub(crate) const BACKFILL: Retry = Retry {
-        policy: BackoffPolicy {
-            base_ms: 2_000,
-            cap_ms: 60_000,
-            min_ms: 1_000,
-            max_attempts: 5,
-            quota_park_ms: 3_600_000,
-        },
-        max_park_ms: 300_000,
-    };
-
-    /// A tool call's backfill (`market_history` `fetch`): a model waits for
-    /// it — 2 retries, 250 ms … 5 s, parks ≤ 10 s.
-    pub(crate) const TOOL: Retry = Retry {
-        policy: BackoffPolicy {
-            base_ms: 500,
-            cap_ms: 5_000,
-            min_ms: 250,
-            max_attempts: 2,
-            quota_park_ms: 3_600_000,
-        },
-        max_park_ms: 10_000,
-    };
-
-    /// `call` until it succeeds or `next_delay` stops (the error is then
-    /// returned). `what` labels the log line.
-    pub(crate) async fn run<T, F, Fut>(&self, what: &str, mut call: F) -> Result<T>
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = Result<T>>,
-    {
-        let mut attempt = 0u32;
-        loop {
-            let err = match call().await {
-                Ok(v) => return Ok(v),
-                Err(e) => e,
-            };
-            attempt += 1;
-            let r = read_error(what, &err);
-            let wait =
-                match next_delay(r.class, attempt, r.retry_after_ms, &self.policy, jitter01()) {
-                    Delay::Retry(ms) => ms,
-                    Delay::Park(ms) if ms <= self.max_park_ms => ms,
-                    Delay::Park(_) | Delay::Stop => return Err(err),
-                };
-            tracing::warn!(
-                what,
-                class = r.class.as_str(),
-                attempt,
-                wait_ms = wait,
-                error = %r.message,
-                "backfill request failed; retrying"
-            );
-            tokio::time::sleep(Duration::from_millis(wait)).await;
-        }
-    }
-}
 
 /// What one run wrote for one instrument and kind.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -384,25 +311,7 @@ pub(crate) fn grid_ceil(t: i64, step: i64) -> i64 {
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-
-    /// No real waits: 1 – 10 ms between attempts.
-    pub(crate) const FAST: Retry = Retry {
-        policy: BackoffPolicy {
-            base_ms: 1,
-            cap_ms: 10,
-            min_ms: 1,
-            max_attempts: 3,
-            quota_park_ms: 10,
-        },
-        max_park_ms: 10,
-    };
-}
-
-#[cfg(test)]
 mod tests {
-    use super::test_support::FAST;
     use super::*;
     use crate::adapters::outbound::http_class::HttpError;
     use crate::domain::observation::ErrorClass;
@@ -455,69 +364,6 @@ mod tests {
             (H, 2 * H, H)
         );
         assert_eq!(grid_floor(-1, H), -H);
-    }
-
-    #[tokio::test]
-    async fn retry_retries_transient_and_stops_on_fatal() {
-        let calls = std::sync::atomic::AtomicU32::new(0);
-        let got = FAST
-            .run("t", || {
-                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                async move {
-                    if n < 2 {
-                        Err(HttpError::new(ErrorClass::Transient, "502").into())
-                    } else {
-                        Ok(n)
-                    }
-                }
-            })
-            .await
-            .unwrap();
-        assert_eq!(got, 2);
-
-        let calls = std::sync::atomic::AtomicU32::new(0);
-        let e = FAST
-            .run("t", || {
-                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                async { Err::<(), _>(HttpError::new(ErrorClass::Fatal, "404").into()) }
-            })
-            .await
-            .unwrap_err();
-        assert!(e.to_string().contains("404"));
-        assert_eq!(
-            calls.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "no retry"
-        );
-
-        // Retries run out: the last error is returned.
-        let calls = std::sync::atomic::AtomicU32::new(0);
-        assert!(FAST
-            .run("t", || {
-                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                async { Err::<(), _>(HttpError::new(ErrorClass::Timeout, "slow").into()) }
-            })
-            .await
-            .is_err());
-        assert_eq!(
-            calls.load(std::sync::atomic::Ordering::SeqCst),
-            4,
-            "1 + 3 retries"
-        );
-
-        // A Retry-After beyond the park limit is not waited out.
-        let mut slow = HttpError::new(ErrorClass::RateLimited, "429");
-        slow.retry_after_ms = Some(60_000);
-        let calls = std::sync::atomic::AtomicU32::new(0);
-        assert!(FAST
-            .run("t", || {
-                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let e = slow.clone();
-                async move { Err::<(), _>(e.into()) }
-            })
-            .await
-            .is_err());
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

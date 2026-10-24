@@ -418,6 +418,7 @@
     <div><b>other 4xx · egress or scope denial</b><i>fatal</i>nothing was sent for a denial</div>
   </div>
   <p class="note">Error text never carries a secret: an RPC URL renders as its host, and values of <code>key</code>, <code>token</code>, <code>secret</code>, <code>auth</code>, <code>sig</code>, <code>password</code> query params become <code>&lt;redacted&gt;</code>. Bodies are quoted to 160 chars.</p>
+  <p class="note"><b>One pipeline.</b> Hyperliquid, SEC, GeckoTerminal, TED, Solana RPC, the Solana JSON fetches and the Privy signer send through <code>GatedHttp</code>: gate on the request's own URL, then the <code>[rate_limits.*]</code> budget, the seal session for a proxy URL, the send, the client's decoder, one audit line. Backfills and source fetches retry with <code>Retry</code> from the same file.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-out">
@@ -491,7 +492,7 @@
         <tr><td><code>src/adapters/outbound/egress.rs</code></td><td>the policy: <code>install</code>, <code>check_url</code>, client builders, shell guard, audit, <code>TENGU_EGRESS</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/http/request.rs</code></td><td>per-hop gate, redirects, the <code>http_request</code> audit record</td></tr>
         <tr><td><code>src/adapters/outbound/a2a/mod.rs</code></td><td>A2A remotes: <code>peer_client</code> (proxied, loopback direct, no redirects), gate per request, <code>tool = "a2a"</code> audit (<a href="a2a.html">A2A</a>)</td></tr>
-        <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing</td></tr>
+        <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing, <code>GatedHttp</code> (gate → budget → seal session → send → decode → audit), <code>Retry</code></td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td>installs the sandbox's policy, warns on a dead proxy</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>hands <code>TENGU_EGRESS</code> to <code>run-agent</code></td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI <code>HTTPS_PROXY</code>, bridge <code>TENGU_EGRESS</code> (<code>engines/codex.rs</code> the same for Codex)</td></tr>
