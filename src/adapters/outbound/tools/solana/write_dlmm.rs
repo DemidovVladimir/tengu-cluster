@@ -960,7 +960,7 @@ mod tests {
             Some(p) => (operator, *p),
             None => {
                 let filters = vec![
-                    json!({"memcmp": {"offset": 0, "bytes": crate::domain::solana::bs58_encode(&crate::domain::lp::dlmm::POSITION_V2_DISC)}}),
+                    json!({"memcmp": {"offset": 0, "bytes": crate::domain::base58::bs58_encode(&crate::domain::lp::dlmm::POSITION_V2_DISC)}}),
                     json!({"memcmp": {"offset": 8, "bytes": pool.to_string()}}),
                 ];
                 let (_, any) = rpc

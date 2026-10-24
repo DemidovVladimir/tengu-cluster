@@ -7,6 +7,7 @@
 pub(crate) mod a2a;
 pub(crate) mod backoff;
 pub(crate) mod backtest;
+pub(crate) mod base58;
 pub(crate) mod blueprint;
 pub(crate) mod book;
 pub(crate) mod calendar;

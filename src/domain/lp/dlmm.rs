@@ -40,11 +40,12 @@ use super::gates::{
     bin_array_indexes, dlmm_fee_rates, dynamic_volatility_accumulator, price_from_bin,
     token_percentages, DlmmFeeParams, VolatilityState, MAX_BIN_PER_ARRAY,
 };
+use crate::domain::base58::bs58_encode;
 use crate::domain::observation::{
     set_bool, set_int, set_num, set_str, ErrorClass, Features, Field, ObsStatus, Observed,
     ReadError,
 };
-use crate::domain::solana::{bs58_encode, ids, AccountSet, AccountState, Pubkey};
+use crate::domain::solana::{ids, AccountSet, AccountState, Pubkey};
 
 // ---------------------------------------------------------------------------
 // Layout constants

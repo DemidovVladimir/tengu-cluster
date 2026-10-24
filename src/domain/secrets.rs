@@ -110,7 +110,7 @@ fn is_chain_id(v: &str) -> bool {
         return h.len() == 64 && is_hex(h);
     }
     (32..=88).contains(&v.len())
-        && crate::domain::solana::bs58_decode(v).is_ok_and(|b| b.len() == 32 || b.len() == 64)
+        && crate::domain::base58::bs58_decode(v).is_ok_and(|b| b.len() == 32 || b.len() == 64)
 }
 
 /// Registry of secret values that must never appear in tool output,
