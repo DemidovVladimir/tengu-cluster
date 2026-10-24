@@ -124,7 +124,7 @@ pub fn state_dir(
     xm_state_dir
         .or(sources_state_dir)
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| tengu_home.join("state"))
+        .unwrap_or_else(|| super::paths::Layout::at(tengu_home).state())
 }
 
 /// The `tengu run` lease (`outbound/runtime_store.rs`).

@@ -142,7 +142,7 @@ impl Common {
 fn state_root(config: Option<&Config>) -> Result<PathBuf> {
     let home = resolve_tengu_home();
     match config {
-        None => Ok(home.join("state").join(SOE_STATE)),
+        None => Ok(crate::config::paths::Layout::at(&home).state_dir(SOE_STATE)),
         Some(c) => c
             .sources
             .as_ref()

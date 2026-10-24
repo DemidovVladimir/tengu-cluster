@@ -34,7 +34,9 @@ pub(crate) struct RunDirs {
 
 impl RunDirs {
     fn backtests(&self, state: &str) -> PathBuf {
-        self.tengu_home.join("state").join(state).join("backtests")
+        crate::config::paths::Layout::at(&self.tengu_home)
+            .state_dir(state)
+            .join("backtests")
     }
 }
 

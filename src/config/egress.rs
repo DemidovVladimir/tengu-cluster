@@ -126,6 +126,15 @@ impl EgressConfig {
         cfg
     }
 
+    /// The JSONL audit file: `audit_log` (`~` expanded), else `layout`'s
+    /// `logs/egress.jsonl`; `None` with `audit = false`.
+    pub(crate) fn audit_file(&self, layout: &super::paths::Layout) -> Option<PathBuf> {
+        self.audit.then(|| match &self.audit_log {
+            Some(p) => super::paths::expand_tilde(p),
+            None => layout.egress_log(),
+        })
+    }
+
     pub(crate) fn validation_errors(&self) -> Vec<String> {
         let this = self.resolved();
         let mut errors = Vec::new();

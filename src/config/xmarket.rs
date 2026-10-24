@@ -150,7 +150,7 @@ fn default_state() -> String {
 impl XmarketConfig {
     /// `<tengu_home>/state/<state>`.
     pub fn state_dir(&self, tengu_home: &Path) -> PathBuf {
-        tengu_home.join("state").join(&self.state)
+        super::paths::Layout::at(tengu_home).state_dir(&self.state)
     }
 
     /// `<tengu_home>/state/<state>/history` — the recorder's day files.

@@ -9,6 +9,7 @@ mod evidence;
 mod history;
 mod keys;
 mod lineage;
+mod paths;
 mod ranking;
 mod risk;
 mod run_agent;
@@ -160,6 +161,18 @@ enum Commands {
     Sandbox {
         #[command(subcommand)]
         action: sandbox::SandboxAction,
+    },
+    /// Where a sandbox reads and writes: TENGU_HOME and where it came from
+    /// (exported · a .env file · default), the config, state dirs, logs,
+    /// skills, memory and each workspace's harness files, with sizes.
+    /// Read-only; no secrets, egress or [keys] session.
+    Paths {
+        /// Load sandboxes/<name>/config.toml instead of the base config
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// One JSON array of {group, name, path, bytes} (null = missing)
+        #[arg(long)]
+        json: bool,
     },
     /// Read the execution trace `tengu run` / `tengu decide` recorded under
     /// <TENGU_HOME>/logs/trace/<sandbox>/: `runs`, `show --run <id>
@@ -492,7 +505,7 @@ fn init_logging(sink: LogSink, default: &str) {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
     let file = match sink {
         LogSink::File | LogSink::FileAndStderr => {
-            let path = resolve_tengu_home().join("logs").join("tengu.log");
+            let path = crate::config::paths::Layout::current().tengu_log();
             let opened = path
                 .parent()
                 .map_or(Ok(()), std::fs::create_dir_all)
@@ -545,7 +558,7 @@ fn init_logging(sink: LogSink, default: &str) {
 pub(crate) async fn run() -> Result<()> {
     // Load .env first (highest priority after shell env), then parse CLI so we can
     // special-case subprocess modes that must keep stdout protocol-clean.
-    dotenvy::dotenv().ok();
+    crate::config::paths::load_dotenv();
     let mut cli = Cli::parse();
 
     if let Some(Commands::Sandbox { .. }) = cli.command {
@@ -619,6 +632,12 @@ pub(crate) async fn run() -> Result<()> {
         // carries the report.
         init_logging(LogSink::Stderr, "tengu=info");
         return soe::run_soe(args, cli.config).await;
+    }
+
+    if let Some(Commands::Paths { sandbox, json }) = cli.command {
+        // Config only — no secrets, egress or [keys]; stdout carries the list.
+        init_logging(LogSink::Stderr, "tengu=warn");
+        return paths::run_paths(cli.config, sandbox, json);
     }
 
     if let Some(Commands::Trace { sandbox, action }) = cli.command {
@@ -962,6 +981,9 @@ pub(crate) async fn run() -> Result<()> {
         }
         Commands::Evidence { .. } => {
             unreachable!("Commands::Evidence is dispatched earlier in main()")
+        }
+        Commands::Paths { .. } => {
+            unreachable!("Commands::Paths is dispatched earlier in run()")
         }
         Commands::Trace { .. } => {
             unreachable!("Commands::Trace is dispatched earlier in run()")

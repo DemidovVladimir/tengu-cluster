@@ -46,7 +46,7 @@ const TAIL_BYTES: u64 = 64 * 1024;
 
 /// `<home>/logs/trace`.
 pub(crate) fn trace_root(home: &Path) -> PathBuf {
-    home.join("logs").join("trace")
+    crate::config::paths::Layout::at(home).trace()
 }
 
 /// A sandbox name as a directory: the one name rule

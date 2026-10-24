@@ -70,9 +70,6 @@ use crate::ports::paper::{
     StoredDecision, StoredOrder, ACCOUNT_OWNER_MISMATCH,
 };
 
-/// The verdict mirror, under `<TENGU_HOME>/logs/`.
-pub(crate) const RISK_LOG_FILE: &str = "risk.jsonl";
-
 /// The gate's order-rate window.
 const ORDER_RATE_WINDOW_MS: i64 = 60_000;
 
@@ -159,9 +156,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
 
 /// `<TENGU_HOME>/logs/risk.jsonl`.
 pub(crate) fn risk_log_path() -> PathBuf {
-    crate::config::paths::resolve_tengu_home()
-        .join("logs")
-        .join(RISK_LOG_FILE)
+    crate::config::paths::Layout::current().risk_log()
 }
 
 /// The sandbox's ledger (`[xmarket]` state dir), mirroring its verdicts to
@@ -2744,7 +2739,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn every_verdict_row_is_mirrored_once() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("logs").join(RISK_LOG_FILE);
+        let log = crate::config::paths::Layout::at(dir.path()).risk_log();
         let l = ledger(dir.path()).await.with_audit(log.clone());
         let nvda = buy("o-nvda", ACCOUNT, NVDA);
         l.place(req(&nvda, NOW), gate(&nvda, limits(), None))
@@ -2806,7 +2801,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_writers_never_tear_audit_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("logs").join(RISK_LOG_FILE);
+        let log = crate::config::paths::Layout::at(dir.path()).risk_log();
         ledger(dir.path()).await;
         let writers: Vec<_> = (0..4)
             .map(|w| {

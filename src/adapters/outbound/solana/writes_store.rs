@@ -40,15 +40,18 @@ pub(crate) struct SqliteWriteStore {
     conn: SharedConn,
 }
 
+/// The store's file under its dir.
+pub(crate) const WRITES_DB: &str = "solana-writes.db";
+
 impl SqliteWriteStore {
     /// `<TENGU_HOME>/state`.
     pub(crate) fn default_dir() -> PathBuf {
-        crate::config::paths::resolve_tengu_home().join("state")
+        crate::config::paths::Layout::current().state()
     }
 
     /// Open (creating) `<dir>/solana-writes.db`.
     pub(crate) fn open(dir: &Path) -> Result<Self> {
-        let conn = open_wal(&dir.join("solana-writes.db"), Durability::Full)?;
+        let conn = open_wal(&dir.join(WRITES_DB), Durability::Full)?;
         conn.execute_batch(SCHEMA_SQL)?;
         Ok(Self {
             conn: SharedConn::new(conn, "solana write store"),

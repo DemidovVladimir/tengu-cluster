@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::config::paths::Layout;
 use crate::domain::canonical::sha256_hex;
 use crate::domain::evidence::{tree_hash, EvidenceRecord, ItemKind, ManifestEntry};
 use crate::domain::lineage::value::Locator;
@@ -102,14 +103,11 @@ fn manifest_entries(vault: &Path) -> Vec<ManifestEntry> {
 
 impl FsResolver {
     fn state_dir(&self, state: &str) -> PathBuf {
-        self.tengu_home.join("state").join(state)
+        Layout::at(&self.tengu_home).state_dir(state)
     }
 
     fn vault_dir(&self, snapshot: &str) -> PathBuf {
-        self.tengu_home
-            .join("state")
-            .join("evidence")
-            .join(snapshot)
+        Layout::at(&self.tengu_home).vault(snapshot)
     }
 
     fn present(path: PathBuf, recorded: Option<String>, mutable: bool) -> Resolution {

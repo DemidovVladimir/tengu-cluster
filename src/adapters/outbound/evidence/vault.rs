@@ -34,7 +34,7 @@ pub(crate) struct FsVault {
 impl FsVault {
     /// `<tengu_home>/state/evidence/<vault>`.
     pub(crate) fn new(tengu_home: &Path, vault: &str) -> Self {
-        Self::at(tengu_home.join("state").join("evidence").join(vault))
+        Self::at(crate::config::paths::Layout::at(tengu_home).vault(vault))
     }
 
     pub(crate) fn at(root: PathBuf) -> Self {

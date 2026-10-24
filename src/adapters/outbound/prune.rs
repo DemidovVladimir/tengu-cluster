@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::adapters::outbound::trace_store::{check_sandbox_name, trace_root};
+use crate::config::paths::Layout;
 
 /// A single item that can be pruned.
 pub struct PruneTarget {
@@ -55,7 +56,7 @@ pub struct PruneOptions<'a> {
 /// in it — compared as written and, when both exist, with symlinks resolved.
 fn touches_state(path: &Path, tengu_home: &Path) -> bool {
     let hits = |p: &Path, state: &Path| state.starts_with(p) || p.starts_with(state);
-    let state = tengu_home.join("state");
+    let state = Layout::at(tengu_home).state();
     hits(path, &state)
         || matches!(
             (std::fs::canonicalize(path), std::fs::canonicalize(&state)),
@@ -80,12 +81,13 @@ pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
         });
     };
 
-    let shared_memory = opts.tengu_home.join("memory");
+    let home = Layout::at(opts.tengu_home);
+    let shared_memory = home.memory();
     match opts.sandbox {
         None => {
             push(shared_memory, "global memory vectors".to_string());
             push(
-                opts.tengu_home.join("logs"),
+                home.logs(),
                 "log files, audit logs and every sandbox's traces".to_string(),
             );
         }

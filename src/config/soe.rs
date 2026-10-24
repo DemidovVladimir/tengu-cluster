@@ -76,9 +76,8 @@ pub const PROFILE_FILE: &str = "operator.toml";
 
 /// Module table.
 pub fn default_profile_path() -> PathBuf {
-    paths::resolve_tengu_home()
-        .join("state")
-        .join(SOE_STATE)
+    paths::Layout::current()
+        .state_dir(SOE_STATE)
         .join(PROFILE_FILE)
 }
 

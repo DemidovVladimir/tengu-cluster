@@ -158,7 +158,7 @@ pub struct SourceEntry {
 impl SourcesConfig {
     /// `<tengu_home>/state/<state>`.
     pub fn state_dir(&self, tengu_home: &Path) -> PathBuf {
-        tengu_home.join("state").join(&self.state)
+        super::paths::Layout::at(tengu_home).state_dir(&self.state)
     }
 
     /// The as-of view's policy of every row, enabled or not (records of a

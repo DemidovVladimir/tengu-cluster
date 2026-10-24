@@ -56,13 +56,13 @@ pub(crate) fn audit_path() -> PathBuf {
 
 /// `<home>/logs/decisions.jsonl`.
 pub(crate) fn audit_file(home: &Path) -> PathBuf {
-    home.join("logs").join("decisions.jsonl")
+    crate::config::paths::Layout::at(home).decisions_log()
 }
 
 /// `<home>/logs/maps/` — the execution maps `tengu decide --map` ran, as
 /// `<sha256>.json` (canonical JSON), by the identity their audit lines carry.
 pub(crate) fn maps_dir(home: &Path) -> PathBuf {
-    home.join("logs").join("maps")
+    crate::config::paths::Layout::at(home).maps()
 }
 
 /// Tool executor of `agent` for a decision loop or a `[feeds]` feed: the

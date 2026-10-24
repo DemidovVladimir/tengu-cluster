@@ -212,7 +212,7 @@ fn protected_paths(cfg: &Config, tengu_home: &Path) -> Vec<Protected> {
     let mut out = Vec::new();
     out.push(Protected::dir(
         "<TENGU_HOME>/state",
-        &tengu_home.join("state"),
+        &super::paths::Layout::at(tengu_home).state(),
     ));
     if let Some(r) = &cfg.risk {
         let kill = expand_tilde(&r.kill_switch_file);

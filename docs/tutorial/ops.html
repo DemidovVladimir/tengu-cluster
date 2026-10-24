@@ -248,7 +248,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: <code>tengu prune</code></span>
     <h2 id="s-prune">What prune removes, and what it never touches</h2>
-    <p>The plan is printed first and needs <code>y</code> unless <code>--yes</code>. Workspaces come from the sandbox's <code>[agents.*] workspace</code> lines.</p>
+    <p>The plan is printed first and needs <code>y</code> unless <code>--yes</code>. Workspaces come from the sandbox's <code>[agents.*] workspace</code> lines. To see every path a sandbox reads and writes first, with sizes, run <code>tengu paths --sandbox &lt;s&gt;</code>: it also says where <code>TENGU_HOME</code> came from (exported, a <code>.env</code> file, or the default <code>~/.tengu</code>).</p>
   </div>
   <div class="widget">
     <div class="ctrls">
@@ -439,6 +439,7 @@ ufw: allow 22/tcp and 7080/tcp
         <tr><td><code>src/domain/engine_smoke.rs</code></td><td>the smoke prompt, tools, round cap and verdict</td></tr>
         <tr><td><code>src/domain/runtime.rs</code></td><td><code>live_verdict</code>: heartbeat, loops, feeds</td></tr>
         <tr><td><code>src/config/runtime.rs</code></td><td><code>heartbeat_stale_secs</code> and the other <code>[runtime]</code> knobs</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/paths.rs</code></td><td><code>tengu paths</code>: the home and its source, state dirs, logs, skills, memory, each workspace's harness files, with sizes; read-only</td></tr>
         <tr><td><code>src/adapters/outbound/prune.rs</code></td><td>prune plan: targets, <code>--hard</code>, the state-dir guard</td></tr>
         <tr><td><code>Dockerfile</code></td><td>the tengu image (<code>skills/</code>, <code>sandboxes/</code>, <code>lineage/</code>), its HEALTHCHECK and CMD; the build copies <code>web/</code> for the default feature <code>studio</code></td></tr>
         <tr><td><code>docker-compose.yml</code></td><td>tengu + optional Postgres / pgvector; the config mount at <code>TENGU_CONTAINER_CONFIG</code></td></tr>

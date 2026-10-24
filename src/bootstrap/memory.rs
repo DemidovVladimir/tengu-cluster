@@ -22,11 +22,11 @@ pub(crate) fn resolve_memory_store_path(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> std::path::PathBuf {
-    use crate::config::paths::{expand_tilde, resolve_tengu_home};
+    use crate::config::paths::{expand_tilde, Layout};
     match (workspace, memory_config.store_path.as_deref()) {
         (Some(ws), _) => ws.join("memory"),
         (None, Some(path)) => expand_tilde(Path::new(path)),
-        (None, None) => resolve_tengu_home().join("memory"),
+        (None, None) => Layout::current().memory(),
     }
 }
 
