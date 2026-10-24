@@ -1248,6 +1248,17 @@ async fn replay_equals_live_sequence() {
     assert_eq!(b["header"]["model"]["value"], json!(MODEL));
     assert_eq!(b["header"]["loops"]["demo"]["value"]["completed"], json!(3));
     assert_eq!(all["run"]["state"], json!("closed"));
+    // The header's figures (`domain::trace_stats`), up to the same `seq`.
+    let st = &all["stats"];
+    assert_eq!(st["events"], b["events"]);
+    assert_eq!(st["failed"], json!(0));
+    assert!(
+        st["tools"]["tool:lab/write_file"]["count"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+    assert!(st["jev"]["calls"].as_u64().unwrap() >= 3, "{st}");
     let tone = |id: &str| {
         b["nodes"]
             .as_array()
@@ -1268,6 +1279,7 @@ async fn replay_equals_live_sequence() {
         .as_u64()
         .unwrap();
     let (_, mid) = s.json(&format!("/api/v1/runs/{id}/board?upto={sel}")).await;
+    assert_eq!(mid["stats"]["events"], mid["board"]["events"]);
     let mid_tone = mid["board"]["nodes"]
         .as_array()
         .unwrap()

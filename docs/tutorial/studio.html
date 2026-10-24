@@ -366,7 +366,7 @@
     <table>
       <thead><tr><th>Region</th><th>Shows</th><th>From</th></tr></thead>
       <tbody>
-        <tr><td>Header</td><td>sandbox, config hash, runtime state, run id, runtime id, model, Live / Replay, health; a <code>config changed</code> badge for a run of another config</td><td><code>meta</code>, the board's header, <code>health</code></td></tr>
+        <tr><td>Header</td><td>sandbox, config hash, runtime state, run id, runtime id, model, Live / Replay, health; a <code>config changed</code> badge for a run of another config; the run's figures up to the shown <code>seq</code>: events, failures, count · error rate · p50 / p95 / max ms per kind family, tokens, Jev calls / tokens / cost</td><td><code>meta</code>, the board's header and <code>stats</code> (<code>domain::trace_stats</code>), <code>health</code></td></tr>
         <tr><td>Graph</td><td>nodes in the Rust columns and order; each node's colour = its latest event's tone; grey = not in the step's legal set; a lit edge only from an <code>action.*</code> or <code>tool.*</code> event; a thick outline = the latest event</td><td><code>graph</code> + <code>board</code></td></tr>
         <tr><td>Inspector</td><td>a node: the validated config section, its edges, evidence files and its events. An event: answers with probabilities, args, the redacted result, duration, call id, decision id, the full payload</td><td><code>nodes/&lt;id&gt;</code>, the event list</td></tr>
         <tr><td>Timeline</td><td>every event in <code>seq</code> order; filters: session, loop, agent, model, tool, status, call id</td><td><code>events</code> (each event's <code>view</code> carries loop, agent, tool, model)</td></tr>

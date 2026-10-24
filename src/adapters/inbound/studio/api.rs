@@ -308,7 +308,8 @@ pub(super) struct BoardQuery {
 /// `/api/v1/runs/:run_id/board?upto=<seq>`: the run folded over its graph
 /// up to `seq` (all when absent) — node colours, highlighted edges, grey
 /// legal sets, header facts (`application::studio::board`) — plus the run's
-/// state and trace file.
+/// state, trace file and figures up to `seq` (`domain::trace_stats`: counts,
+/// error rates, latency, tokens, Jev cost).
 pub(super) async fn board(
     State(st): St,
     Path(run_id): Path<String>,
@@ -328,6 +329,10 @@ pub(super) async fn board(
     let state = RunState::of(&summary, holders.then_some(summary.run_id.as_str()));
     let rg = st.ctx.run_graph(&evs);
     let (_, board) = fold_run(&rg.graph, &evs, q.upto);
+    let upto = q
+        .upto
+        .map_or(evs.len(), |u| evs.partition_point(|e| e.seq <= u));
+    let stats = crate::domain::trace_stats::fold_stats(&evs[..upto]);
     let current = st.ctx.graph.config_hash.clone();
     Json(json!({
         "run_id": run_id,
@@ -340,6 +345,7 @@ pub(super) async fn board(
         },
         "graph": {"map": rg.map, "note": rg.note},
         "board": board,
+        "stats": stats,
     }))
     .into_response()
 }

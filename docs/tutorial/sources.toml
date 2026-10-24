@@ -410,6 +410,7 @@ sources = [
 [pages.trace]
 sources = [
   "src/domain/trace.rs",
+  "src/domain/trace_stats.rs",
   "src/ports/trace.rs",
   "src/adapters/outbound/trace_store.rs",
   "src/bootstrap/trace.rs",

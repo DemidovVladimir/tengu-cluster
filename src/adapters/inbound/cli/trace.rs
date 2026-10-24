@@ -7,6 +7,7 @@
 //! |---|---|
 //! | `tengu trace runs --sandbox <s>` | one `RunSummary` per run, oldest first (`run_id`, `kind`, `runtime_id`, `config_hash`, first / last ms, events, last kind / status) |
 //! | `tengu trace show --sandbox <s> --run <run_id> [--after <seq>] [--follow]` | the run's events with `seq > after`, in `seq` order; `--follow` keeps printing new ones until Ctrl-C (resume later with `--after <last seq>`) |
+//! | `tengu trace stats --sandbox <s> --run <run_id>` | one `RunStats` (`domain::trace_stats`): counts, error rates, p50 / p95 / max latency by kind family and by tool, tokens by agent, Jev calls / tokens / cost — the Studio board's header figures |
 
 use std::io::Write;
 
@@ -31,6 +32,12 @@ pub(super) enum TraceAction {
         #[arg(long)]
         follow: bool,
     },
+    /// One run's figures: counts, error rates, latency, tokens, Jev cost (JSON).
+    Stats {
+        /// Run id, as `tengu trace runs` prints it.
+        #[arg(long)]
+        run: String,
+    },
 }
 
 pub(super) async fn run_trace(sandbox: Option<String>, action: TraceAction) -> Result<()> {
@@ -54,6 +61,10 @@ pub(super) async fn run_trace(sandbox: Option<String>, action: TraceAction) -> R
             for ev in reader.events(&run, after, usize::MAX)? {
                 writeln!(out, "{}", serde_json::to_string(&ev)?)?;
             }
+        }
+        TraceAction::Stats { run } => {
+            let stats = crate::domain::trace_stats::fold_stats(&reader.run_events(&run)?);
+            writeln!(out, "{}", serde_json::to_string(&stats)?)?;
         }
     }
     Ok(())

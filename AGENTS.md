@@ -49,7 +49,7 @@ messages into a TUI / Telegram chat. The harness:
 | `tengu run --sandbox <s>` | long-running: `[feeds.*]`, `[decision_loops.*]` (Jev picks the action, tools execute), lease, heartbeat, `doctor --live` | `docs/runtime-2026-09-30.md` |
 | `tengu studio --sandbox <s>` · `sandboxes/control-loop-lab` | local browser UI (default build, loopback only): the validated graph, live + replayed runs, health; Play / Stop only where `[studio] control` allows it (the lab; never `[generation]`-bound / hardened). The lab = a safe Jev loop to watch | `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` |
 | `tengu sandbox new` · `tengu studio --sandbox <s> --allow-edit` | drag-and-drop sandbox builder (n8n-style): asks a name, writes `sandboxes/<name>/` from a template, opens a canvas of agents / tools / skills / workspaces / secrets / channels; Rust compiles the wires (green = live), Finalise writes `config.toml` after `Config::load` accepts it (shows the warnings + diff first); the sandbox name (`[a-z0-9][a-z0-9_-]`, ≤ 40) is checked at the CLI, Studio and store, a link out of `sandboxes/` is refused, a current `config.toml` that does not parse is view-only; `tengu sandbox compile\|finalise\|palette` without a browser | `docs/studio-builder-2026-10-10.md` |
-| `tengu trace runs\|show --sandbox <s>` | the execution trace `tengu run` / `tengu decide` / `tengu webhooks` / Studio record (+ chat / telegram / eval plans with `[orchestrator]`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, read-only, every build | `docs/runtime-2026-09-30.md` § Trace |
+| `tengu trace runs\|show\|stats --sandbox <s>` | the execution trace `tengu run` / `tengu decide` / `tengu webhooks` / Studio record (+ chat / telegram / eval plans with `[orchestrator]`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, read-only, every build | `docs/runtime-2026-09-30.md` § Trace |
 | `sandboxes/xmarket` | paper trading desk: every order tool runs the `[risk]` gate inside it ($100 budget) | `docs/xmarket-tracker-2026-09-29.md` § 0 |
 | `sandboxes/xlab` | research on backfilled history: `tengu history`, `tengu backtest`, Jev replayed | `docs/xlab-2026-10-01.md` |
 | `sandboxes/xlab-w2` · `tengu ranking run\|show` | W2 research (unbound) + scheduled strategy ranking: sealed `lineage/rankings/` contracts, deterministic ranker, no LLM — both contracts unsealed (G-SR1) | `docs/strategy-ranking-automation-2026-10-08.md` |
@@ -1004,7 +1004,9 @@ These are not preferences. They're load-bearing.
   `step.started` (one writer per file), plus the metrics when no IPC reply came. The process owns every planner turn it starts (webhook endpoint, loop escalation: `runtime::loops::Turns` in `LoopDispatch`): shutdown drains them with the loop events (≤ `shutdown_grace_secs`, then aborted, `plan.completed` status dropped; a new one 503) and awaits `Orchestrator::flush_metrics` before the lease release and `run.closed` / `runtime.stopped`; eval closes a row the same way (no sleep).
   `decisions.jsonl` lines carry the recording's `runtime_id` / `run_id`. `tengu
   trace runs` · `show --run <id> [--after <seq>] [--follow]` read it in every
-  build, no config (`--sandbox default` for a `-c` config); only `tengu prune`
+  build, no config (`--sandbox default` for a `-c` config); `stats --run <id>` =
+  its figures (counts, error rates, latency, tokens, Jev cost — the Studio
+  header's, `domain::trace_stats`); only `tengu prune`
   deletes runs (`--sandbox <s>`: `trace/<s>/`; without: all of `<TENGU_HOME>/logs`).
   `tengu tool call --sandbox <s> --from-trace <run_id>:<seq>` runs a recorded
   call again as its agent (refused when the trace hid or dropped its args,

@@ -542,6 +542,8 @@
 <span class="ln o"># seq 8 to 12 only: the resume point</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
 <span class="ln o"># every event, then each new one as it lands, until Ctrl-C; resume with --after &lt;last seq&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace stats --sandbox control-loop-lab --run 71650e67-fb10-4aac-8a5a-a1c837c1cee8 | jq -c '{events, failed, jev: .jev.calls, tool: .families.tool}'</span>
+<span class="ln o"># one JSON object: counts, error rates, p50 / p95 / max ms by kind family and tool, tokens by agent, Jev calls / tokens / cost</span>
 <span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox control-loop-lab --from-trace 71650e67-fb10-4aac-8a5a-a1c837c1cee8:7</span>
 <span class="ln o"># the call behind event 7 (a tool.completed reads its tool.started) run again as its agent, with the recorded args;</span>
 <span class="ln o"># refused when the trace hid them (&lt;url&gt;, [REDACTED]) or the bound dropped them, unless --args gives them</span>
@@ -563,6 +565,7 @@
       <tbody>
         <tr><td><code>src/domain/trace.rs</code></td><td>the envelope, <code>RunKind</code>, <code>Component</code>, <code>Status</code> + tone, <code>scrub_value</code>, <code>bound_payload</code>, replay order, <code>RunSummary</code>, <code>RunState</code></td></tr>
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> (write each event once, fail-soft) · <code>TraceReader</code> (runs, events, last seq, follow)</td></tr>
+        <tr><td><code>src/domain/trace_stats.rs</code></td><td><code>fold_stats</code>: a run's counts, error rates, p50 / p95 / max latency by kind family and by tool, tokens by agent, Jev calls / tokens / cost (<code>tengu trace stats</code>, the Studio header)</td></tr>
         <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL file per run: <code>run.opened</code>, stamp, scrub, bound, write; list (each file's first and last line + its line count), page (the last 2 runs kept parsed, a growing one read from where it stopped), follow; a step's journal (<code>JournalSink</code>, <code>append_journal_metrics</code>, <code>read_journal</code>)</td></tr>
         <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + ids) for loops and feeds; <code>run.closed</code></td></tr>
         <tr><td><code>src/application/trace_exec.rs</code></td><td>the cause (<code>parent_event_id</code>, session) per task; <code>TracedExecutor</code> (<code>tool.*</code>); <code>child_draft</code> / <code>replay_child</code> (a step's events: clock, scrub, bound · into the parent's run); <code>GatedTrace</code> / <code>close_after</code> (a turn's gate, shut when it ends)</td></tr>

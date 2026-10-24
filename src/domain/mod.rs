@@ -44,6 +44,7 @@ pub(crate) mod time;
 pub(crate) mod token;
 pub(crate) mod tools;
 pub(crate) mod trace;
+pub(crate) mod trace_stats;
 pub(crate) mod tz;
 pub(crate) mod untrusted;
 pub(crate) mod usage;

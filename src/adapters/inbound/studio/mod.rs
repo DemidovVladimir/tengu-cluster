@@ -17,7 +17,7 @@
 //! | GET `/api/v1/health` | the heartbeat + the `tengu doctor --live` checks (`bootstrap::runtime::read_live`) |
 //! | GET `/api/v1/runs` | every recorded run (`RunSummary` + `config_current` + `state`: live · closed · open, `RunState`), the heartbeat holder, `live_run_id` |
 //! | GET `/api/v1/runs/:run_id/events?after=&limit=` | events with `seq > after`, `seq` order, `limit` 1–1000 (default 500); `more`, `next_after`; each event + `view` (tone, facets, highlighted edges — `application::studio::board`), `graph` = the map a `--map` run is drawn on |
-//! | GET `/api/v1/runs/:run_id/board[?upto=<seq>]` | the run folded over its graph up to `seq`: every node's tone + why, highlighted edges, grey legal sets, header (runtime state, model, loop counters), nodes not in this graph; the run's `state`, `config_current`, trace file |
+//! | GET `/api/v1/runs/:run_id/board[?upto=<seq>]` | the run's figures up to `seq` (`stats`: `domain::trace_stats`); the run folded over its graph up to `seq`: every node's tone + why, highlighted edges, grey legal sets, header (runtime state, model, loop counters), nodes not in this graph; the run's `state`, `config_current`, trace file |
 //! | GET `/api/v1/nodes/:node_id[?map=<sha256>]` | the inspector: the graph node, the validated config section behind it (`application::studio::inspect`, never TOML text), its edges, its evidence files + store keys; redacted |
 //! | GET `/api/v1/runs/:run_id/stream` | SSE: the run after `Last-Event-ID` (a browser reconnect; wins) or `?after=` |
 //! | GET `/api/v1/live/stream` | SSE: the lease holder's run across restarts (`event: run`) |
