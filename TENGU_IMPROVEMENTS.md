@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `d44e1176f47f5c127c2d60eda14b5a6a712ea6ad` (O4) · PR #59 open, not merged |
+| Last code commit | `d3abedc0049360d2543ab54d6684cdff9ea592dd` (O6) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -71,7 +71,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Y3 | done: `outbound/sqlite.rs` (`open_wal`, `owner_only`, `SharedConn`) in 8 stores | `d1523bcdda8a3754fe59e2cba47ed318c9a4bfa4` |
 | Y4 | done: `outbound/fs_atomic.rs` (vault, builder, heartbeat, vector store) | `ff91596bee7ec0a2a180aabc52a6de05ee5d6066` |
 | Y10 | done: `domain::runtime::valid_name`, `domain::secrets::map_strings` | `fe1e080dc875c94021c512fb6a17f7d939ec8367` |
-| O6 | partial: ignore half; the `docs/plans/` move waits for wave 2 | `3e0ec9cff0654e2a06b60d9cf023e87343642fd0` |
+| O6 | done: ignore half (`3e0ec9cff0654e2a06b60d9cf023e87343642fd0`); `TENGU_{HANDOFF,ROADMAP,STUDIO_PLAN}.md` → `docs/plans/`, 51 files' references rewritten; `lineage/evidence/w1-2026-10-06.toml` notes keep the old name (records are never edited) | `d3abedc0049360d2543ab54d6684cdff9ea592dd` |
 | S8 | done | `a4d7ed4ca7b97bb9d406741026de56723e4ba8e2` |
 | test | lease-loss test retries the steal (flaky under load) | `e117c22fce30884122b480b9a440caddf49cf32c` |
 | S4 | done: doctrine-compatible variant (an added tool needs a configured scope) | `85a01bab7305794ca0873b7646c416d5ab2783d4` |
