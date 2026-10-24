@@ -19,6 +19,8 @@ Supersedes the 2026-09-12 "flat `src/adapters/`" rule. One branch `refactor/hexa
 
 Lint starts with an explicit exception list; the list must be empty before the PR is merged.
 
+Verticals (2026-10-24, R7): the trading desk, xlab, Solana, lineage / evidence, SOE and the source layer are `VERTICALS` in the lint; core modules never import one — only the composition files (module lists, `Config` + its loader, the tool catalog), `bootstrap/` and `adapters/inbound/` wire them in.
+
 ## Target tree
 
 ```

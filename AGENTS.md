@@ -250,7 +250,7 @@ flow, audit these for staleness **before declaring done**:
 | `AGENTS.md` (this file) **and** `CLAUDE.md` (its twin) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc. Update both — they must not drift. |
 | `docs/code-map.md` + `docs/code-map.html` (inline `GRAPH` data) | If you added/moved/removed a file, port, layer, tool, engine, config section, or changed an extension recipe. Keep the two in sync. |
 | `docs/tutorial/<slug>.html` + `docs/tutorial/sources.toml` | **Every code change** (rule above): pages whose `sources` cover the changed paths; `sources.toml` when files move; `cargo test --test tutorial_map`. |
-| `tests/layering_lint.rs` | If you added a layer or changed who may import whom (`RULES` / `FORBIDDEN`). |
+| `tests/layering_lint.rs` | If you added a layer or changed who may import whom (`RULES` / `FORBIDDEN`), or added a vertical module (`VERTICALS`) or a file that wires verticals in (`COMPOSITION`). |
 | `docs/tools.md` | If you changed the tool catalog, tool gating, `[[mcp_servers]]` handling, or how agents get tools. |
 | `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/agent.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
@@ -750,9 +750,12 @@ These are not preferences. They're load-bearing.
   when `domain` / `ports` / `config` / `application` import an adapter, or
   outbound imports inbound/bootstrap, and when `domain` names an IO crate
   (`std::fs`, `reqwest`, …) or an `application` file outside the shrink-only
-  `APPLICATION_IO` list does (2026-10-24). Need something from an adapter in a
-  use case? Add a port in `src/ports/`, implement it in `adapters/outbound/`,
-  wire it in `src/bootstrap/`.
+  `APPLICATION_IO` list does (2026-10-24), and when core names a vertical
+  (`VERTICALS`: trading, xlab, Solana, lineage / evidence, SOE, sources —
+  only the `COMPOSITION` files, `bootstrap/` and `adapters/inbound/` wire one
+  in; a shared helper goes to core, e.g. `domain/{time,base58,canonical}.rs`).
+  Need something from an adapter in a use case? Add a port in `src/ports/`,
+  implement it in `adapters/outbound/`, wire it in `src/bootstrap/`.
 - **`compress_and_store` with Claude Code subagents** — served through the
   bridge since 2026-10-01: a `run-agent` step's bridge writes the `summary`
   to the step's `TENGU_BRIDGE_SUMMARY_FILE`, read back as the IPC summary
