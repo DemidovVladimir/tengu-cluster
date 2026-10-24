@@ -775,3 +775,66 @@ fn older_rounds_keep_line1_of_tool_results_only() {
     assert_eq!(older[0].content, long, "non-tool messages untouched");
     assert_eq!(older[1].content, "line one");
 }
+
+/// An engine whose every turn fails.
+struct Down;
+
+#[async_trait::async_trait]
+impl Engine for Down {
+    fn id(&self) -> &str {
+        "down"
+    }
+    fn context_window(&self) -> usize {
+        16_384
+    }
+    fn supports_tool_use(&self) -> bool {
+        true
+    }
+    fn manages_own_workspace(&self) -> bool {
+        false
+    }
+    fn available_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+    async fn run(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDef],
+        _context: &EngineContext,
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+        Err(anyhow::anyhow!("upstream 529 overloaded"))
+    }
+}
+
+/// A failed engine turn still reaches the hooks — `ok` false, no usage,
+/// the prompt it was sent — as a failed metrics record; the loop returns
+/// the error.
+#[tokio::test]
+async fn a_failed_engine_turn_is_reported() {
+    #[derive(Default)]
+    struct Records(Mutex<Vec<MetricsRecord>>);
+    impl LoopHooks for Records {
+        fn on_turn(&self, turn: &TurnStats<'_>) {
+            let rec = turn.record(MetricsKind::Agent, "main:main", "main", "m");
+            self.0.lock().unwrap().push(rec);
+        }
+    }
+    let hooks = Records::default();
+    let opts = LoopOpts {
+        hooks: Some(&hooks),
+        ..test_opts()
+    };
+    let Err(err) = collect_engine_response(&Down, &go(), &[], &bare_context(), None, &opts).await
+    else {
+        panic!("a failed engine turn ended the loop with an answer");
+    };
+    assert!(format!("{err:#}").contains("upstream 529"), "{err:#}");
+    let recs = hooks.0.lock().unwrap();
+    assert_eq!(recs.len(), 1);
+    assert!(!recs[0].ok);
+    assert_eq!(
+        (recs[0].kind, recs[0].total_tokens),
+        (MetricsKind::Agent, 0)
+    );
+    assert!(recs[0].prompt_chars > 0, "the prompt it was sent");
+}

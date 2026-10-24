@@ -1349,7 +1349,39 @@ async fn chat_complete(model: &str, system: &str, user: &str) -> Result<String> 
     let started = std::time::Instant::now();
     let prompt_chars = (system.chars().count() + user.chars().count()) as u32;
     let prompt_bytes = (system.len() + user.len()) as u32;
+    let result = chat_request(&client, &base_url, &api_key, &request, prompt_chars).await;
+    let (prompt_tokens, completion_tokens, response_chars) = match &result {
+        Ok((content, p, c)) => (*p, *c, content.chars().count() as u32),
+        Err(_) => (0, 0, 0),
+    };
+    crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        prompt_chars,
+        prompt_bytes,
+        response_chars,
+        latency_ms: started.elapsed().as_millis() as u64,
+        ok: result.is_ok(),
+        ..crate::domain::metrics::MetricsRecord::call(
+            crate::domain::metrics::MetricsKind::WikiCompiler,
+            std::env::var("TENGU_SESSION_ID").unwrap_or_else(|_| "-".to_string()),
+            "wiki_compiler",
+            model,
+        )
+    });
+    result.map(|(content, _, _)| content)
+}
 
+/// The wiki compiler's chat request: (content, prompt tokens, completion
+/// tokens) — usage from the reply, else chars / 4.
+async fn chat_request(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    request: &Value,
+    prompt_chars: u32,
+) -> Result<(String, u32, u32)> {
     let resp = client
         .post(format!(
             "{}/v1/chat/completions",
@@ -1357,7 +1389,7 @@ async fn chat_complete(model: &str, system: &str, user: &str) -> Result<String> 
         ))
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
-        .json(&request)
+        .json(request)
         .send()
         .await
         .context("agentic_memory: wiki compiler chat request failed")?;
@@ -1386,25 +1418,7 @@ async fn chat_complete(model: &str, system: &str, user: &str) -> Result<String> 
         .map(|v| v as u32)
         .unwrap_or((content.chars().count() / 4) as u32);
 
-    crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
-        ts_unix: crate::domain::metrics::now_unix(),
-        session_id: std::env::var("TENGU_SESSION_ID").unwrap_or_else(|_| "-".to_string()),
-        kind: crate::domain::metrics::MetricsKind::WikiCompiler,
-        agent: "wiki_compiler".to_string(),
-        model: model.clone(),
-        prompt_tokens,
-        cached_input_tokens: 0,
-        completion_tokens,
-        total_tokens: prompt_tokens + completion_tokens,
-        prompt_chars,
-        prompt_bytes,
-        response_chars: content.chars().count() as u32,
-        latency_ms: started.elapsed().as_millis() as u64,
-        layers: Vec::new(),
-        step_id: None,
-    });
-
-    Ok(content)
+    Ok((content, prompt_tokens, completion_tokens))
 }
 
 fn first_line(s: &str, max_chars: usize) -> String {

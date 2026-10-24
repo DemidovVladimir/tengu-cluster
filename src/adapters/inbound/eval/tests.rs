@@ -783,21 +783,19 @@ async fn close_row_writes_a_late_metric_before_run_closed() {
         session.clone(),
     );
     crate::application::metrics::record(MetricsRecord {
-        ts_unix: 0,
-        session_id: session.clone(),
-        kind: MetricsKind::Planner,
-        agent: "planner/planner".into(),
-        model: session.clone(),
         prompt_tokens: 10,
-        cached_input_tokens: 0,
         completion_tokens: 2,
         total_tokens: 12,
         prompt_chars: 40,
         prompt_bytes: 40,
         response_chars: 8,
         latency_ms: 5,
-        layers: Vec::new(),
-        step_id: None,
+        ..MetricsRecord::call(
+            MetricsKind::Planner,
+            session.clone(),
+            "planner/planner",
+            session.clone(),
+        )
     });
     close_row(&orchestrator, observer, Some(&gate), Some(&trace), false).await;
     // The trace bridge keeps this session's record only.

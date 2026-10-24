@@ -1086,6 +1086,34 @@ async fn audit_lines_for_decided_and_failed_calls() {
     );
 }
 
+/// A failed decisions call is a `decision` metrics record too: `ok` false,
+/// no usage, the engine's model.
+#[tokio::test]
+async fn a_failed_decisions_call_is_a_failed_metrics_record() {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut rx = crate::application::metrics::install_global_sink().subscribe();
+    let session = format!("jev-fail-{}", uuid::Uuid::new_v4());
+    let dir = tempfile::tempdir().unwrap();
+    audited("t", Arc::new(Failing), &dir.path().join("d.jsonl"))
+        .handle_event(&json!({}), &session)
+        .await
+        .unwrap_err();
+    // Other tests share the process-global sink: skip their records.
+    let rec = loop {
+        match rx.try_recv() {
+            Ok(r) if r.session_id == session => break Some(r),
+            Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => break None,
+        }
+    }
+    .expect("a record for the failed call");
+    assert!(!rec.ok);
+    assert_eq!(
+        (rec.kind, rec.total_tokens, rec.model.as_str()),
+        (MetricsKind::Decision, 0, "~typesafe/jev-latest")
+    );
+}
+
 // ── risk refusals + the verdict join ──────────────────────────────
 
 const TSLA: &str = "hyperliquid:xyz:TSLA";

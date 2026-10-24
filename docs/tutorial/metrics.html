@@ -48,9 +48,9 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · observability</div>
   <h1>Metrics and audit trails</h1>
-  <p class="lede">Every planner call, subagent turn, embedding, wiki compile and Jev decision leaves one record: always a log line, a TUI line on request. Network calls, decisions and risk verdicts also leave JSONL lines on disk.</p>
+  <p class="lede">Every planner call, subagent turn, in-process agent turn, embedding, wiki compile and Jev decision leaves one record, a failed one too: always a log line, a TUI line on request. Network calls, decisions and risk verdicts also leave JSONL lines on disk.</p>
   <ul class="facts">
-    <li><b>5</b> record kinds</li>
+    <li><b>6</b> record kinds</li>
     <li>log line at <b>info</b>, always</li>
     <li>TUI panel <b>off</b> by default</li>
     <li>sink holds <b>256</b> records</li>
@@ -71,7 +71,7 @@
   <figure class="stage" data-stage data-interval="3600">
     <div class="stage-canvas">
       <svg viewBox="0 0 860 420" role="img" aria-labelledby="mt-t">
-        <title id="mt-t">Planner calls, run-agent children, the embedder, the wiki compiler and Jev decisions each call record(). record writes a log line and, when installed, sends to the global sink; a bridge forwards records to the orchestrator bus, where the TUI aggregator folds them into a status line. Child records travel back over IPC and the parent runner re-emits them.</title>
+        <title id="mt-t">Planner calls, run-agent children, in-process agents, the embedder, the wiki compiler and Jev decisions each call record(). record writes a log line and, when installed, sends to the global sink; a bridge forwards records to the orchestrator bus, where the TUI aggregator folds them into a status line. Child records travel back over IPC and the parent runner re-emits them.</title>
         <path class="e" id="p-p1" d="M192 45 C470 45 510 60 510 148" data-at="1"/>
         <path class="e" id="p-ch-r" d="M192 128 L228 128" data-at="4"/>
         <path class="e" id="p-r-rec" d="M392 128 C415 128 415 175 438 175" data-at="4"/>
@@ -140,10 +140,10 @@
           <text x="730" y="392" text-anchor="middle" class="t-small">TENGU_TUI_METRICS=1 shows it</text>
         </g>
 
-        <g class="pop badge" data-at="1"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">a failed call records nothing</text></g>
+        <g class="pop badge" data-at="1"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">a failed call: ok=false, 0 tokens</text></g>
         <g class="pop badge" data-at="2"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">layer sizes: debug level only</text></g>
         <g class="pop badge" data-at="3"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">0 tokens if the engine sends no usage</text></g>
-        <g class="pop badge" data-at="4"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">crash or timeout: the records are lost</text></g>
+        <g class="pop badge" data-at="4"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">crash or timeout: the journal keeps them</text></g>
         <g class="pop badge" data-at="5"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">embeddings: completion tokens 0</text></g>
         <g class="pop badge" data-at="6"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">first install wins, later ones reuse it</text></g>
         <g class="pop badge" data-at="7"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">a lagging reader skips ahead</text></g>
@@ -167,7 +167,7 @@
         <li><code>record()</code> always writes one info line, message <code>metrics</code>: kind, agent, model, tokens, chars, latency, step and session. Layer sizes go to debug.</li>
         <li>A <code>run-agent</code> child records one per engine turn, with its <code>step_id</code> and its messages' size per role as layers (<code>system</code>, <code>user</code>, <code>assistant</code>, <code>tool</code>), and logs that line in its own process.</li>
         <li>The records ride back in <code>AgentIpcOutput.metrics</code>, and each is appended to the step's journal as it happens. The parent puts each one on the sink, after a success and after a failure; a child that dies without a reply (engine error, timeout kill) leaves the journal's. Its log line already came with the child's log.</li>
-        <li>Embedding calls (agent <code>embedder</code>), the wiki compiler and Jev decisions (agent = the loop's name) report the same way.</li>
+        <li>An in-process agent turn (chat, Telegram, a webhook or A2A agent, <code>tengu tool turn</code>) records kind <code>agent</code>, and so do embedding calls (agent <code>embedder</code>), the wiki compiler and Jev decisions (agent = the loop's name), each with its own kind. A call that fails still records: <code>ok=false</code>, 0 tokens, the time to the failure.</li>
         <li><code>build_orchestrator</code> installs one global sink: a broadcast channel with 256 slots. Without an orchestrator there is no sink, only the log line.</li>
         <li>Each orchestrator owns one bridge task that copies every record onto its bus as <code>OrchestratorEvent::MetricsRecorded</code> (the trace writes <code>metrics.recorded</code> then), and ends with the orchestrator. Eval runs read it there too.</li>
         <li>The TUI folds every record into <code>AggregatorState</code>, panel on or off. With <code>TENGU_TUI_METRICS=1</code> it adds a <code>metrics:</code> System bubble after each call.</li>
@@ -186,6 +186,7 @@
     <div class="adders" aria-label="Send a record">
       <button type="button" class="btn" data-k="planner">+ <b>planner</b> call</button>
       <button type="button" class="btn" data-k="subagent">+ <b>subagent</b> turn</button>
+      <button type="button" class="btn" data-k="agent">+ <b>agent</b> turn</button>
       <button type="button" class="btn" data-k="embedding">+ <b>embedding</b></button>
       <button type="button" class="btn" data-k="wiki_compiler">+ <b>wiki_compiler</b></button>
       <button type="button" class="btn" data-k="decision">+ <b>decision</b></button>
@@ -211,10 +212,11 @@
     <li><span class="chip ok">yes</span><span><b>planner plan / replan</b>After the engine answers. Layers included.</span></li>
     <li><span class="chip ok">yes</span><span><b>subagent engine turn</b>One per turn of the <code>run-agent</code> loop, layers per message role: logged by the child, sent on by the parent without a second line.</span></li>
     <li><span class="chip ok">yes</span><span><b>embedding call</b>Tokens from the response's <code>usage</code>, else chars / 4.</span></li>
-    <li><span class="chip ok">yes</span><span><b>wiki compiler · Jev decision</b>One per successful call.</span></li>
-    <li><span class="chip bad">no</span><span><b>a failed call</b>Planner, embedding or decision errors return before recording. A failed decision still gets an audit line.</span></li>
-    <li><span class="chip bad">no</span><span><b>in-process chat turn</b>TUI, Telegram or webhook agent with no plan. Its tokens show in <code>/cost</code> instead.</span></li>
-    <li><span class="chip bad">no</span><span><b>a child that dies</b>A crash or step timeout returns no IPC payload, so its records never reach the parent.</span></li>
+    <li><span class="chip ok">yes</span><span><b>wiki compiler · Jev decision</b>One per call.</span></li>
+    <li><span class="chip ok">yes</span><span><b>in-process agent turn</b>Kind <code>agent</code>, one per engine turn: TUI, Telegram, a webhook or A2A agent, <code>tengu tool turn</code>. Session = the chat flow key or the surface's session. <code>/cost</code> still sums the chat's tokens.</span></li>
+    <li><span class="chip ok">yes</span><span><b>a failed call</b>Planner, engine turn, embedding, wiki compile or decision: <code>ok=false</code>, 0 tokens, the latency to the failure. The rollup counts them in <code>failed_count</code>. A failed decision also gets its audit line.</span></li>
+    <li><span class="chip ok">yes</span><span><b>a child that dies</b>A crash or step timeout returns no IPC payload; the parent reads the records the child appended to the step's journal.</span></li>
+    <li><span class="chip bad">no</span><span><b>agent turns in the trace</b><code>metrics.recorded</code> carries planner and subagent records only.</span></li>
   </ul>
 </section>
 
@@ -260,7 +262,7 @@
   <span class="k">"latency_ms"</span>: <span class="n">8400</span>,
   <span class="k">"step_id"</span>: <span class="s">"s1"</span>
 }
-<span class="c"># "layers" left out here: planner blocks, or a subagent turn per role; "cached_input_tokens" only when non-zero; "step_id" only for subagents</span></pre></div>
+<span class="c"># "layers" left out here: planner blocks, or a subagent turn per role; "cached_input_tokens" only when non-zero; "step_id" only for subagents; "ok": false only on a failed call (absent = true)</span></pre></div>
     <div class="tabpanel" id="tab-ipc" hidden><pre><span class="c"># stdout of tengu run-agent, one line (example, shortened to the fields that matter here)</span>
 { <span class="k">"status"</span>: <span class="s">"ok"</span>, <span class="k">"output"</span>: <span class="s">"&lt;reply&gt;"</span>, <span class="k">"summary"</span>: <span class="s">"&lt;compress_and_store text&gt;"</span>,
   <span class="k">"metrics"</span>: [ <span class="c">&lt;one MetricsRecord per engine turn&gt;</span> ],
@@ -274,7 +276,8 @@
           <thead><tr><th>Field</th><th>Value</th></tr></thead>
           <tbody>
             <tr><td>message</td><td><code>metrics</code> at info; each layer as <code>metrics.layer</code> at debug</td></tr>
-            <tr><td>kind · agent · model</td><td>planner · subagent · embedding · wiki_compiler · decision</td></tr>
+            <tr><td>kind · agent · model</td><td>planner · subagent · agent · embedding · wiki_compiler · decision</td></tr>
+            <tr><td>ok</td><td><code>false</code> for a failed call (no usage, tokens 0)</td></tr>
             <tr><td>prompt_tokens · cached_input_tokens · completion_tokens · total_tokens</td><td>from the engine, else 0 (embeddings and the wiki compiler: chars / 4). <code>prompt_tokens</code> is the whole prompt; <code>cached_input_tokens</code> the part read from the prompt cache (Claude Code cache reads, its cache writes counted as input; Codex cached input; 0 elsewhere)</td></tr>
             <tr><td>prompt_chars · response_chars · latency_ms</td><td>measured locally</td></tr>
             <tr><td>layer_count · step_id · session_id</td><td>embeddings and the wiki compiler use <code>TENGU_SESSION_ID</code>, else <code>-</code></td></tr>
@@ -351,6 +354,7 @@
         <tr><td><code>src/domain/usage.rs</code></td><td>chat-turn token totals behind <code>/cost</code></td></tr>
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td>planner records and their layers</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>one record per child engine turn</td></tr>
+        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td><code>TurnStats::record</code>, <code>AgentTurnMetrics</code> (kind <code>agent</code>), a failed turn reported</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td><code>AgentIpcOutput.metrics</code> (else the step journal's), re-emit</td></tr>
         <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>embedding records</td></tr>
         <tr><td><code>src/application/decision_loop/mod.rs</code></td><td>decision records, <code>decisions.jsonl</code> lines</td></tr>
@@ -378,6 +382,7 @@
   var SAMPLES = {
     planner: { kind: "planner", agent: "planner/lping", p: 4210, c: 180 },
     subagent: { kind: "subagent", agent: "crypto_researcher", p: 6250, c: 430 },
+    agent: { kind: "agent", agent: "main", p: 5100, c: 260 },
     embedding: { kind: "embedding", agent: "embedder", p: 12, c: 0 },
     wiki_compiler: { kind: "wiki_compiler", agent: "wiki_compiler", p: 3120, c: 910 },
     decision: { kind: "decision", agent: "lp_exec", p: 880, c: 35 }

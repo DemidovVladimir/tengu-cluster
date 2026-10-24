@@ -17,7 +17,9 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::noop::NoopActivity;
-use crate::application::chat::tool_loop::{collect_engine_response, EngineResponse, LoopOpts};
+use crate::application::chat::tool_loop::{
+    collect_engine_response, AgentTurnMetrics, EngineResponse, LoopOpts,
+};
 use crate::bootstrap::tools::{
     agent_base_tools, agent_skill_registry, bridge_inputs, build_tool_executor,
     rebuild_system_prompt, rebuild_tools, workspace_or_temp,
@@ -39,6 +41,8 @@ pub(crate) struct TurnOpts<'a> {
     pub memory: bool,
     /// Prefix of the temp workspace of an agent without one.
     pub temp_prefix: &'a str,
+    /// The session its `agent` metrics records carry (`AgentTurnMetrics`).
+    pub session: &'a str,
 }
 
 /// One turn of `agent_name` on `text` (module table); tool output is
@@ -128,13 +132,21 @@ pub(crate) async fn run_once(
         max_mcp_result_chars: Some(limits.max_mcp_result_chars),
         mcp_servers,
     };
+    let metrics = AgentTurnMetrics {
+        session: opts.session.to_string(),
+        agent: agent_name.to_string(),
+        model: agent.model.clone(),
+    };
     collect_engine_response(
         engine.as_ref(),
         &messages,
         &tools,
         &context,
         executor.as_deref(),
-        &LoopOpts::from_limits(limits),
+        &LoopOpts {
+            hooks: Some(&metrics),
+            ..LoopOpts::from_limits(limits)
+        },
     )
     .await
 }
@@ -151,6 +163,7 @@ mod tests {
             no_tools: true,
             memory: false,
             temp_prefix: "tengu-turn-test-",
+            session: "s",
         };
         let secrets = Arc::new(SecretRegistry::new());
         let Err(err) = run_once(&Config::default(), "ghost", "hi", &secrets, opts).await else {

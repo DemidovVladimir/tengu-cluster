@@ -32,7 +32,7 @@
 //!
 //! Every decisions call writes one JSONL audit line (`AuditLog`) — a failed
 //! call too (`outcome = "error"`), before its error propagates — and a
-//! successful one also emits a `MetricsKind::Decision` record. A line is one
+//! `MetricsKind::Decision` record (a failed call's: `ok` false, no usage). A line is one
 //! `write_all` on an append-mode file, so concurrent loops and processes
 //! never interleave inside it. A step that ran a tool carries its `call_id`
 //! (`{loop}:{session_id}:{t}`), which the exec tools' risk verdicts carry
@@ -390,6 +390,7 @@ impl DecisionLoop {
                     reason: format!("{e:#}"),
                 };
                 self.audit(session_id, st.t, None, &outcome, None, latency_ms);
+                self.record_metrics(session_id, &state, None, latency_ms);
                 let mut p = offered;
                 merge(
                     &mut p,
@@ -405,7 +406,7 @@ impl DecisionLoop {
                 return Err(e);
             }
         };
-        self.record_metrics(session_id, &state, &decision, latency_ms);
+        self.record_metrics(session_id, &state, Some(&decision), latency_ms);
         let mut p = offered;
         merge(
             &mut p,
@@ -866,28 +867,31 @@ impl DecisionLoop {
         self.emit(d, parent.as_deref());
     }
 
-    fn record_metrics(&self, session_id: &str, state: &Value, d: &Decision, latency_ms: u64) {
+    /// The decisions call's `Decision` metrics record; `d = None` = the call
+    /// failed (`ok` false, no usage).
+    fn record_metrics(
+        &self,
+        session_id: &str,
+        state: &Value,
+        d: Option<&Decision>,
+        latency_ms: u64,
+    ) {
         let prompt = state.to_string();
+        let (input, output) = d.map_or((0, 0), |d| (d.usage.input_tokens, d.usage.output_tokens));
+        let model = match d {
+            Some(d) if !d.model.is_empty() => d.model.clone(),
+            _ => self.engine.model().to_string(),
+        };
         crate::application::metrics::record(MetricsRecord {
             ts_unix: unix_secs(self.now_ms()),
-            session_id: session_id.to_string(),
-            kind: MetricsKind::Decision,
-            agent: self.name.clone(),
-            model: if d.model.is_empty() {
-                self.engine.model().to_string()
-            } else {
-                d.model.clone()
-            },
-            prompt_tokens: d.usage.input_tokens,
-            cached_input_tokens: 0,
-            completion_tokens: d.usage.output_tokens,
-            total_tokens: d.usage.input_tokens + d.usage.output_tokens,
+            prompt_tokens: input,
+            completion_tokens: output,
+            total_tokens: input + output,
             prompt_chars: prompt.chars().count() as u32,
             prompt_bytes: prompt.len() as u32,
-            response_chars: 0,
             latency_ms,
-            layers: Vec::new(),
-            step_id: None,
+            ok: d.is_some(),
+            ..MetricsRecord::call(MetricsKind::Decision, session_id, &self.name, model)
         });
     }
 

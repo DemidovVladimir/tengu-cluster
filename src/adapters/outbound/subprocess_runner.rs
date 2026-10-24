@@ -640,9 +640,11 @@ mod tests {
             line("ipc:9:1", "tool.started", Status::Running, None),
             line("ipc:9:2", "tool.completed", Status::Ok, Some("ipc:9:1")),
         ];
-        for (exit, failure) in [
-            ("exit 3", ErrorClass::Fatal),
-            ("sleep 5", ErrorClass::Timeout),
+        // (how the child ends, the step timeout, the class): the exit case
+        // has time to spare under a loaded test run; the sleep is killed.
+        for (exit, timeout, failure) in [
+            ("exit 3", 60, ErrorClass::Fatal),
+            ("exec sleep 60", 3, ErrorClass::Timeout),
         ] {
             let tmp = tempfile::TempDir::new().unwrap();
             let exe = tmp.path().join("fake-tengu");
@@ -660,7 +662,7 @@ mod tests {
                 .remove("main")
                 .unwrap();
             agent.description = Some("web research".into());
-            agent.limits.step_timeout_secs = 1;
+            agent.limits.step_timeout_secs = timeout;
             let sink = std::sync::Arc::new(MemTrace::default());
             let mut runner = SubprocessRunner::new(
                 None,
@@ -758,21 +760,20 @@ mod tests {
     #[test]
     fn ipc_output_with_metrics_round_trips() {
         let m = crate::domain::metrics::MetricsRecord {
-            ts_unix: 0,
-            session_id: "s".into(),
-            kind: crate::domain::metrics::MetricsKind::Subagent,
-            agent: "researcher".into(),
-            model: "anthropic/claude-sonnet-4-6".into(),
             prompt_tokens: 100,
-            cached_input_tokens: 0,
             completion_tokens: 50,
             total_tokens: 150,
             prompt_chars: 500,
             prompt_bytes: 600,
             response_chars: 200,
             latency_ms: 1234,
-            layers: Vec::new(),
             step_id: Some("s1".into()),
+            ..crate::domain::metrics::MetricsRecord::call(
+                crate::domain::metrics::MetricsKind::Subagent,
+                "s",
+                "researcher",
+                "anthropic/claude-sonnet-4-6",
+            )
         };
         let out = AgentIpcOutput::Ok {
             output: "full text".to_string(),

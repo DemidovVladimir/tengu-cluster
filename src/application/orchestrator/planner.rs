@@ -493,6 +493,41 @@ Rules:
 - The harness rejects anything that is not valid JSON matching one of the two shapes above.
 ";
 
+impl RegistryPlanner {
+    /// The planner's LLM call (`phase` `plan` / `replan`) and its metrics
+    /// record — a failed call's too (model, latency, layers; no usage).
+    async fn call_llm(
+        &self,
+        phase: &'static str,
+        context: &str,
+        layers: Vec<crate::domain::metrics::MetricsLayer>,
+    ) -> anyhow::Result<String> {
+        let started = std::time::Instant::now();
+        let result = self.llm.call(&self.system_prompt, context).await;
+        let failed = TurnTelemetry {
+            model: self.llm.agent.model.clone(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            ..TurnTelemetry::default()
+        };
+        let (raw, telemetry) = match &result {
+            Ok((raw, telemetry)) => (raw.as_str(), telemetry),
+            Err(_) => ("", &failed),
+        };
+        emit_planner_metrics(
+            phase,
+            &self.session_id,
+            &self.orchestrator_agent,
+            context,
+            &self.system_prompt,
+            layers,
+            telemetry,
+            raw,
+            result.is_ok(),
+        );
+        result.map(|(raw, _)| raw)
+    }
+}
+
 #[async_trait]
 impl Planner for RegistryPlanner {
     async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict> {
@@ -551,17 +586,7 @@ impl Planner for RegistryPlanner {
             crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
-        let (raw, telemetry) = self.llm.call(&self.system_prompt, &combined).await?;
-        emit_planner_metrics(
-            "plan",
-            &self.session_id,
-            &self.orchestrator_agent,
-            &combined,
-            &self.system_prompt,
-            layers,
-            &telemetry,
-            &raw,
-        );
+        let raw = self.call_llm("plan", &combined, layers).await?;
         parse_verdict(&raw)
     }
 
@@ -666,25 +691,15 @@ impl Planner for RegistryPlanner {
             crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
-        let (raw, telemetry) = self.llm.call(&self.system_prompt, &context).await?;
-        emit_planner_metrics(
-            "replan",
-            &self.session_id,
-            &self.orchestrator_agent,
-            &context,
-            &self.system_prompt,
-            layers,
-            &telemetry,
-            &raw,
-        );
+        let raw = self.call_llm("replan", &context, layers).await?;
         parse_verdict(&raw)
     }
 }
 
 /// Build a `MetricsRecord` from the planner's per-layer breakdown +
-/// engine telemetry and emit it via the global metrics sink. Pure side-effect
-/// — never returns an error and never blocks. Phase metrics — landed
-/// alongside the metrics module.
+/// engine telemetry (`ok` false: a failed call, no usage) and emit it via
+/// the global metrics sink. Pure side-effect — never returns an error and
+/// never blocks.
 #[allow(clippy::too_many_arguments)]
 fn emit_planner_metrics(
     phase: &'static str,
@@ -695,6 +710,7 @@ fn emit_planner_metrics(
     layers: Vec<crate::domain::metrics::MetricsLayer>,
     telemetry: &TurnTelemetry,
     raw_response: &str,
+    ok: bool,
 ) {
     let prompt_chars = (combined_prompt.chars().count() + system_prompt.chars().count()) as u32;
     let prompt_bytes = (combined_prompt.len() + system_prompt.len()) as u32;
@@ -707,11 +723,6 @@ fn emit_planner_metrics(
         format!("replanner/{}", orchestrator_agent)
     };
     crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
-        ts_unix: crate::domain::metrics::now_unix(),
-        session_id: session_id.to_string(),
-        kind: crate::domain::metrics::MetricsKind::Planner,
-        agent: agent_label,
-        model: telemetry.model.clone(),
         prompt_tokens: telemetry.prompt_tokens,
         cached_input_tokens: telemetry.cached_input_tokens,
         completion_tokens: telemetry.completion_tokens,
@@ -723,7 +734,13 @@ fn emit_planner_metrics(
             .max(raw_response.chars().count() as u32),
         latency_ms: telemetry.latency_ms,
         layers,
-        step_id: None,
+        ok,
+        ..crate::domain::metrics::MetricsRecord::call(
+            crate::domain::metrics::MetricsKind::Planner,
+            session_id.to_string(),
+            agent_label,
+            telemetry.model.clone(),
+        )
     });
 }
 

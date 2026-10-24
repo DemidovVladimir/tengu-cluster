@@ -103,10 +103,11 @@ Every step that calls an LLM or embedding API emits a `MetricsRecord` via `appli
 | Emitter | Kind | Where |
 |---|---|---|
 | Planner (step 3) | `Planner` — one per plan / replan, with the layer breakdown | `planner.rs::emit_planner_metrics` |
-| Subagent (step 6) | `Subagent` — one per engine turn (`StepHooks::on_turn`), shipped in `AgentIpcOutput.metrics`, re-emitted by `SubprocessRunner::run_step` on the parent's sink (`metrics::forward`: no second log line) | `cli/run_agent.rs` |
+| Subagent (step 6) | `Subagent` — one per engine turn (`StepHooks::on_turn`), shipped in `AgentIpcOutput.metrics` (else read from the step's journal when the child dies), re-emitted by `SubprocessRunner::run_step` on the parent's sink (`metrics::forward`: no second log line) | `cli/run_agent.rs` |
+| In-process agent (chat, Telegram, webhook / A2A agent, `tengu tool turn`) | `Agent` — one per engine turn (`tool_loop.rs::AgentTurnMetrics`) | `application/chat/service.rs`, `bootstrap/turn.rs` |
 | Embedder | `Embedding` — reads `usage.total_tokens` | `outbound/memory/embedder.rs::embed_batch_openrouter` |
 | Wiki compiler | `WikiCompiler` | `tools/agentic_memory/` (`compile_wiki`) |
-| Decision loop | `Decision` — one per successful decisions call (replay: cache hits too) | `application/decision_loop/mod.rs` |
+| Decision loop | `Decision` — one per decisions call (replay: cache hits too) | `application/decision_loop/mod.rs` |
 
 A bridge task (spawned in `build_orchestrator`) subscribes to the global metrics sink and republishes each record as `OrchestratorEvent::MetricsRecorded` on the orchestrator bus, so subscribers (TUI, eval recorder) see one unified event stream.
 
@@ -254,12 +255,12 @@ One list for every reader: `application/skills/registry.rs::skill_directories` �
 
 ### 2.5 `domain/metrics.rs` + `application/metrics.rs` — context/token observability (added 2026-04-28)
 
-Process-wide observability layer. Every successful planner call, `run-agent` step turn, embedding, wiki-compiler and Jev decisions call emits a `MetricsRecord` (an in-process chat turn emits none) with token counts, latency, and (for the planner) per-context-layer breakdown. Three surfaces — tracing baseline (`RUST_LOG=tengu=info`), in-process broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorder.
+Process-wide observability layer. Every planner call, `run-agent` step turn, in-process agent turn, embedding, wiki-compiler and Jev decisions call emits a `MetricsRecord` (a failed one too: `ok = false`, 0 tokens) with token counts, latency, and (for the planner) per-context-layer breakdown. Three surfaces — tracing baseline (`RUST_LOG=tengu=info`), in-process broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorder.
 
 | Item | What it is |
 |---|---|
-| `MetricsRecord` | Per-call telemetry: ts, session_id, kind, agent, model, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layer breakdown, optional step_id. Serde-friendly so it crosses the subagent IPC boundary. |
-| `MetricsKind` | `Planner` (one per user turn) / `Subagent` (one per inner-loop turn) / `Embedding` (one per OpenRouter `/embeddings` call) / `WikiCompiler` (`compile_wiki`) / `Decision` (one per successful decisions call). |
+| `MetricsRecord` | Per-call telemetry: ts, session_id, kind, agent, model, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layer breakdown, optional step_id, `ok` (false = the call failed; absent on the wire = true). Built with `MetricsRecord::call` + struct update. Serde-friendly so it crosses the subagent IPC boundary. |
+| `MetricsKind` | `Planner` (one per user turn) / `Subagent` (one per plan-step inner-loop turn) / `Agent` (one per in-process agent turn) / `Embedding` (one per OpenRouter `/embeddings` call) / `WikiCompiler` (`compile_wiki`) / `Decision` (one per decisions call). |
 | `MetricsLayer` | One row in the planner's per-context-layer breakdown. `plan`: `system`, `roster`, `cross_session`, `history`, `session_recall`, `user_message`; `replan`: `system`, `roster`, `cross_session`, `history`, `recall`, `failure`, `user_message`. Approximate — engine-side framing isn't counted. |
 | `install_global_sink` / `record` / `subscribe` (`application/metrics.rs`) | Process-global broadcast sink (`OnceLock<broadcast::Sender>`). `record()` always emits a `tracing::info!` line; bus broadcast is best-effort. |
 | `AggregatorState` | Lightweight in-process rollup: overall + by-agent + by-kind. Used by the TUI. |

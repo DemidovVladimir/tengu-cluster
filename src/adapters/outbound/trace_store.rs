@@ -798,20 +798,17 @@ mod tests {
     fn turn(tokens: u32) -> MetricsRecord {
         MetricsRecord {
             ts_unix: 1,
-            session_id: "s".into(),
-            kind: crate::domain::metrics::MetricsKind::Subagent,
-            agent: "researcher".into(),
-            model: "claude-haiku-5-5".into(),
             prompt_tokens: tokens,
-            cached_input_tokens: 0,
             completion_tokens: 1,
             total_tokens: tokens + 1,
-            prompt_chars: 0,
-            prompt_bytes: 0,
-            response_chars: 0,
-            latency_ms: 0,
             layers: vec![],
             step_id: Some("s1".into()),
+            ..MetricsRecord::call(
+                crate::domain::metrics::MetricsKind::Subagent,
+                "s",
+                "researcher",
+                "claude-haiku-5-5",
+            )
         }
     }
 

@@ -103,20 +103,48 @@ fn embeddings_url(base: Option<String>) -> String {
     format!("{}/v1/embeddings", base.trim_end_matches('/'))
 }
 
+/// One embeddings call and its `Embedding` metrics record — a failed
+/// call's too (`ok` false, no usage).
 async fn embed_batch_openrouter(
     client: &reqwest::Client,
     api_key: &str,
     model: &str,
     texts: &[&str],
 ) -> Result<Vec<Vec<f32>>> {
+    let started = std::time::Instant::now();
+    let total_chars: u32 = texts.iter().map(|t| t.chars().count() as u32).sum();
+    let total_bytes: u32 = texts.iter().map(|t| t.len() as u32).sum();
+    let result = embed_request(client, api_key, model, texts, total_chars).await;
+    let prompt_tokens = result.as_ref().map_or(0, |(_, tokens)| *tokens);
+    crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
+        prompt_tokens,
+        total_tokens: prompt_tokens,
+        prompt_chars: total_chars,
+        prompt_bytes: total_bytes,
+        latency_ms: started.elapsed().as_millis() as u64,
+        ok: result.is_ok(),
+        ..crate::domain::metrics::MetricsRecord::call(
+            crate::domain::metrics::MetricsKind::Embedding,
+            std::env::var("TENGU_SESSION_ID").unwrap_or_else(|_| "-".to_string()),
+            "embedder",
+            model,
+        )
+    });
+    result.map(|(out, _)| out)
+}
+
+/// The vectors and the call's prompt tokens.
+async fn embed_request(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    texts: &[&str],
+    total_chars: u32,
+) -> Result<(Vec<Vec<f32>>, u32)> {
     let body = serde_json::json!({
         "model": model,
         "input": texts,
     });
-
-    let started = std::time::Instant::now();
-    let total_chars: u32 = texts.iter().map(|t| t.chars().count() as u32).sum();
-    let total_bytes: u32 = texts.iter().map(|t| t.len() as u32).sum();
 
     let resp = client
         .post(embeddings_url(std::env::var("OPENROUTER_BASE_URL").ok()))
@@ -169,25 +197,7 @@ async fn embed_batch_openrouter(
         .map(|v| v as u32)
         .unwrap_or_else(|| total_chars / 4);
 
-    crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
-        ts_unix: crate::domain::metrics::now_unix(),
-        session_id: std::env::var("TENGU_SESSION_ID").unwrap_or_else(|_| "-".to_string()),
-        kind: crate::domain::metrics::MetricsKind::Embedding,
-        agent: "embedder".to_string(),
-        model: model.to_string(),
-        prompt_tokens,
-        cached_input_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: prompt_tokens,
-        prompt_chars: total_chars,
-        prompt_bytes: total_bytes,
-        response_chars: 0,
-        latency_ms: started.elapsed().as_millis() as u64,
-        layers: Vec::new(),
-        step_id: None,
-    });
-
-    Ok(out)
+    Ok((out, prompt_tokens))
 }
 
 #[async_trait::async_trait]

@@ -385,21 +385,16 @@ impl StageRunner for ScriptedRunner {
             error: (!ok).then(|| "the synthetic child exited 1".to_string()),
             latency_ms: self.latency_ms,
             metrics: vec![MetricsRecord {
-                ts_unix: 0,
-                session_id: req.cycle_id.clone(),
-                kind: MetricsKind::Subagent,
-                agent: req.agent.clone(),
-                model: "synthetic-model".into(),
                 prompt_tokens: 12_000,
-                cached_input_tokens: 0,
                 completion_tokens: 900,
                 total_tokens: 12_900,
-                prompt_chars: 0,
-                prompt_bytes: 0,
-                response_chars: 0,
                 latency_ms: self.latency_ms,
-                layers: Vec::new(),
-                step_id: None,
+                ..MetricsRecord::call(
+                    MetricsKind::Subagent,
+                    req.cycle_id.clone(),
+                    req.agent.clone(),
+                    "synthetic-model",
+                )
             }],
         })
     }

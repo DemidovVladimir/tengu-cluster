@@ -16,7 +16,9 @@ use crate::application::chat::flow::{
 use crate::application::chat::prompt_budget::{
     assemble_recent_history, compute_base_input_budget, truncate_to_token_budget,
 };
-use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts, ToolResultObserver};
+use crate::application::chat::tool_loop::{
+    collect_engine_response, AgentTurnMetrics, LoopOpts, ToolResultObserver,
+};
 use crate::application::memory::fencing::build_memory_context_block;
 use crate::application::memory::manager::MemoryManager;
 use crate::config::AgentConfig;
@@ -420,6 +422,13 @@ impl<'a> ChatRuntimeService<'a> {
             max_mcp_result_chars: Some(self.agent_config.limits.max_mcp_result_chars),
             mcp_servers: self.mcp_servers.to_vec(),
         };
+        // Each engine turn of this agent is one `agent` metrics record,
+        // a failed one too; the session is the chat flow.
+        let metrics = AgentTurnMetrics {
+            session: flow_key.clone(),
+            agent: self.agent_id.to_string(),
+            model: self.agent_config.model.clone(),
+        };
         let resp = collect_engine_response(
             self.engine,
             &prompt_messages,
@@ -429,6 +438,7 @@ impl<'a> ChatRuntimeService<'a> {
             &LoopOpts {
                 observer: self.tool_observer,
                 cancel: self.cancel,
+                hooks: Some(&metrics),
                 ..LoopOpts::from_limits(&self.agent_config.limits)
             },
         )

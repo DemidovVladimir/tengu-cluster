@@ -15,7 +15,10 @@
 //! Older rounds (from round 1 on): every earlier tool result keeps its
 //! first line, ≤ `limits.compact_result_limit` (`compact_older_tool_results`).
 //! A `run-agent` step runs this same loop (`LoopHooks`: its
-//! `compress_and_store` and per-turn metrics), for every engine.
+//! `compress_and_store` and per-turn metrics), for every engine; an
+//! in-process agent's turn (chat, Telegram, an A2A agent, `tengu tool turn`)
+//! records its per-turn metrics through [`AgentTurnMetrics`]. A hook sees
+//! every engine turn, a failed one too (`TurnStats::ok` false, no usage).
 //!
 //! At `max_tool_rounds` the engine gets one last call with no tools, so a
 //! loop always ends in an answer.
@@ -34,7 +37,7 @@ use futures::StreamExt;
 use tracing::debug;
 
 use crate::domain::message::{Message, Role, StreamEvent, ToolCall, ToolDef, ToolRun};
-use crate::domain::metrics::MetricsLayer;
+use crate::domain::metrics::{MetricsKind, MetricsLayer, MetricsRecord};
 use crate::domain::observation::Observation;
 use crate::domain::token::{truncate_at_boundary, truncate_with_suffix};
 use crate::domain::untrusted;
@@ -122,16 +125,65 @@ pub struct TurnStats<'t> {
     pub output_tokens: u32,
     pub cached_input_tokens: u32,
     pub latency_ms: u64,
+    /// `false` = the engine turn failed (an error, a stream timeout, a
+    /// cancel): no text, no usage; `latency_ms` = the time to the failure.
+    pub ok: bool,
 }
 
-/// A `run-agent` step's two seams in the loop.
+impl TurnStats<'_> {
+    /// This turn as a `kind` metrics record (`domain::metrics`).
+    pub(crate) fn record(
+        &self,
+        kind: MetricsKind,
+        session: &str,
+        agent: &str,
+        model: &str,
+    ) -> MetricsRecord {
+        MetricsRecord {
+            prompt_tokens: self.input_tokens,
+            cached_input_tokens: self.cached_input_tokens,
+            completion_tokens: self.output_tokens,
+            total_tokens: self.input_tokens.saturating_add(self.output_tokens),
+            prompt_chars: self.prompt_chars,
+            prompt_bytes: self.prompt_bytes,
+            response_chars: self.text.chars().count() as u32,
+            latency_ms: self.latency_ms,
+            layers: self.layers.clone(),
+            ok: self.ok,
+            ..MetricsRecord::call(kind, session, agent, model)
+        }
+    }
+}
+
+/// An in-process agent's hooks (module docs): every engine turn, failed
+/// ones too, is one `MetricsKind::Agent` record.
+pub(crate) struct AgentTurnMetrics {
+    /// The chat flow key, or the surface's session.
+    pub session: String,
+    pub agent: String,
+    pub model: String,
+}
+
+impl LoopHooks for AgentTurnMetrics {
+    fn on_turn(&self, turn: &TurnStats<'_>) {
+        crate::application::metrics::record(turn.record(
+            MetricsKind::Agent,
+            &self.session,
+            &self.agent,
+            &self.model,
+        ));
+    }
+}
+
+/// The loop's two seams: a `run-agent` step's, an in-process agent's
+/// metrics ([`AgentTurnMetrics`]).
 pub trait LoopHooks: Send + Sync {
     /// A call the loop answers itself, without the executor: `Some(result)`.
     /// The loop then ends after this round (the step's `compress_and_store`).
     fn intercept(&self, _call: &ToolCall) -> Option<String> {
         None
     }
-    /// After every engine turn (the step's per-turn metrics).
+    /// After every engine turn, a failed one too (per-turn metrics).
     fn on_turn(&self, _turn: &TurnStats<'_>) {}
 }
 
@@ -331,7 +383,8 @@ pub async fn collect_engine_response(
     })
 }
 
-/// `run_single_engine_turn`, reported to `opts.hooks` (`LoopHooks::on_turn`).
+/// `run_single_engine_turn`, reported to `opts.hooks` (`LoopHooks::on_turn`)
+/// whether it succeeded or not.
 async fn reported_turn(
     engine: &dyn Engine,
     messages: &[Message],
@@ -341,7 +394,7 @@ async fn reported_turn(
 ) -> Result<EngineTurn> {
     let layers = opts.hooks.map(|_| role_layers(messages));
     let started = std::time::Instant::now();
-    let turn = run_single_engine_turn(
+    let result = run_single_engine_turn(
         engine,
         messages,
         tools,
@@ -349,20 +402,30 @@ async fn reported_turn(
         opts.cancel,
         opts.stream_event_timeout_secs,
     )
-    .await?;
+    .await;
     if let (Some(h), Some(layers)) = (opts.hooks, layers) {
+        let (text, input, output, cached) = match &result {
+            Ok(t) => (
+                t.text.as_str(),
+                t.input_tokens,
+                t.output_tokens,
+                t.cached_input_tokens,
+            ),
+            Err(_) => ("", 0, 0, 0),
+        };
         h.on_turn(&TurnStats {
-            text: &turn.text,
+            text,
             prompt_chars: layers.iter().map(|l| l.chars).sum(),
             prompt_bytes: layers.iter().map(|l| l.bytes).sum(),
             layers,
-            input_tokens: turn.input_tokens,
-            output_tokens: turn.output_tokens,
-            cached_input_tokens: turn.cached_input_tokens,
+            input_tokens: input,
+            output_tokens: output,
+            cached_input_tokens: cached,
             latency_ms: started.elapsed().as_millis() as u64,
+            ok: result.is_ok(),
         });
     }
-    Ok(turn)
+    result
 }
 
 /// The size of `messages` per role, in role order; empty roles left out.

@@ -168,6 +168,7 @@ async fn run_turn(config: &Config, agent_name: &str, goal: &str) -> Result<Value
         no_tools: false,
         memory: true,
         temp_prefix: "tengu-turn-",
+        session: &crate::bootstrap::orchestrator::resolve_session_id(),
     };
     let resp = tokio::time::timeout(
         std::time::Duration::from_secs(secs),

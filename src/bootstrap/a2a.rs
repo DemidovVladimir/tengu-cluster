@@ -164,12 +164,13 @@ struct TurnRunner {
 #[async_trait]
 impl A2aRunner for TurnRunner {
     async fn run(&self, target: &A2aTarget, turn: A2aTurn) -> Result<String> {
-        let span = crate::bootstrap::trace::turn_span(Some(&format!("a2a-{}", turn.context_id)));
+        let session = format!("a2a-{}", turn.context_id);
+        let span = crate::bootstrap::trace::turn_span(Some(&session));
         let out = async {
             match target {
                 A2aTarget::Planner => self.planner_turn(&turn).await,
                 A2aTarget::Agent(name) => {
-                    agent_turn(&self.config, name, &turn.history, &turn.text, &self.secrets).await
+                    agent_turn(&self.config, name, &session, &turn, &self.secrets).await
                 }
             }
         }
@@ -226,13 +227,14 @@ fn planner_message(turn: &A2aTurn) -> String {
 
 /// One in-process turn of `agent_name` (`bootstrap::turn::run_once`): its
 /// engine, workspace (or a temp dir for the turn), tools, skills and scopes —
-/// or, for the `[orchestrator]` agent, no tools. `history` = earlier
-/// `(user, assistant)` pairs; tool output redacted with `secrets`.
+/// or, for the `[orchestrator]` agent, no tools. The turn's history =
+/// earlier `(user, assistant)` pairs; tool output redacted with `secrets`;
+/// metrics records under `session`.
 async fn agent_turn(
     cfg: &Config,
     agent_name: &str,
-    history: &[(String, String)],
-    text: &str,
+    session: &str,
+    turn: &A2aTurn,
     secrets: &Arc<SecretRegistry>,
 ) -> Result<String> {
     let no_tools = cfg
@@ -241,12 +243,14 @@ async fn agent_turn(
         .is_some_and(|o| o.agent == agent_name);
     let opts = crate::bootstrap::turn::TurnOpts {
         system: None,
-        history,
+        history: &turn.history,
         no_tools,
         memory: false,
         temp_prefix: "tengu-a2a-",
+        session,
     };
-    let response = crate::bootstrap::turn::run_once(cfg, agent_name, text, secrets, opts).await?;
+    let response =
+        crate::bootstrap::turn::run_once(cfg, agent_name, &turn.text, secrets, opts).await?;
     Ok(response.text)
 }
 

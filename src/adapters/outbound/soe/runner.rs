@@ -183,21 +183,12 @@ mod tests {
 
     fn metric(agent: &str) -> MetricsRecord {
         MetricsRecord {
-            ts_unix: 0,
-            session_id: "2026-W41".into(),
-            kind: MetricsKind::Subagent,
-            agent: agent.into(),
-            model: "synthetic-model".into(),
             prompt_tokens: 12_000,
-            cached_input_tokens: 0,
             completion_tokens: 900,
             total_tokens: 12_900,
-            prompt_chars: 0,
-            prompt_bytes: 0,
-            response_chars: 0,
             latency_ms: 1_000,
-            layers: Vec::new(),
             step_id: Some("ARCHITECT".into()),
+            ..MetricsRecord::call(MetricsKind::Subagent, "2026-W41", agent, "synthetic-model")
         }
     }
 

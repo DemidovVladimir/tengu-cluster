@@ -371,21 +371,20 @@ mod tests {
 
     fn metrics(kind: MetricsKind, session: &str, step: Option<&str>) -> MetricsRecord {
         MetricsRecord {
-            ts_unix: 0,
-            session_id: session.into(),
-            kind,
-            agent: "crypto_researcher".into(),
-            model: "anthropic/claude-sonnet-4-6".into(),
             prompt_tokens: 100,
-            cached_input_tokens: 0,
             completion_tokens: 20,
             total_tokens: 120,
             prompt_chars: 400,
             prompt_bytes: 400,
             response_chars: 80,
             latency_ms: 950,
-            layers: Vec::new(),
             step_id: step.map(str::to_string),
+            ..MetricsRecord::call(
+                kind,
+                session,
+                "crypto_researcher",
+                "anthropic/claude-sonnet-4-6",
+            )
         }
     }
 

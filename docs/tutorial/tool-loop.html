@@ -451,7 +451,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/application/chat/service.rs</code></td><td><code>process_user_text</code>, recall, flow budget, slash commands</td></tr>
-        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td><code>collect_engine_response</code>: rounds, caps, compaction, call ids, cancel; <code>LoopOpts</code> (the knobs), <code>LoopHooks</code> (a step's <code>compress_and_store</code> and metrics)</td></tr>
+        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td><code>collect_engine_response</code>: rounds, caps, compaction, call ids, cancel; <code>LoopOpts</code> (the knobs), <code>LoopHooks</code> (a step's <code>compress_and_store</code> and metrics); <code>AgentTurnMetrics</code>: an in-process agent's record per engine turn (kind <code>agent</code>), a failed turn too (<code>ok=false</code>)</td></tr>
         <tr><td><code>src/application/chat/prompt_budget.rs</code></td><td>reserve, input budget, history assembly</td></tr>
         <tr><td><code>src/application/chat/flow.rs</code></td><td>flow key, history limit, flow compaction</td></tr>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>PluginToolExecutor</code>: per-call <code>ToolCtx</code> and scope</td></tr>

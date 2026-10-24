@@ -11,9 +11,11 @@
 //!
 //! ## Design
 //!
-//! - One `MetricsRecord` per LLM call (planner / subagent turn) and per
-//!   embedding API call. Three "kinds" carried in the same struct so a single
-//!   subscriber can render all of them.
+//! - One `MetricsRecord` per LLM call (planner, plan-step turn, in-process
+//!   agent turn, Jev decision, wiki compiler) and per embedding API call —
+//!   failed calls included (`ok = false`, no usage). One struct for every
+//!   kind (`MetricsRecord::call` + struct update), so a single subscriber
+//!   can render all of them.
 //! - A process-global broadcast sink (`OnceLock<broadcast::Sender>`) so any
 //!   code path can call `application::metrics::record(rec)` without trait/Arc plumbing.
 //!   `build_orchestrator` installs the sink on first call; subsequent calls
@@ -41,7 +43,11 @@
 //!   user_message).
 //! - Subagent LLM turns (1..N per step): per-turn telemetry, layers = the
 //!   turn's messages per role. Carried back over IPC via
-//!   `AgentIpcOutput.metrics` and re-emitted on the parent's bus.
+//!   `AgentIpcOutput.metrics` (and the step's journal, for a child that
+//!   dies without a reply) and re-emitted on the parent's bus.
+//! - In-process agent turns (chat, Telegram, a webhook / A2A agent, `tengu
+//!   tool turn`): the same per-turn record, kind `agent`, session = the chat
+//!   flow key or the surface's session.
 //! - `prompt_tokens` is the whole prompt on every engine; `cached_input_tokens`
 //!   the part read from the provider's prompt cache (Claude Code, Codex).
 //! - Embedding calls: tokens from OpenRouter's `usage.total_tokens`.
@@ -97,10 +103,54 @@ pub struct MetricsRecord {
     /// plan that dispatched it. `None` for planner + embedding records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
+    /// `false` = the call failed: no usage came back (tokens 0), the latency
+    /// is the time to the failure. A record without the field (older
+    /// binaries recorded only successes) is `true`.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub ok: bool,
+}
+
+impl MetricsRecord {
+    /// One call's record: now, `ok`, every count 0 and no layers or step —
+    /// the caller sets what the call reported with struct update syntax
+    /// (`MetricsRecord { prompt_tokens, ..MetricsRecord::call(..) }`).
+    pub fn call(
+        kind: MetricsKind,
+        session_id: impl Into<String>,
+        agent: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            ts_unix: now_unix(),
+            session_id: session_id.into(),
+            kind,
+            agent: agent.into(),
+            model: model.into(),
+            prompt_tokens: 0,
+            cached_input_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            prompt_chars: 0,
+            prompt_bytes: 0,
+            response_chars: 0,
+            latency_ms: 0,
+            layers: Vec::new(),
+            step_id: None,
+            ok: true,
+        }
+    }
 }
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// Categorical label so subscribers can filter / aggregate by call type.
@@ -112,6 +162,9 @@ pub enum MetricsKind {
     /// One iteration of the subagent's tool loop. Multiple per step in
     /// agents that call tools.
     Subagent,
+    /// One engine turn of an in-process agent's tool loop — no plan step:
+    /// chat, Telegram, a webhook / A2A agent endpoint, `tengu tool turn`.
+    Agent,
     /// OpenRouter embeddings API call (used by reindex + per-turn searches).
     Embedding,
     /// OpenRouter chat call from the `agentic_memory` LLM Wiki compiler
@@ -128,6 +181,7 @@ impl MetricsKind {
         match self {
             MetricsKind::Planner => "planner",
             MetricsKind::Subagent => "subagent",
+            MetricsKind::Agent => "agent",
             MetricsKind::Embedding => "embedding",
             MetricsKind::WikiCompiler => "wiki_compiler",
             MetricsKind::Decision => "decision",
@@ -177,6 +231,8 @@ pub fn now_unix() -> u64 {
 #[derive(Debug, Clone, Default)]
 pub struct AgentRollup {
     pub call_count: u32,
+    /// Of `call_count`, the failed calls (`MetricsRecord::ok` false).
+    pub failed_count: u32,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
@@ -187,6 +243,7 @@ pub struct AgentRollup {
 impl AgentRollup {
     pub fn absorb(&mut self, rec: &MetricsRecord) {
         self.call_count += 1;
+        self.failed_count += u32::from(!rec.ok);
         self.prompt_tokens += rec.prompt_tokens as u64;
         self.completion_tokens += rec.completion_tokens as u64;
         self.total_tokens += rec.total_tokens as u64;
@@ -262,21 +319,10 @@ mod tests {
 
     fn record_for(kind: MetricsKind, agent: &str, prompt: u32, completion: u32) -> MetricsRecord {
         MetricsRecord {
-            ts_unix: 0,
-            session_id: "s".to_string(),
-            kind,
-            agent: agent.to_string(),
-            model: "m".to_string(),
             prompt_tokens: prompt,
-            cached_input_tokens: 0,
             completion_tokens: completion,
             total_tokens: prompt + completion,
-            prompt_chars: 0,
-            prompt_bytes: 0,
-            response_chars: 0,
-            latency_ms: 0,
-            layers: Vec::new(),
-            step_id: None,
+            ..MetricsRecord::call(kind, "s", agent.to_string(), "m")
         }
     }
 
@@ -330,5 +376,34 @@ mod tests {
         let back: MetricsRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back.agent, "planner");
         assert_eq!(back.total_tokens, 150);
+    }
+
+    /// A failed call's record says so on the wire; a record without `ok`
+    /// (an older binary: successes only) parses as ok; the rollup counts
+    /// the failures.
+    #[test]
+    fn failed_calls_round_trip_and_count() {
+        let failed = MetricsRecord {
+            ok: false,
+            latency_ms: 30_000,
+            ..MetricsRecord::call(MetricsKind::Agent, "main:main", "main", "m")
+        };
+        let wire = serde_json::to_string(&failed).unwrap();
+        assert!(
+            wire.contains("\"ok\":false") && wire.contains("\"kind\":\"agent\""),
+            "{wire}"
+        );
+        let ok = record_for(MetricsKind::Subagent, "a", 10, 1);
+        assert!(!serde_json::to_string(&ok).unwrap().contains("\"ok\""));
+        let old: MetricsRecord = serde_json::from_str(
+            r#"{"ts_unix":1,"session_id":"s","kind":"planner","agent":"p","model":"m","prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_chars":0,"prompt_bytes":0,"response_chars":0,"latency_ms":0}"#,
+        )
+        .unwrap();
+        assert!(old.ok);
+        let mut s = AggregatorState::default();
+        s.absorb(ok);
+        s.absorb(failed);
+        assert_eq!((s.overall.call_count, s.overall.failed_count), (2, 1));
+        assert_eq!(s.by_kind["agent"].failed_count, 1);
     }
 }

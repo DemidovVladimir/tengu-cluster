@@ -279,15 +279,16 @@ made the doc stale, not later.
 
 ## How to read context/token metrics
 
-Every successful planner call, `run-agent` step turn, embedding, wiki-compiler
-and Jev decisions call emits a `MetricsRecord` (see `src/domain/metrics.rs`);
-a failed call and an in-process chat turn (TUI / Telegram / webhook agent
-without a plan) emit none. Three surfaces:
+Every planner call, `run-agent` step turn, in-process agent turn (kind
+`agent`: TUI / Telegram / webhook / A2A agent, `tengu tool turn`), embedding,
+wiki-compiler and Jev decisions call emits a `MetricsRecord` (see
+`src/domain/metrics.rs`) — a failed call too, `ok = false` with 0 tokens.
+Three surfaces:
 
 1. **Always-on tracing** — `RUST_LOG=tengu=info` prints one structured line
    per call: `kind=`, `agent=`, `model=`, `prompt_tokens=`,
    `cached_input_tokens=` (of `prompt_tokens`, the prompt-cache reads),
-   `completion_tokens=`, `latency_ms=`, `prompt_chars=`. Per-layer breakdown
+   `completion_tokens=`, `latency_ms=`, `prompt_chars=`, `ok=`. Per-layer breakdown
    (planner: system / roster / cross_session / history / user_message;
    subagent turn: its messages per role) goes to `debug` so the info line
    stays narrow.
