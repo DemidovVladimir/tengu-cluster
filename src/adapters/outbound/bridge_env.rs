@@ -9,7 +9,7 @@
 //! bridge by inheritance — the engine never writes a secret value (nor a
 //! `[[mcp_servers]]` config) into the file. Besides the names below: `TENGU_BRIDGE_WORKSPACE`,
 //! `TENGU_BRIDGE_TOOLS`, `TENGU_BRIDGE_MAX_RESULT_CHARS`, `TENGU_EGRESS`,
-//! `TENGU_SECRETS_LOADED` (names only), `TENGU_SESSION_ID` and `TENGU_CONFIG`
+//! `TENGU_SECRETS_LOADED` (names only), `TENGU_SESSION_ID`, `TENGU_RUN_ID` and `TENGU_CONFIG`
 //! (`config::paths::TENGU_CONFIG_ENV`, absolute: the bridge loads it).
 
 /// The calling agent's per-tool scope map (JSON `HashMap<String, ToolScope>`).
@@ -169,6 +169,7 @@ pub(crate) fn bridge_env(run: &BridgeRun<'_>) -> Map<String, Value> {
         "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
         "TENGU_PERSISTENT_STORE_CHUNK_OVERLAP",
         "TENGU_SESSION_ID",
+        crate::adapters::outbound::egress::RUN_ID_ENV,
         crate::adapters::outbound::secrets::SECRETS_LOADED_ENV,
     ] {
         if let Ok(v) = std::env::var(name) {

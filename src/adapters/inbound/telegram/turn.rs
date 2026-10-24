@@ -2,6 +2,7 @@
 //! (`execute_chat_turn`) and the orchestrator turn (one orchestrator per sender).
 
 use super::*;
+use tracing::Instrument;
 
 impl TelegramSession {
     // -------------------------------------------------------------------
@@ -284,7 +285,12 @@ impl TelegramSession {
             }
         });
 
-        let result = chat_runtime.process_user_text(state, &user_content).await;
+        let result = chat_runtime
+            .process_user_text(state, &user_content)
+            .instrument(crate::bootstrap::trace::turn_span(Some(
+                &super::telegram_session_id(sender_id),
+            )))
+            .await;
         typing_handle.abort();
 
         // Collect activity info before releasing agent borrow.

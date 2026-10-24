@@ -73,6 +73,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::Instrument;
 
 use std::time::Instant;
 
@@ -313,7 +314,9 @@ async fn dispatch_webhook(
     // event of the request's work carry it.
     let session_id = format!("webhook-{}-{}", name, uuid::Uuid::new_v4());
     let rt = RequestTrace::begin(&*state.trace, &name, endpoint, &session_id, body.len());
-    let (code, answer) = handle_webhook(&state, &name, endpoint, &headers, &body, &rt).await;
+    let (code, answer) = handle_webhook(&state, &name, endpoint, &headers, &body, &rt)
+        .instrument(crate::bootstrap::trace::turn_span(Some(&session_id)))
+        .await;
     rt.responded(code, &answer);
     (code, Json(answer)).into_response()
 }

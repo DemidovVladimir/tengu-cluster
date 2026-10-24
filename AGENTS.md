@@ -800,8 +800,11 @@ These are not preferences. They're load-bearing.
   on a runtime path bypasses Tor. The *resolved* policy crosses to
   `run-agent` / `mcp-bridge` as `TENGU_EGRESS` (wins over the child's
   config). JSONL audit at `<TENGU_HOME>/logs/egress.jsonl` (`agent` /
-  `session` / `call_id`: a `tengu run` feed or loop call names its own —
-  `egress::AttributedExecutor` — else the process env). `tengu doctor
+  `session` / `call_id` / `run_id` / `ts_ms`: every agent's tool call
+  names its call id, a `tengu run` feed or loop call its own agent and
+  session too — `egress::AttributedExecutor` — else the process env; a
+  denied / failed record is also a WARN line in `tengu.log`, whose turn
+  lines carry span `turn{run_id, session_id}`). `tengu doctor
   --tor` verifies the exit; `make tor` runs the proxy (`deploy/tor/`: Arti +
   lyrebird-rs from `../lyrebird-rs`). Unit tests must not call
   `egress::install` (process-global).

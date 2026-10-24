@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -163,12 +164,17 @@ struct TurnRunner {
 #[async_trait]
 impl A2aRunner for TurnRunner {
     async fn run(&self, target: &A2aTarget, turn: A2aTurn) -> Result<String> {
-        let out = match target {
-            A2aTarget::Planner => self.planner_turn(&turn).await,
-            A2aTarget::Agent(name) => {
-                agent_turn(&self.config, name, &turn.history, &turn.text, &self.secrets).await
+        let span = crate::bootstrap::trace::turn_span(Some(&format!("a2a-{}", turn.context_id)));
+        let out = async {
+            match target {
+                A2aTarget::Planner => self.planner_turn(&turn).await,
+                A2aTarget::Agent(name) => {
+                    agent_turn(&self.config, name, &turn.history, &turn.text, &self.secrets).await
+                }
             }
-        };
+        }
+        .instrument(span)
+        .await;
         out.map(|text| self.secrets.redact(&text))
             .map_err(|e| anyhow!(self.secrets.redact(&format!("{e:#}"))))
     }

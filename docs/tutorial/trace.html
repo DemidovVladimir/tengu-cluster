@@ -320,6 +320,7 @@
         <li><code>session_id</code>: <code>&lt;feed&gt;:&lt;slot ms&gt;</code>, <code>decide-&lt;loop&gt;-&lt;uuid&gt;</code>, <code>webhook-&lt;endpoint&gt;-&lt;uuid&gt;</code>, a chat session</li>
         <li><code>correlation_id</code>: the event's own, else the session, else the runtime, else the run</li>
         <li><code>call_id</code>: the tool call, <code>{loop}:{session}:{t}</code> or <code>feed:&lt;f&gt;:&lt;slot&gt;:&lt;i&gt;</code></li>
+        <li>Across files: <code>egress.jsonl</code> lines carry the same <code>run_id</code>, <code>call_id</code> and <code>ts_ms</code>; <code>tengu.log</code> lines of a turn carry span <code>turn{run_id, session_id}</code></li>
       </ul></div>
       <div class="card gw"><h3>What happened</h3><ul class="kv">
         <li><code>kind</code> = <code>&lt;family&gt;.&lt;what&gt;</code>; <code>node_id</code> = a Studio graph node</li>

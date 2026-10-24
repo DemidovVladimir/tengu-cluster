@@ -21,6 +21,7 @@ mod tool;
 mod trace;
 
 use clap::{Parser, Subcommand};
+use tracing::Instrument;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -572,7 +573,10 @@ pub(crate) async fn run() -> Result<()> {
 
     if matches!(cli.command, Some(Commands::McpBridge)) {
         init_logging(LogSink::Stderr, "tengu=info");
-        return crate::adapters::inbound::mcp_bridge::run_mcp_bridge().await;
+        let session = std::env::var("TENGU_SESSION_ID").ok();
+        return crate::adapters::inbound::mcp_bridge::run_mcp_bridge()
+            .instrument(crate::bootstrap::trace::turn_span(session.as_deref()))
+            .await;
     }
 
     #[cfg(feature = "postgres_memory")]
@@ -585,7 +589,10 @@ pub(crate) async fn run() -> Result<()> {
     if matches!(cli.command, Some(Commands::RunAgent)) {
         // Subprocess mode — stdout is JSON only, everything else goes to stderr.
         init_logging(LogSink::Stderr, "tengu=info");
-        return run_agent_subprocess().await;
+        // Its ids are known once the IPC input is read (`run_agent.rs`).
+        return run_agent_subprocess()
+            .instrument(crate::bootstrap::trace::turn_span(None))
+            .await;
     }
 
     if let Some(Commands::Tool { action }) = cli.command {

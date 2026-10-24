@@ -79,7 +79,7 @@ Environment set by the CLI engines — built once by `bridge_env::bridge_env` (`
 | `TENGU_EGRESS` | The parent's **resolved** `[egress]` policy (proxy, allow/deny hosts, audit path); wins over the loaded config's `[egress]` |
 | `TENGU_SECRETS_LOADED` | Names of the vault vars the parent loaded (names only); the bridge registers their inherited values for redaction |
 | `TENGU_AGENT_NAME`, `TENGU_AGENT_SKILL_SHA256` | Not in the file — inherited from a `run-agent` step's env: the `soe_*` tools' stage agent and skill stamp (`tools/soe/mod.rs`; the agent falls back to `TENGU_BRIDGE_AGENT`) |
-| `TENGU_SESSION_ID`, `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | Forwarded from the parent env when set. No secret value is ever written (`OPENROUTER_API_KEY`, vault values, `$VAR` / `${VAR}` values arrive by inheritance; unit test: the file's keys ⊆ this table, no `${VAR}`-expanded value anywhere in it) |
+| `TENGU_SESSION_ID`, `TENGU_RUN_ID`, `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | Forwarded from the parent env when set. No secret value is ever written (`OPENROUTER_API_KEY`, vault values, `$VAR` / `${VAR}` values arrive by inheritance; unit test: the file's keys ⊆ this table, no `${VAR}`-expanded value anywhere in it) |
 
 Shape of the temp `--mcp-config` file:
 

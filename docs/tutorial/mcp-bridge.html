@@ -395,6 +395,7 @@
       ["TENGU_BRIDGE_WORKSPACE", '"<agent workspace>"', 0],
       ["TENGU_CONFIG", '"<absolute path of the sandbox config>"', 0],
       ["TENGU_EGRESS", '"<resolved [egress] as JSON>"', 0],
+      ["TENGU_RUN_ID", '"<the parent\'s trace run id>"', step.checked ? 1 : -1],
       ["TENGU_SECRETS_LOADED", '"<vault var names, no values>"', vault.checked ? 1 : -1],
       ["TENGU_SESSION_ID", '"<session id>"', sess.checked ? 1 : -1]
     ].filter(function (e) { return e[2] >= 0; });

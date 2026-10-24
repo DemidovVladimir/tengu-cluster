@@ -22,6 +22,7 @@ use cursive::backends::crossterm::crossterm::{event::DisableMouseCapture, execut
 use cursive::Cursive;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
+use tracing::Instrument;
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -177,12 +178,14 @@ pub fn run_tui(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<(
         crate::domain::trace::RunKind::Chat,
         &secret_registry,
     );
+    // One session per process: the planner's and every turn's `turn` span.
+    let session_id = crate::bootstrap::orchestrator::resolve_session_id();
     let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> =
         match crate::bootstrap::orchestrator::planner_llm(&config)? {
             Some(llm) => crate::bootstrap::orchestrator::build_orchestrator(
                 &config,
                 llm,
-                crate::bootstrap::orchestrator::resolve_session_id(),
+                session_id.clone(),
                 trace.as_ref().and_then(|s| {
                     crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
                 }),
@@ -625,6 +628,7 @@ pub fn run_tui(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<(
 
                             match chat_runtime
                                 .process_user_text(&mut runtime_state, &injected)
+                                .instrument(crate::bootstrap::trace::turn_span(Some(&session_id)))
                                 .await
                             {
                                 Ok(res) => {
@@ -787,6 +791,7 @@ pub fn run_tui(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<(
 
                         match chat_runtime
                             .process_user_text(&mut runtime_state, &text)
+                            .instrument(crate::bootstrap::trace::turn_span(Some(&session_id)))
                             .await
                         {
                             Ok(ChatTurnResult {

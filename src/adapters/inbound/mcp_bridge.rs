@@ -358,12 +358,14 @@ async fn serve_mcp_stdio(
     Ok(())
 }
 
-/// Text and typed observations come back redacted, as in-process.
+/// Text and typed observations come back redacted, as in-process; each
+/// call's egress records name its call id (`egress::AttributedExecutor`).
 fn sanitized(executor: PluginToolExecutor, secrets: &Arc<SecretRegistry>) -> Arc<dyn ToolExecutor> {
-    Arc::new(SanitizedToolExecutor::new(
-        Arc::new(executor),
-        Arc::clone(secrets),
-    ))
+    Arc::new(
+        crate::adapters::outbound::egress::AttributedExecutor::call_ids(Arc::new(
+            SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(secrets)),
+        )),
+    )
 }
 
 /// The `run-agent` step protocol tool (`skill_lifecycle::compress_and_store`).

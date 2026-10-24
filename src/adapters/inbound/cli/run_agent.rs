@@ -117,6 +117,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // threaded through ToolCtx. Set BEFORE building the tool executor so any
     // plugin construction that reads it sees the right value.
     std::env::set_var("TENGU_SESSION_ID", &input.session_id);
+    // The parent's recording: this step's (and its bridge's) egress records
+    // name it (`egress::run_id`).
+    if let Some(t) = &input.trace {
+        std::env::set_var(crate::adapters::outbound::egress::RUN_ID_ENV, &t.run_id);
+    }
+    crate::bootstrap::trace::name_turn(&tracing::Span::current(), Some(&input.session_id));
 
     // ----- Resolve parent config (sandbox inheritance) -----
     //

@@ -1204,6 +1204,7 @@ mod tests {
         "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
         "TENGU_PERSISTENT_STORE_CHUNK_OVERLAP",
         "TENGU_SESSION_ID",
+        "TENGU_RUN_ID",
         "TENGU_SECRETS_LOADED",
     ];
 

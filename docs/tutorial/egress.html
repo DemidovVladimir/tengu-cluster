@@ -206,7 +206,7 @@
         <g class="pop badge" data-at="6"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">proxy env: advisory</text></g>
         <g class="pop badge" data-at="7"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">no host check here</text></g>
         <g class="pop badge" data-at="8"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">fail closed</text></g>
-        <g class="pop badge" data-at="9"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">agent · session · call_id</text></g>
+        <g class="pop badge" data-at="9"><rect x="644" y="36" width="212" height="22" rx="11"/><text x="750" y="51" text-anchor="middle">agent · session · call_id · run_id</text></g>
 
         <circle class="tok" r="6" data-path="p-cfg-inst" data-at="2" data-dur="800"/>
         <circle class="tok guard" r="6" data-path="p-inst-child" data-at="3" data-dur="800"/>
@@ -595,9 +595,9 @@
   }
   function connectForm(p) { var u = parseUrl(p); if (!u) return null; var s = u.protocol.replace(":", ""); return (s === "http" || s === "https") ? p : "http://" + u.host; }
   function stamp(ev, r) {
-    ev.ts = "2026-10-07T12:00:00.000000+00:00"; ev.pid = 41237;
+    ev.ts = "2026-10-07T12:00:00.000000+00:00"; ev.ts_ms = 1791374400000; ev.pid = 41237;
     if (!("agent" in ev)) ev.agent = "<agent>";
-    ev.session = "<session id>"; ev.call_id = "<call id>";
+    ev.session = "<session id>"; ev.call_id = "<call id>"; ev.run_id = "<trace run id, or null>";
     ev.via = r.proxy ? "proxy" : "direct"; ev.proxy = r.proxy;
     return ev;
   }

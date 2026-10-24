@@ -63,7 +63,9 @@ pub(crate) struct ToolStack {
     /// generation) + the `[[mcp_servers]]` tools found on connect.
     pub tools: Vec<ToolDef>,
     /// The executor behind them, secret-redacting by construction
-    /// (`SanitizedToolExecutor`: text, observations, errors).
+    /// (`SanitizedToolExecutor`: text, observations, errors); each call's
+    /// egress records name its call id (`egress::AttributedExecutor`,
+    /// unless an outer one — a loop, a feed — names it).
     pub executor: Arc<dyn ToolExecutor>,
     /// The same executor unredacted: only for a caller that dispatches
     /// through its parts (eval's `tool_assertion` metrics) — never hand it
@@ -121,10 +123,14 @@ pub(crate) fn build_tool_executor(
     };
     let extra = raw.additional_tool_defs(&tools);
     tools.extend(extra);
-    let executor = Arc::new(SanitizedToolExecutor::new(
-        Arc::clone(&raw) as Arc<dyn ToolExecutor>,
-        Arc::clone(secret_registry),
-    ));
+    let executor = Arc::new(
+        crate::adapters::outbound::egress::AttributedExecutor::call_ids(Arc::new(
+            SanitizedToolExecutor::new(
+                Arc::clone(&raw) as Arc<dyn ToolExecutor>,
+                Arc::clone(secret_registry),
+            ),
+        )),
+    );
     Some(ToolStack {
         tools,
         executor,

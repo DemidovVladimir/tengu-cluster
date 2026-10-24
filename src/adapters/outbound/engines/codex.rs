@@ -20,7 +20,7 @@
 //! | Env of the CLI | Rule |
 //! |---|---|
 //! | start | an EMPTY env (`env_clear`): vault secrets, `.env` keys, `TENGU_MASTER_PASSWORD` and the seal-proxy session (`TENGU_KEYS_*`, `[keys.env]` exports) never reach the CLI, whose built-in shell ignores tengu scopes — [`child_env`] |
-//! | kept | [`BASE_ENV`] (`PATH`, `HOME`, user, shell, temp, locale `LANG` / `LC_*`, `XDG_*`, TLS certs, `CODEX_HOME`, `CODEX_CA_CERTIFICATE`, `RUST_LOG`, `TENGU_HOME` / `TENGU_SESSION_ID` / `TENGU_AGENT_NAME` / `TENGU_SECRETS_LOADED`) + `[agents.<a>.codex] forward_env` (opt-in names, readable by the CLI's shell; `config::codex_forward_env_error` refuses the master password, the session, `[keys.env]` names, `OPENAI_API_KEY`, `CODEX_*`); a value equal to the session token is dropped whatever its name. `OPENAI_API_KEY` / `CODEX_API_KEY` are never kept (an API key would bill the account instead of the subscription) |
+//! | kept | [`BASE_ENV`] (`PATH`, `HOME`, user, shell, temp, locale `LANG` / `LC_*`, `XDG_*`, TLS certs, `CODEX_HOME`, `CODEX_CA_CERTIFICATE`, `RUST_LOG`, `TENGU_HOME` / `TENGU_SESSION_ID` / `TENGU_AGENT_NAME` / `TENGU_RUN_ID` / `TENGU_SECRETS_LOADED`) + `[agents.<a>.codex] forward_env` (opt-in names, readable by the CLI's shell; `config::codex_forward_env_error` refuses the master password, the session, `[keys.env]` names, `OPENAI_API_KEY`, `CODEX_*`); a value equal to the session token is dropped whatever its name. `OPENAI_API_KEY` / `CODEX_API_KEY` are never kept (an API key would bill the account instead of the subscription) |
 //! | added | `[egress]` `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when the LLM API is routed through the proxy (`EgressPolicy::claude_cli_env`) |
 //!
 //! | Run | Handling |
@@ -321,6 +321,7 @@ pub(crate) const BASE_ENV: &[&str] = &[
     "TENGU_HOME",
     "TENGU_SESSION_ID",
     "TENGU_AGENT_NAME",
+    "TENGU_RUN_ID",
     "TENGU_SECRETS_LOADED",
 ];
 
