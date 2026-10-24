@@ -88,7 +88,7 @@ Every Solana tool's first check is `ctx.scope.check_fs_write(workspace)` (the st
 |---|---|---|
 | `hedge.rs` | port of the bot hedge controller (`simulator/src/hedge.rs` ← `hedgeController.ts:94-375`) + `auto_band_sol` | 1027/1027 production vectors, `cargo test --bin tengu lp::hedge` |
 | `gates.rs` | re-entry gate, storm hysteresis, trend + regime confirm, composition / imbalance, wallet 50/50, bin math (70-bin cap), DLMM fee rate, swap oracle gate | ported bot tests |
-| `snapshot.rs` | `compose_snapshot`, `decide_hedge` / `decide_lp` (gates first, then `hedge::decide` unchanged), `LpControllerState` | gate tables |
+| `snapshot/` | `compose_snapshot` (`compose.rs`), knobs (`knobs.rs`), `LpControllerState` (`state.rs`), `decide_hedge` (`hedge_decide.rs`: gates first, then `hedge::decide` unchanged), `decide_lp` (`lp_decide.rs`) | gate tables (`tests.rs`) |
 | `dlmm.rs`, `perps.rs`, `wallet.rs`, `market.rs` | decoders + builders over one `AccountSet` / fetched JSON | SDK / Anchor / live-fixture goldens |
 
 ## Write tools (phase 6b, 2026-09-29)

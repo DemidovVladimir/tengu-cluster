@@ -337,7 +337,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/lp/mod.rs` | 15 | Solana LP policy + typed outputs — pure, no IO; one file per family. |
 | `src/domain/lp/perps.rs` | 2274 | Jupiter perps — Position / Custody / JLP pool decoders, borrow APR, accrued fee, liquidation price. |
 | `src/domain/lp/perps_ix.rs` | 301 | Jupiter perps keeper-request instructions — increase / decrease market requests, request PDA (Anchor-golden). |
-| `src/domain/lp/snapshot.rs` | 5034 | `lp_snapshot` + `hedge_decide` / `lp_decide` envelopes composed from the family builders; `PerpsOrder` (a hedge action as `jup_perps_order` args, `data.order`). |
+| `src/domain/lp/snapshot/compose.rs` | 684 | `lp_snapshot/1`: `compose_snapshot` builds one wallet × DLMM pool snapshot from the family builders + the `price_oracle/1` row. |
+| `src/domain/lp/snapshot/hedge_decide.rs` | 1159 | `hedge_decide/1`: `decide_hedge` — the gates (`Guard`), then `hedge::decide` unchanged; `PerpsOrder` (a hedge action as `jup_perps_order` args, `data.order`). |
+| `src/domain/lp/snapshot/knobs.rs` | 271 | `hedge_decide` / `lp_decide` knobs: every field required (no serde defaults, no hidden code defaults). |
+| `src/domain/lp/snapshot/lp_decide.rs` | 637 | `lp_decide/1`: `decide_lp` — storm, trend confirm, recenter / re-entry wait, open. |
+| `src/domain/lp/snapshot/mod.rs` | 88 | `lp_snapshot/1` + the pure decisions on it (`hedge_decide/1`, `lp_decide/1`, `lp_state/1`); shared constants; re-exports its five files. |
+| `src/domain/lp/snapshot/state.rs` | 221 | `lp_state/1:<wallet>:<pool>`: `LpControllerState`, the controller state both decisions carry. |
+| `src/domain/lp/snapshot/tests.rs` | 1993 | Tests of `domain/lp/snapshot/` over live-fixture snapshots (`tests/fixtures/solana/`): composition, gate tables, both decisions. |
 | `src/domain/lp/wallet.rs` | 1977 | Wallet typed outputs — `solana_wallet` inventory and `solana_tx` status. |
 | `src/domain/market.rs` | 1290 | Cross-venue market rows keyed by instrument id (`<venue>:<native id>`): `mkt_instrument/1` + `mkt_ctx/1` (`Observed`), normalisers. |
 | `src/domain/marketdata.rs` | 854 | Market data for history-first research (xlab): `Interval`, `Bar`, `FundingPoint`, `CtxPoint`, `BarSeries` / `FundingSeries` / `CtxSeries` (a bar observable only at its close: `close_at`, `bar_ending_at`, `observable_at`), `StockSplit` + `adjust_for_split` (bars closed before a split / ctx rows before it: prices ÷ ratio, volume / OI × ratio; a bar straddling the split dropped — `SplitAdjusted`), `parse_time` / `fmt_time`. |

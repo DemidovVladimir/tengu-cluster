@@ -129,7 +129,7 @@ fn positive(v: Option<f64>) -> Option<f64> {
 
 /// `x` with `sig` significant digits: plain notation for 1e-9 ≤ |x| < 1e15,
 /// exponent notation outside — a read sub-micro price never renders as 0.
-/// Same rule as the private copies in `dlmm.rs` / `snapshot.rs`.
+/// Same rule as the private copies in `dlmm.rs` / `snapshot/compose.rs`.
 pub(crate) fn fmt_sig(x: f64, sig: i32) -> String {
     if !x.is_finite() || x == 0.0 {
         return format!("{x}");
