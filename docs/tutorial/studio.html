@@ -189,7 +189,7 @@
   <div class="sec-head">
     <span class="kicker">One shape for every event</span>
     <h2 id="s-env">The event envelope</h2>
-    <p>Every field is present in what the API serves, <code>null</code> when unknown (on disk, schema 2, only <code>run.opened</code> carries the run's constants; the reader re-stamps the rest). A reader ignores fields it does not know, so an older reader takes newer lines. One recorded run, event by event: <a href="trace.html">Execution trace</a>.</p>
+    <p>Every field is always present, <code>null</code> when unknown. A reader ignores fields it does not know, so an older reader takes newer lines. One recorded run, event by event: <a href="trace.html">Execution trace</a>.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -203,7 +203,7 @@
         <tr><td><code>component</code> · <code>kind</code> · <code>status</code></td><td>runtime, feed, loop, observation, jev, action, tool, gate, orchestrator, studio · a dotted name such as <code>run.opened</code> · see below</td></tr>
         <tr><td><code>node_id</code> · <code>parent_event_id</code></td><td>a graph node id · the event that caused it</td></tr>
         <tr><td><code>duration_ms</code> · <code>payload</code> · <code>artifact</code></td><td>wall time · a redacted object, at most 4096 bytes · where the full record lives</td></tr>
-        <tr><td><code>sandbox</code> · <code>config_hash</code> · <code>ts_ms</code> · <code>schema_version</code></td><td>runner name · the config file hash · the sink's clock unless the caller gives one · 2</td></tr>
+        <tr><td><code>sandbox</code> · <code>config_hash</code> · <code>ts_ms</code> · <code>schema_version</code></td><td>runner name · the config file hash · the sink's clock unless the caller gives one · 1</td></tr>
       </tbody>
     </table>
   </div>

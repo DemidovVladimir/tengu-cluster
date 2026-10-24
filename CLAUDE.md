@@ -983,10 +983,8 @@ These are not preferences. They're load-bearing.
   `[orchestrator]` also `tengu chat` / `tengu telegram` (one per process) and
   each orchestrated `tengu eval` row (`bootstrap::trace::open_orchestration`,
   last event `run.closed`) (`adapters/outbound/trace_store.rs`: first line
-  `run.opened`, `seq` per run, payload redacted then bounded; schema 2: only
-  `run.opened` carries the run's constants, the rest drop them, `event_id` and
-  empty fields — readers re-stamp them, `domain::trace::LineReader`, and read
-  a schema-1 file the same; a restart = a new run, never an append). A request to a configured webhook endpoint is a
+  `run.opened`, `seq` per run, payload redacted then bounded; a restart = a
+  new run, never an append). A request to a configured webhook endpoint is a
   `trigger.webhook` root (never the body or a header), its loop / plan events
   under it, then `webhook.responded` (the code). Every `OrchestratorEvent` is
   written as `plan.*` / `step.*` / `metrics.recorded` when the bus sends it

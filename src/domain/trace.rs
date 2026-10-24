@@ -18,17 +18,9 @@
 //! | `component` · `kind` · `node_id` · `status` | [`Component`] · dotted `<family>.<what>` (`run.opened`, `jev.completed`, …) · a `domain::workflow` node id · [`Status`] |
 //! | `duration_ms` · `payload` · `artifact` | wall time of the thing reported · a redacted object ≤ [`MAX_PAYLOAD_BYTES`] ([`bound_payload`]; the fields a draft pins with [`EventDraft::keep`] go last — `jev.*` pin the legal set) · where the full record lives ([`ArtifactRef`]) |
 //!
-//! A served event (`tengu trace show`, Studio) has every field (`null` when
-//! unknown), so a reader sees one shape; unknown fields are ignored, so an
-//! older reader takes newer lines. The first event of every run is
-//! [`RUN_OPENED`] (payload `{kind, pid}`).
-//!
-//! On disk (schema 2, [`stored_line`]) only the `run.opened` line carries
-//! the run's constants (`schema_version`, `sandbox`, `config_hash`,
-//! `runtime_id`, `run_id`); every later line leaves them out, with its
-//! `event_id` (`<run_id>:<seq>`), a `correlation_id` equal to its fallback,
-//! every `null` field and an empty payload. [`LineReader`] re-stamps them from the run's
-//! first full line, so a schema-1 file (every line full) reads the same.
+//! Every field is always present (`null` when unknown), so a reader sees one
+//! shape; unknown fields are ignored, so an older reader takes newer lines.
+//! The first event of every run is [`RUN_OPENED`] (payload `{kind, pid}`).
 //!
 //! Studio reads two rules from here, never from the page: a status's colour
 //! ([`Status::tone`] → [`Tone`]) and a run's state ([`RunState`]: live ·
@@ -46,9 +38,8 @@ use serde_json::{json, Value};
 use crate::domain::runtime::scrub_urls;
 use crate::domain::secrets::{map_strings, SecretRegistry};
 
-/// Version of the trace format: 2 = the run's constants on its first line
-/// only ([`stored_line`]); a served [`ExecutionEvent`] has one shape either way.
-pub(crate) const TRACE_SCHEMA_VERSION: u32 = 2;
+/// Version of the [`ExecutionEvent`] JSON shape.
+pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
 /// Largest payload a sink writes (serialized bytes); bigger ones lose whole
 /// fields ([`bound_payload`]).
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 4096;
@@ -491,181 +482,6 @@ impl RunContext {
             payload: d.payload,
             artifact: d.artifact,
         }
-    }
-}
-
-/// The `correlation_id` a line without one gets: the session, else the
-/// runtime, else the run ([`RunContext::stamp`]'s fallback).
-fn correlation_fallback<'a>(
-    session_id: Option<&'a str>,
-    runtime_id: Option<&'a str>,
-    run_id: &'a str,
-) -> &'a str {
-    session_id.or(runtime_id).unwrap_or(run_id)
-}
-
-/// One later line of a schema-2 file: the event without what its run's
-/// first line holds (module docs).
-#[derive(Serialize)]
-struct Compact<'a> {
-    seq: u64,
-    ts_ms: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    correlation_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parent_event_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    call_id: Option<&'a str>,
-    component: Component,
-    kind: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    node_id: Option<&'a str>,
-    status: Status,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
-    #[serde(skip_serializing_if = "is_empty_object")]
-    payload: &'a Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    artifact: Option<&'a ArtifactRef>,
-}
-
-/// `ev` as its file line, newline included (module docs): `run.opened` in
-/// full, any later event compact.
-pub(crate) fn stored_line(ev: &ExecutionEvent) -> serde_json::Result<String> {
-    let mut line = if ev.kind == RUN_OPENED {
-        serde_json::to_string(ev)?
-    } else {
-        let fallback = correlation_fallback(
-            ev.session_id.as_deref(),
-            ev.runtime_id.as_deref(),
-            &ev.run_id,
-        );
-        serde_json::to_string(&Compact {
-            seq: ev.seq,
-            ts_ms: ev.ts_ms,
-            session_id: ev.session_id.as_deref(),
-            correlation_id: (ev.correlation_id != fallback).then_some(ev.correlation_id.as_str()),
-            parent_event_id: ev.parent_event_id.as_deref(),
-            call_id: ev.call_id.as_deref(),
-            component: ev.component,
-            kind: &ev.kind,
-            node_id: ev.node_id.as_deref(),
-            status: ev.status,
-            duration_ms: ev.duration_ms,
-            payload: &ev.payload,
-            artifact: ev.artifact.as_ref(),
-        })?
-    };
-    line.push('\n');
-    Ok(line)
-}
-
-/// A file line as read: every field a schema-2 line may leave out is
-/// optional (a schema-1 line has them all).
-#[derive(Deserialize)]
-struct StoredLine {
-    #[serde(default)]
-    schema_version: Option<u32>,
-    #[serde(default)]
-    event_id: Option<String>,
-    seq: u64,
-    ts_ms: i64,
-    #[serde(default)]
-    sandbox: Option<String>,
-    #[serde(default)]
-    config_hash: Option<String>,
-    #[serde(default)]
-    runtime_id: Option<String>,
-    #[serde(default)]
-    run_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
-    correlation_id: Option<String>,
-    #[serde(default)]
-    parent_event_id: Option<String>,
-    #[serde(default)]
-    call_id: Option<String>,
-    component: Component,
-    kind: String,
-    #[serde(default)]
-    node_id: Option<String>,
-    status: Status,
-    #[serde(default)]
-    duration_ms: Option<u64>,
-    #[serde(default = "empty_object")]
-    payload: Value,
-    #[serde(default)]
-    artifact: Option<ArtifactRef>,
-}
-
-/// A draft's payload when none was set (`EventDraft::new`): left out of a
-/// compact line, given back on read.
-fn is_empty_object(v: &&Value) -> bool {
-    v.as_object().is_some_and(serde_json::Map::is_empty)
-}
-
-fn empty_object() -> Value {
-    json!({})
-}
-
-/// Reads one trace file's lines in order (module docs): a full line (a
-/// line with its `run_id`: `run.opened`, any schema-1 line) sets the run's
-/// constants; a compact line takes them from it. A compact line before any
-/// full one, or one that does not parse, is `None`.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct LineReader {
-    run: Option<(u32, RunContext)>,
-}
-
-impl LineReader {
-    pub(crate) fn read(&mut self, line: &[u8]) -> Option<ExecutionEvent> {
-        let l: StoredLine = serde_json::from_slice(line).ok()?;
-        let (version, ctx) = match l.run_id {
-            Some(run_id) => {
-                let ctx = RunContext {
-                    sandbox: l.sandbox.unwrap_or_default(),
-                    config_hash: l.config_hash,
-                    runtime_id: l.runtime_id,
-                    run_id,
-                };
-                let version = l.schema_version.unwrap_or(1);
-                self.run = Some((version, ctx.clone()));
-                (version, ctx)
-            }
-            None => self.run.clone()?,
-        };
-        let correlation_id = l.correlation_id.unwrap_or_else(|| {
-            correlation_fallback(
-                l.session_id.as_deref(),
-                ctx.runtime_id.as_deref(),
-                &ctx.run_id,
-            )
-            .to_string()
-        });
-        Some(ExecutionEvent {
-            schema_version: version,
-            event_id: l.event_id.unwrap_or_else(|| event_id(&ctx.run_id, l.seq)),
-            seq: l.seq,
-            ts_ms: l.ts_ms,
-            sandbox: ctx.sandbox,
-            config_hash: ctx.config_hash,
-            runtime_id: ctx.runtime_id,
-            run_id: ctx.run_id,
-            session_id: l.session_id,
-            correlation_id,
-            parent_event_id: l.parent_event_id,
-            call_id: l.call_id,
-            component: l.component,
-            kind: l.kind,
-            node_id: l.node_id,
-            status: l.status,
-            duration_ms: l.duration_ms,
-            payload: l.payload,
-            artifact: l.artifact,
-        })
     }
 }
 
@@ -1286,94 +1102,5 @@ mod tests {
         assert!(recorded_call(&events, 9)
             .unwrap_err()
             .contains("no event 9"));
-    }
-
-    /// Schema 2: `run.opened` in full, later lines without the run's
-    /// constants, `event_id`, a fallback `correlation_id` or `null` fields;
-    /// [`LineReader`] gives back the same events. A schema-1 file (every
-    /// line full) reads as before; a compact line with no full line before
-    /// it is skipped.
-    #[test]
-    fn stored_lines_drop_run_constants_and_read_back_whole() {
-        let mut c = ctx();
-        c.runtime_id = Some("host:4242:0f0e0d0c-0b0a-4908-8706-050403020100".into());
-        let opened = c.stamp(
-            1,
-            10,
-            EventDraft::new(Component::Runtime, RUN_OPENED, Status::Ok)
-                .payload(json!({"kind": "run", "pid": 7})),
-        );
-        let fired = c.stamp(
-            2,
-            11,
-            EventDraft::new(Component::Feed, "feed.fired", Status::Running)
-                .session("feed:tick:1759912350000")
-                .node("feed:tick"),
-        );
-        let own = c.stamp(
-            3,
-            12,
-            EventDraft::new(Component::Tool, "tool.completed", Status::Ok)
-                .session("feed:tick:1759912350000")
-                .correlation("demo:tick:1")
-                .parent(fired.event_id.clone())
-                .call("feed:tick:1759912350000:0")
-                .duration(5)
-                .payload(json!({"tool": "hl_book"})),
-        );
-        let no_session = c.stamp(
-            4,
-            13,
-            EventDraft::new(Component::Runtime, "runtime.running", Status::Ok),
-        );
-        let events = [opened, fired, own, no_session];
-        let lines: Vec<String> = events.iter().map(|e| stored_line(e).unwrap()).collect();
-        let v: Vec<Value> = lines
-            .iter()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        assert_eq!(
-            v[0],
-            serde_json::to_value(&events[0]).unwrap(),
-            "first line whole"
-        );
-        assert_eq!(v[0]["schema_version"], json!(TRACE_SCHEMA_VERSION));
-        assert_eq!(
-            v[1],
-            json!({"seq": 2, "ts_ms": 11, "session_id": "feed:tick:1759912350000",
-                   "component": "feed", "kind": "feed.fired", "node_id": "feed:tick", "status": "running"})
-        );
-        assert_eq!(
-            v[2]["correlation_id"],
-            json!("demo:tick:1"),
-            "not the fallback: kept"
-        );
-        assert!(
-            v[3].get("correlation_id").is_none(),
-            "= the runtime id: dropped"
-        );
-        let full = serde_json::to_string(&events[1]).unwrap().len();
-        assert!(
-            lines[1].len() * 100 < full * 45,
-            "{} of {full} bytes",
-            lines[1].len()
-        );
-        let mut r = LineReader::default();
-        let back: Vec<ExecutionEvent> = lines.iter().filter_map(|l| r.read(l.as_bytes())).collect();
-        assert_eq!(back, events);
-        // Schema 1: every line full, version 1 kept.
-        let mut r1 = LineReader::default();
-        let mut old = serde_json::to_value(&events[2]).unwrap();
-        old["schema_version"] = json!(1);
-        let read = r1.read(old.to_string().as_bytes()).unwrap();
-        assert_eq!(
-            (read.schema_version, &read.event_id),
-            (1, &events[2].event_id)
-        );
-        assert_eq!(
-            LineReader::default().read(lines[1].as_bytes()),
-            None,
-            "no first line"
-        );
     }
 }

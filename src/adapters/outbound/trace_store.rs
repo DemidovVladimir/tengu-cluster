@@ -29,8 +29,8 @@ use crate::domain::metrics::MetricsRecord;
 use crate::domain::observation::now_ms;
 use crate::domain::secrets::SecretRegistry;
 use crate::domain::trace::{
-    bound_payload, order_events, scrub_value, stored_line, Component, EventDraft, ExecutionEvent,
-    LineReader, RunContext, RunKind, RunSummary, Status, MAX_PAYLOAD_BYTES, RUN_OPENED,
+    bound_payload, order_events, scrub_value, Component, EventDraft, ExecutionEvent, RunContext,
+    RunKind, RunSummary, Status, MAX_PAYLOAD_BYTES, RUN_OPENED,
 };
 use crate::ports::trace::{TraceReader, TraceSink};
 
@@ -142,7 +142,8 @@ impl JsonlTraceSink {
         scrub_value(&mut ev.payload, &self.secrets);
         let payload = std::mem::take(&mut ev.payload);
         ev.payload = bound_payload(payload, self.max_payload_bytes, keep).0;
-        append_line(&self.path, &stored_line(&ev)?)?;
+        let line = format!("{}\n", serde_json::to_string(&ev)?);
+        append_line(&self.path, &line)?;
         *last = seq;
         Ok(ev.event_id)
     }
@@ -164,31 +165,17 @@ impl TraceSink for JsonlTraceSink {
     }
 }
 
-/// Complete lines of `bytes` as events, read in file order by `lines`
-/// (`domain::trace::LineReader`: it re-stamps a compact line from the run's
-/// first; unparsable lines skipped); the bytes after the last newline stay
-/// in `bytes`.
-fn drain_events(bytes: &mut Vec<u8>, lines: &mut LineReader) -> Vec<ExecutionEvent> {
+/// Complete lines of `bytes` as events (unparsable lines skipped); the
+/// bytes after the last newline stay in `bytes`.
+fn drain_events(bytes: &mut Vec<u8>) -> Vec<ExecutionEvent> {
     let mut out = Vec::new();
-    let mut start = 0;
-    while let Some(i) = bytes[start..].iter().position(|b| *b == b'\n') {
-        out.extend(lines.read(&bytes[start..start + i + 1]));
-        start += i + 1;
+    while let Some(i) = bytes.iter().position(|b| *b == b'\n') {
+        let line: Vec<u8> = bytes.drain(..=i).collect();
+        if let Ok(ev) = serde_json::from_slice::<ExecutionEvent>(&line) {
+            out.push(ev);
+        }
     }
-    bytes.drain(..start);
     out
-}
-
-/// A reader primed with `path`'s first line (the run's constants).
-fn first_line(path: &Path) -> Result<LineReader> {
-    let f = std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
-    let mut line = Vec::new();
-    std::io::BufRead::read_until(&mut std::io::BufReader::new(f), b'\n', &mut line)?;
-    let mut lines = LineReader::default();
-    if line.ends_with(b"\n") {
-        lines.read(&line);
-    }
-    Ok(lines)
 }
 
 /// One sandbox's recordings (module table).
@@ -206,8 +193,6 @@ struct ParsedRun {
     run_id: String,
     read: u64,
     events: Arc<Vec<ExecutionEvent>>,
-    /// The run's constants, for the lines appended next.
-    lines: LineReader,
 }
 
 impl JsonlTraceReader {
@@ -242,7 +227,6 @@ impl JsonlTraceReader {
         let file = std::fs::File::open(path).with_context(ctx)?;
         let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
         let (mut lines, mut first, mut head) = (0u64, None, Vec::new());
-        let mut reader_lines = LineReader::default();
         loop {
             let buf = std::io::BufRead::fill_buf(&mut reader).with_context(ctx)?;
             if buf.is_empty() {
@@ -257,9 +241,7 @@ impl JsonlTraceReader {
                 if first.is_none() {
                     // `head` holds the line's start from earlier buffers.
                     head.extend_from_slice(&buf[start..=i]);
-                    first = drain_events(&mut head, &mut reader_lines)
-                        .into_iter()
-                        .next();
+                    first = drain_events(&mut head).into_iter().next();
                     head.clear();
                 }
                 start = i + 1;
@@ -275,15 +257,14 @@ impl JsonlTraceReader {
         Ok(Some(RunSummary::from_ends(&first, &last, lines)))
     }
 
-    /// The last complete line of `path` that parses, from its tail,
-    /// re-stamped from its first line.
+    /// The last complete line of `path` that parses, from its tail.
     fn last_event(path: &Path) -> Result<Option<ExecutionEvent>> {
-        let mut lines = first_line(path)?;
         let mut f =
             std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
         let len = f.metadata()?.len();
+        let start = len.saturating_sub(TAIL_BYTES);
         let mut bytes = Vec::new();
-        f.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))?;
+        f.seek(SeekFrom::Start(start))?;
         f.read_to_end(&mut bytes)?;
         let Some(end) = bytes.iter().rposition(|b| *b == b'\n') else {
             return Ok(None);
@@ -291,7 +272,7 @@ impl JsonlTraceReader {
         // From a mid-file start the first piece is a cut line: it never parses.
         Ok(bytes[..end]
             .rsplit(|b| *b == b'\n')
-            .find_map(|l| lines.read(l)))
+            .find_map(|l| serde_json::from_slice::<ExecutionEvent>(l).ok()))
     }
 
     /// `run_id`'s events (module table): the cached copy, plus what was
@@ -306,9 +287,9 @@ impl JsonlTraceReader {
             .map(|i| cache.remove(i));
         let mut f = std::fs::File::open(&path).with_context(ctx)?;
         let len = f.metadata().with_context(ctx)?.len();
-        let (mut read, mut events, mut lines) = match cached {
-            Some(c) if c.read <= len => (c.read, c.events, c.lines),
-            _ => (0, Arc::new(Vec::new()), LineReader::default()),
+        let (mut read, mut events) = match cached {
+            Some(c) if c.read <= len => (c.read, c.events),
+            _ => (0, Arc::new(Vec::new())),
         };
         if read < len {
             let mut bytes = Vec::new();
@@ -319,7 +300,7 @@ impl JsonlTraceReader {
             let complete = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
             bytes.truncate(complete);
             read += complete as u64;
-            let new = drain_events(&mut bytes, &mut lines);
+            let new = drain_events(&mut bytes);
             if !new.is_empty() {
                 let all = Arc::make_mut(&mut events);
                 let tail = all.last().map_or(0, |e| e.seq);
@@ -335,7 +316,6 @@ impl JsonlTraceReader {
             run_id: run_id.to_string(),
             read,
             events: Arc::clone(&events),
-            lines,
         });
         if cache.len() > RUN_CACHE {
             cache.remove(0);
@@ -393,7 +373,6 @@ impl TraceReader for JsonlTraceReader {
         let poll = self.poll;
         tokio::spawn(async move {
             let (mut pos, mut last, mut pending) = (0u64, after_seq, Vec::<u8>::new());
-            let mut lines = LineReader::default();
             loop {
                 let read = tokio::task::spawn_blocking({
                     let path = path.clone();
@@ -413,11 +392,10 @@ impl TraceReader for JsonlTraceReader {
                         // Replaced or truncated: read again from the top;
                         // `last` keeps already-sent events from repeating.
                         pending.clear();
-                        lines = LineReader::default();
                     }
                     pos = start + buf.len() as u64;
                     pending.extend_from_slice(&buf);
-                    for ev in drain_events(&mut pending, &mut lines) {
+                    for ev in drain_events(&mut pending) {
                         if ev.seq <= last {
                             continue;
                         }
@@ -638,24 +616,11 @@ mod tests {
         let id = s.emit(step(1)).unwrap();
         s.emit(step(2)).unwrap();
         let lines = file_lines(s.path());
-        assert_eq!(id, format!("{}:2", s.run_id().unwrap()));
-        assert_eq!(lines.iter().filter(|l| l["seq"] == json!(2)).count(), 1);
+        assert_eq!(
+            lines.iter().filter(|l| l["event_id"] == json!(id)).count(),
+            1
+        );
         assert_eq!(lines.len(), 3, "run.opened + 2");
-        // Schema 2: the run's constants on its first line only.
-        assert_eq!(lines[0]["schema_version"], json!(2));
-        assert_eq!(lines[0]["run_id"], json!(s.run_id().unwrap()));
-        for l in &lines[1..] {
-            for k in [
-                "schema_version",
-                "event_id",
-                "sandbox",
-                "config_hash",
-                "runtime_id",
-                "run_id",
-            ] {
-                assert!(l.get(k).is_none(), "{k} in {l}");
-            }
-        }
         let r = reader(tmp.path());
         let run = s.run_id().unwrap();
         let first = r.events(run, 0, 2).unwrap();
