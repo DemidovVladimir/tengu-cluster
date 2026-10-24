@@ -1,4 +1,4 @@
-//! Disk-backed `VectorStore` — bincode `<store dir>/vectors.bin` (`<workspace>/memory`).
+//! Disk-backed `VectorStore` — bincode `<store dir>/vectors.bin` (`<workspace>/.tengu/memory`).
 //! Without a workspace the store dir is `[memory] store_path` (default
 //! `<TENGU_HOME>/memory/`), see `bootstrap::memory::resolve_memory_store_path`.
 //!

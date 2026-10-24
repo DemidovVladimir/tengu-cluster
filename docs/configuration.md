@@ -149,7 +149,7 @@ route_explicit_agents = false  # true = `@role:` messages also go through the pl
 | `enabled` | `false` | disk vector store + `memory_ingest` / `memory_search`; embeddings need `OPENROUTER_API_KEY` |
 | `embedding_model` | `text-embedding-3-small` | must stay 1536-dim (Postgres `vector(1536)`) |
 | `max_recall_entries` · `max_recall_tokens` | 5 · 600 | |
-| `store_path` | `<TENGU_HOME>/memory/` | store dir (`vectors.bin`) of an agent without `workspace` — else `<workspace>/memory/`; the disk bincode store is the only built-in backend (no `backend` key; one set is ignored) |
+| `store_path` | `<TENGU_HOME>/memory/` | store dir (`vectors.bin`) of an agent without `workspace` — else `<workspace>/.tengu/memory/` (an old `<workspace>/memory/vectors.bin` moves in on first use); the disk bincode store is the only built-in backend (no `backend` key; one set is ignored) |
 | `persistent_store_chunk_size` · `_overlap` | 1000 · 200 | characters |
 | `session_recent_n` | 10 | last messages reloaded per orchestrator turn |
 | `cross_plan_top_k` | 5 | replan recall over `agentic_memory` step outputs |
@@ -624,7 +624,7 @@ tengu sources --sandbox soe list                          # the source registry;
 
 ```bash
 tengu prune                              # the shared <TENGU_HOME>/memory/ and logs/ (every sandbox's traces, the audit logs)
-tengu prune --sandbox <name>             # only <name>: logs/trace/<name>/, each workspace's memory/, .tengu-attachments/, .tengu/storage/, scaffold project dirs, the vectors.bin of its own [memory] store_path
+tengu prune --sandbox <name>             # only <name>: logs/trace/<name>/, each workspace's .tengu/memory/, .tengu/attachments/, .tengu/storage/ (+ an old memory/vectors.bin, .tengu-attachments/), scaffold project dirs, the vectors.bin of its own [memory] store_path
 tengu prune --sandbox <name> --hard      # the same, each workspace root emptied (every child) instead, the root kept
 ```
 

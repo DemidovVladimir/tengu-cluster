@@ -108,7 +108,7 @@ Shape of the temp `--mcp-config` file:
 |---|---|---|
 | present | present | that block as `Config::load` folded it: scopes (with `[default_scopes]`), `sandbox` sections (`xm_state_dir`, `a2a`, `privy_wallet_id`, …), `no_shell_fallback`; `[memory]` as in-process. With `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's engine) every configured scope but a deny-all one also gets the workspace as an fs root — the step's own executor does the same (`grant_workspace_root`) |
 | present | absent / unset | `Config::default()`'s `main` + `TENGU_BRIDGE_SCOPES`, warn; shell-free when the loaded config's agents are |
-| absent | — | standalone bridge: default `main` + `TENGU_BRIDGE_SCOPES`, warn; disk memory under `<workspace>/memory` |
+| absent | — | standalone bridge: default `main` + `TENGU_BRIDGE_SCOPES`, warn; disk memory under `<workspace>/.tengu/memory` |
 | present but invalid | — | the bridge exits with the load error |
 
 Then every `WORKSPACE_TOOLS` name in `TENGU_BRIDGE_TOOLS` joins the agent's `workspace_tools` (the merge `subagent_config` applies to `tools`), and every requested name counts as listed in `skill_packages` (shell skills).

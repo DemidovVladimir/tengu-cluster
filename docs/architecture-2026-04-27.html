@@ -406,7 +406,7 @@
         <td>Git / history</td>
       </tr>
       <tr>
-        <td>&lt;workspace&gt;/memory/vectors.bin</td>
+        <td>&lt;workspace&gt;/.tengu/memory/vectors.bin</td>
         <td>disk vector store (bincode) behind <code>memory_ingest</code> / <code>memory_search</code> / <code>persistent_store</code>; without a workspace <code>[memory] store_path</code> (default <code>&lt;TENGU_HOME&gt;/memory/</code>)</td>
         <td><code>MemoryPlugin</code> tools</td>
         <td>same tools + chat <code>[Relevant memories]</code> recall</td>
@@ -1496,7 +1496,7 @@ const FILE_MAP = [
   ["src/ports/memory.rs", "memory", "traits — VectorStore, Embedding, MemoryService, RecallStore"],
   ["src/application/memory/fencing.rs", "memory", "recalled-memory block: a note + one untrusted fence (chat recall)"],
   ["src/domain/memory.rs", "memory", "MemoryHit, ChunkMetadata, RecallHit, DEFAULT_EMBEDDING_MODEL"],
-  ["src/adapters/outbound/memory/disk_vector.rs", "memory", "DiskVectorStore — the only VectorStore impl (bincode <workspace>/memory/vectors.bin, else [memory] store_path)"],
+  ["src/adapters/outbound/memory/disk_vector.rs", "memory", "DiskVectorStore — the only VectorStore impl (bincode <workspace>/.tengu/memory/vectors.bin, else [memory] store_path)"],
   ["src/adapters/outbound/memory/embedder.rs", "memory", "Embedder — OpenRouter text-embedding-3-small client (impl Embedding); kind=Embedding records"],
   ["src/adapters/outbound/tools/agentic_memory/mod.rs", "memory", "agentic_memory — Postgres Open Brain + LLM Wiki (postgres_memory)"],
   // ── agents / config ──

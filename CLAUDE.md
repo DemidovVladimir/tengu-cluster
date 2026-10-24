@@ -887,7 +887,12 @@ These are not preferences. They're load-bearing.
   `apply_improver_proposal` resource paths and `agentic_memory` wiki titles
   refuse the same names (`domain::scope::protected_write`).
   Not covered: Claude Code built-ins (profiles other than `none`) and
-  `run_command`.
+  `run_command`. The harness keeps all its workspace state under
+  `<ws>/.tengu/` (`observations.db`, `cache.db`, `storage/`, `skills/`,
+  `memory/` — the vector store —, `attachments/` — Telegram); an old
+  workspace's `memory/vectors.bin` and `.tengu-attachments/` move in on first
+  use (`config::paths::WorkspaceDir`). New builder sandboxes default to
+  `~/tengu-lab/<sandbox>/ws`.
 - **Sealed keys (2026-10-09, `docs/sealed-keys-2026-10-09.md`)** — with `[keys]` no
   provider key sits on the machine: each is a secret of the `tengu-seal` Cloudflare
   Worker (`cloudflare/seal-worker`, Rust), set by the operator (dashboard or `npx

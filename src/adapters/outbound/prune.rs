@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::adapters::outbound::trace_store::{check_sandbox_name, trace_root};
-use crate::config::paths::Layout;
+use crate::config::paths::{Layout, WS_ATTACHMENTS, WS_MEMORY};
 
 /// A single item that can be pruned.
 pub struct PruneTarget {
@@ -134,17 +134,29 @@ pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
             continue;
         }
 
-        // Soft mode: known allow-list only.
+        // Soft mode: known allow-list only — the harness dirs
+        // (`config::paths::WorkspaceDir`) and what an old workspace still
+        // keeps at their old paths (never an agent's own `memory/` files).
         push(
-            ws.join("memory"),
+            WS_MEMORY.path(ws),
             format!("workspace memory ({ws_display})"),
         );
         push(
-            ws.join(".tengu-attachments"),
+            WS_ATTACHMENTS.path(ws),
             format!("attachments ({ws_display})"),
         );
+        if let Some(file) = WS_MEMORY.moves {
+            push(
+                WS_MEMORY.old(ws).join(file),
+                format!("workspace memory, old path ({ws_display})"),
+            );
+        }
+        push(
+            WS_ATTACHMENTS.old(ws),
+            format!("attachments, old path ({ws_display})"),
+        );
         // `persistent_store` files + manifests (`tools/memory/persistent_store.rs`);
-        // their vectors live in `memory/` above. (Was `<ws>/storage`, which no
+        // their vectors live in `.tengu/memory/` above. (Was `<ws>/storage`, which no
         // code writes — a user folder of that name was deleted instead.)
         push(
             ws.join(".tengu").join("storage"),
@@ -234,6 +246,8 @@ mod tests {
         // Known + arbitrary agent-created generated files under the workspace.
         std::fs::create_dir_all(ws.join(".tengu/memory")).unwrap();
         std::fs::create_dir_all(ws.join("memory")).unwrap();
+        std::fs::write(ws.join("memory/vectors.bin"), b"v").unwrap();
+        std::fs::write(ws.join("memory/notes.md"), b"mine").unwrap();
         std::fs::create_dir_all(ws.join("image_payload/src")).unwrap();
         std::fs::create_dir_all(ws.join("keylogger_rs")).unwrap();
         std::fs::write(ws.join("TENGU_PLAN.md"), b"x").unwrap();
@@ -248,7 +262,10 @@ mod tests {
             hard: false,
         });
         let soft_paths = existing_paths(&soft);
-        assert!(soft_paths.contains(&ws.join("memory")));
+        assert!(soft_paths.contains(&ws.join(".tengu/memory")));
+        // An old workspace: its store file, never the agent's own notes.
+        assert!(soft_paths.contains(&ws.join("memory/vectors.bin")));
+        assert!(!soft_paths.contains(&ws.join("memory")));
         assert!(!soft_paths.contains(&ws.join(".tengu")));
         assert!(!soft_paths.contains(&ws.join("image_payload")));
 
@@ -348,8 +365,8 @@ mod tests {
             std::fs::create_dir_all(home.join("state/flows")).unwrap();
             std::fs::write(home.join("state/flows/f.json"), b"{}").unwrap();
             std::fs::write(home.join("state/solana-writes.db"), b"x").unwrap();
-            std::fs::create_dir_all(root.path().join("ws/memory")).unwrap();
-            std::fs::create_dir_all(xm.join("memory")).unwrap();
+            std::fs::create_dir_all(root.path().join("ws/.tengu/memory")).unwrap();
+            std::fs::create_dir_all(xm.join(".tengu/memory")).unwrap();
 
             let workspaces = [root.path().join(ws)];
             let targets = plan_prune(&PruneOptions {
@@ -373,11 +390,14 @@ mod tests {
             for f in files {
                 assert!(xm.join(f).exists(), "{label}: {f} deleted");
             }
-            assert!(xm.join("memory").exists(), "{label}: inside the state dir");
+            assert!(
+                xm.join(".tengu/memory").exists(),
+                "{label}: inside the state dir"
+            );
             assert!(home.join("state/solana-writes.db").exists(), "{label}");
             assert!(home.join("state/flows/f.json").exists(), "{label}: flows");
             if ws == "ws" {
-                assert!(!root.path().join("ws/memory").exists(), "{label}");
+                assert!(!root.path().join("ws/.tengu/memory").exists(), "{label}");
             }
         }
     }

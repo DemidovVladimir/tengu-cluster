@@ -330,7 +330,7 @@ impl TelegramSession {
             .filter_map(|s| s.workspace.clone())
             .collect();
         for ws in &ws_set {
-            let p = ws.join(".tengu-attachments");
+            let p = crate::config::paths::WS_ATTACHMENTS.open(ws);
             if p.exists() {
                 match std::fs::remove_dir_all(&p) {
                     Ok(()) => lines.push(format!("Cleaned {}", p.display())),

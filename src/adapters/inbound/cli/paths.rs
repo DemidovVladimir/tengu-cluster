@@ -7,7 +7,7 @@
 //! | `state` | the `runtime.db` / heartbeat dir, `[xmarket]` state (+ recorder day files), `[sources]` state (+ the SOE profile), evidence vaults, `solana-writes.db` |
 //! | `logs` | `tengu.log`, the egress audit, `decisions.jsonl`, `risk.jsonl`, this sandbox's trace dir, `maps/` |
 //! | `skills` · `memory` | the managed skill tier, the vectors of an agent with no workspace |
-//! | `workspace` | each agent's workspace, then the harness files in it: every `.tengu/` entry, `memory/`, `.tengu-attachments/` |
+//! | `workspace` | each agent's workspace, then the harness files in it: every `.tengu/` entry, and an old workspace's `memory/vectors.bin` / `.tengu-attachments/` (not moved in yet: `config::paths::WorkspaceDir`) |
 //!
 //! Every path comes from the code that uses it (`config::paths::Layout`, the
 //! config sections, `trace_root`, `resolve_memory_store_path`). Read-only: no
@@ -25,6 +25,7 @@ use crate::bootstrap::runtime::runner_name;
 use crate::config::builder::sandbox_name_error;
 use crate::config::paths::{
     absolute_path, default_config_path, expand_tilde, home_source, HomeSource, Layout,
+    WorkspaceDir, WS_ATTACHMENTS, WS_MEMORY,
 };
 use crate::config::soe::SoeConfig;
 use crate::config::Config;
@@ -40,8 +41,8 @@ pub(crate) struct PathRow {
     pub bytes: Option<u64>,
 }
 
-/// The harness files a workspace may hold (module table).
-const WORKSPACE_FILES: [&str; 2] = ["memory", ".tengu-attachments"];
+/// The old paths a workspace may still hold (module table).
+const OLD_PATHS: [WorkspaceDir; 2] = [WS_MEMORY, WS_ATTACHMENTS];
 
 /// `tengu paths`.
 pub(crate) fn run_paths(
@@ -159,14 +160,21 @@ pub(crate) fn path_rows(config: &Config, layout: &Layout, source: &HomeSource) -
             .filter_map(|e| e.ok().map(|e| e.path()))
             .collect();
         files.sort();
-        files.extend(WORKSPACE_FILES.iter().map(|f| ws.join(f)));
-        for file in files.into_iter().filter(|f| f.exists()) {
+        let old = OLD_PATHS
+            .iter()
+            .map(|d| d.moves.map_or_else(|| d.old(&ws), |f| d.old(&ws).join(f)));
+        for (file, label) in files
+            .into_iter()
+            .map(|f| (f, ""))
+            .chain(old.map(|f| (f, " (old path)")))
+            .filter(|(f, _)| f.exists())
+        {
             let rel = file
                 .strip_prefix(&ws)
                 .unwrap_or(&file)
                 .display()
                 .to_string();
-            add("workspace", &format!("{agent} · {rel}"), file);
+            add("workspace", &format!("{agent} · {rel}{label}"), file);
         }
         seen.push(ws);
     }
@@ -253,6 +261,8 @@ mod tests {
         std::fs::write(home.join("state/xm-paths/ledger.db"), [0u8; 10]).unwrap();
         std::fs::create_dir_all(ws.join(".tengu")).unwrap();
         std::fs::write(ws.join(".tengu/observations.db"), [0u8; 5]).unwrap();
+        std::fs::create_dir_all(ws.join(".tengu-attachments")).unwrap();
+        std::fs::write(ws.join(".tengu-attachments/a.pdf"), [0u8; 3]).unwrap();
         let mut config: Config = toml::from_str(&format!(
             "[xmarket]\nstate = \"xm-paths\"\n\
              [agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\nworkspace = \"{}\"\n\
@@ -295,7 +305,8 @@ mod tests {
         assert!(rows
             .iter()
             .all(|r| r.name != "main · .tengu/observations.db"));
-        assert_eq!(row("main").bytes, Some(5));
+        assert_eq!(row("helper · .tengu-attachments (old path)").bytes, Some(3));
+        assert_eq!(row("main").bytes, Some(8));
         assert!(render(&rows).contains(&format!("{}\n", home.join("state/xm-paths").display())));
         assert_eq!(human(Some(1536)), "1.5 KB");
     }

@@ -89,7 +89,7 @@ impl TelegramSession {
 
         // Save attached files.
         let user_content = if let (Some(ref ws), Some(media_items)) = (&agent.workspace, &media) {
-            let attachments_dir = ws.join(".tengu-attachments");
+            let attachments_dir = crate::config::paths::WS_ATTACHMENTS.open(ws);
             std::fs::create_dir_all(&attachments_dir).ok();
 
             let mut file_notes = Vec::new();

@@ -621,7 +621,7 @@ fn kinds() -> Vec<KindSpec> {
                     .help("Off: the tool runs with the permissive default. On: only the folders, hosts and env vars below.")
                     .writes("agents.<agent>.scopes.<tool>"),
                 field("fs_roots", "Folders", List)
-                    .placeholder("~/tengu-work")
+                    .placeholder("~/tengu-lab")
                     .show_if("restrict", restrict())
                     .writes("agents.<agent>.scopes.<tool>.fs_roots"),
                 field("net_hosts", "Hosts", List)
@@ -665,7 +665,7 @@ fn kinds() -> Vec<KindSpec> {
             fields: vec![
                 field("path", "Folder", String)
                     .required()
-                    .placeholder("~/tengu-work/my-team")
+                    .placeholder("~/tengu-lab/my-team/ws")
                     .writes("agents.<agent>.workspace"),
                 field("confine", "Confine file tools", Bool)
                     .default(json!(true))

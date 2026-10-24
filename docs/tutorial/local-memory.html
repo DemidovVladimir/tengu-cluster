@@ -135,7 +135,7 @@
         </g>
         <g class="n brain" data-at="1,4-7,9">
           <rect x="410" y="140" width="170" height="66" rx="8"/>
-          <text x="495" y="164" text-anchor="middle" class="t-title t-mono">memory/vectors.bin</text>
+          <text x="495" y="164" text-anchor="middle" class="t-title t-mono">.tengu/memory/vectors.bin</text>
           <text x="495" y="183" text-anchor="middle" class="t-small">bincode, cosine scan</text>
           <text x="495" y="197" text-anchor="middle" class="t-small">locked write, full rewrite</text>
         </g>
@@ -196,7 +196,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>[memory] store_path</code> or <code>&lt;TENGU_HOME&gt;/memory/</code>. No key: memory stays off, with a warning.</li>
+        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/.tengu/memory/vectors.bin</code> (a <code>vectors.bin</code> still in the old <code>&lt;workspace&gt;/memory/</code> moves in on first use), else <code>[memory] store_path</code> or <code>&lt;TENGU_HOME&gt;/memory/</code>. No key: memory stays off, with a warning.</li>
         <li>The system prompt loads <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code> from the agent's workspace: up to 2000 tokens each, 32000 in total.</li>
         <li>A message about the last, latest, newest, previous or most recent thing skips recall. A system note tells the model to verify instead.</li>
         <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>), capped at <code>max_recall_tokens</code> (600), join the head of the user message after a system note, inside one <code>&lt;untrusted origin="memory"&gt;</code> fence, never as a system message and never stored in history.</li>
@@ -279,7 +279,7 @@
   </div>
   <div class="grid stores">
     <div class="card brain">
-      <h3>memory/vectors.bin</h3>
+      <h3>.tengu/memory/vectors.bin</h3>
       <dl class="kv"><dt>holds</dt><dd>every entry: id, text, 1536 floats, metadata</dd>
       <dt>writers</dt><dd><code>memory_ingest</code>, <code>persistent_store</code></dd>
       <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>&lt;TENGU_HOME&gt;/memory/</code></dd>
@@ -332,7 +332,7 @@
 <span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox storage-test --agent storage --tool persistent_store --args '{"operation":"list"}'</span>
 <span class="ln o">  # one JSON object: text = {"files": [...], "count": n}, is_error = false</span>
 <span class="ln cmd"><span class="p">$ </span>tengu prune --sandbox storage-test</span>
-<span class="ln o">  # soft: removes &lt;workspace&gt;/memory and .tengu/storage; --hard empties the workspace</span></pre>
+<span class="ln o">  # soft: removes &lt;workspace&gt;/.tengu/memory, .tengu/storage (+ an old memory/vectors.bin); --hard empties the workspace</span></pre>
   </div>
 </section>
 

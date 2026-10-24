@@ -2113,7 +2113,7 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
         Set::Memory => {
             quotes("memo.txt's token", &ws.memo_token);
             assert!(
-                ws.path.join("memory").exists(),
+                ws.path.join(".tengu/memory").exists(),
                 "{label}: no disk memory store under the workspace"
             );
         }
