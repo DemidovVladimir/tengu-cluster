@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `735de7744e6e2c7b7cbb9002cffde2c233585798` (Y9) · PR #59 open, not merged |
+| Last code commit | `7fdebe072c64d08804202b8678bb4a5aae2316cd` (B3) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -43,6 +43,9 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Y6 | done: strict-argument helpers (`object_args`, `field`, `opt_str` trimmed, `req_str`, `opt_bool`, `whole`, `opt_time`) + `opt_u64_arg` in `tools/args.rs` for xm, xlab, soe, sources, Hyperliquid, Solana; xm strings now trimmed | `9512327797ec89143529c4562e69206876ce4936` |
 | Y8 | done by S12: every registry-taking arm loads through `sandbox_ctx`; the 6 left (`doctor`, `history`, `risk`, `sources`, `backtest`, `ranking`) take no registry | `493aff525c031fec0f7290b7203da32ec0035b0c` |
 | Y9 | done: `canonical::{hex, sha256_hex}` + `token::clip_chars` replace the copies; `truncate_to_token_budget` cuts bytes on a char boundary (no empty `[truncated]` on non-ASCII); footer was already shared | `735de7744e6e2c7b7cbb9002cffde2c233585798` |
+| B1 | done: `egress::warn_failure` — `tengu.log` gets only `denied` / `error` records, at WARN (verdict, tool, host, call id, status, reason) | `46ab0a45ff8f0a3da5b933d88f397dab6ad5c8e2` |
+| B2 | done: `turn{run_id, session_id}` span at chat, telegram, webhooks, A2A, `run-agent`, the bridge; egress records get `ts_ms` + `run_id` (`TENGU_RUN_ID` to children / bridge); `AttributedExecutor::call_ids` inside `build_tool_executor` + the bridge (outermost scope wins). Deviation: the traced wrapper stays per surface (it needs that surface's sink) | `f6d483645044c54e089d774ec74b685056a8d654` |
+| B3 | done (full variant): a 0600 step journal (`AgentIpcInput.journal`, `trace_store::JournalSink`) the child and its Claude Code / Codex bridge (`TENGU_BRIDGE_JOURNAL`) append `tool.*` drafts to, the child each turn's metrics; the parent reads it after any exit (engine error, timeout kill): events replayed, metrics forwarded when no reply came; `DraftBuffer` + `AgentIpcOutput.trace` deleted | `7fdebe072c64d08804202b8678bb4a5aae2316cd` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -83,7 +86,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
