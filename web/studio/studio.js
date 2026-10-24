@@ -50,7 +50,6 @@
     lastSeq: 0,
     upto: null,
     board: null,
-    stats: null,
     sel: { node: null, event: null },
     inspect: null,
     nodeDetail: null,
@@ -462,7 +461,6 @@
     S.bySeq = new Map();
     S.lastSeq = 0;
     S.board = null;
-    S.stats = null;
     S.run = null;
     S.runGraph = null;
     S.upto = null;
@@ -534,7 +532,6 @@
     const b = await api(`/api/v1/runs/${enc(id)}/board${at}`);
     if (id !== S.runId) return;
     S.board = b.board;
-    S.stats = b.stats;
     S.run = b.run;
     S.runGraph = b.graph;
     await ensureGraph(b.graph);
@@ -664,33 +661,9 @@
     n.hidden = notes.length === 0;
   }
 
-  // One figure group: a bold name, then "k v" parts (all computed in Rust,
-  // `domain::trace_stats`; drawn as served).
-  function figure(name, parts) {
-    const span = el("span", null, "loop");
-    span.append(el("b", name), document.createTextNode(" "), el("span", parts.join(" · "), "kv"));
-    return span;
-  }
-
-  function timing(t) {
-    return [`${t.count}`, `${(t.error_rate * 100).toFixed(1)}% failed`, `p50 ${t.p50_ms} ms`, `p95 ${t.p95_ms} ms`, `max ${t.max_ms} ms`];
-  }
-
   function renderCounters() {
     const box = $("counters");
     box.replaceChildren();
-    const st = S.stats;
-    if (st) {
-      box.append(figure("run", [`${st.events} events`, `${st.failed} failed`, `${(st.span_ms / 1000).toFixed(1)} s`]));
-      for (const [fam, t] of Object.entries(st.families)) box.append(figure(fam, timing(t)));
-      const tt = st.tokens_total;
-      if (tt.calls) box.append(figure("tokens", [`${tt.calls} calls`, `in ${tt.prompt}`, `out ${tt.completion}`]));
-      const j = st.jev;
-      if (j.calls) {
-        const cost = j.cost_calls ? [`cost ${j.cost.toFixed(4)} (${j.cost_calls} of ${j.calls} reported)`] : [];
-        box.append(figure("jev", [`${j.calls} calls`, `${j.failed} failed`, `in ${j.input_tokens}`, `out ${j.output_tokens}`, ...cost]));
-      }
-    }
     const loops = S.board ? S.board.header.loops : {};
     for (const [name, seen] of Object.entries(loops)) {
       const span = el("span", null, "loop");
