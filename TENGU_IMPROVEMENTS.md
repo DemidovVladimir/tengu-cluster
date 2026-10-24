@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `a8cbe7bca350f521b7468c985e2471bf0f6c8351` (R6 4/4) · PR #59 open, not merged |
+| Last code commit | `cdd2cf5ed70b375d843dab5ae4d522aee35fdead` (R7 stage 3) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -35,6 +35,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | R4 | done: 43 module allows removed, rustc-flagged items deleted, test-only helpers `#[cfg(test)]`; shrink-only list in `tests/scope_lint.rs` (only `domain/soe/portfolio.rs`); item allows with reasons on `xm/cost`, calendar sessions, rate-limit `Exec`. Also fixes the PR head: `3c9b920e0715e7b76807b138cafbe00322d604bb` deleted `learner_state.rs` but kept its `mod` line (CI red) | `f4639ad1aa904206fc245a0e83455aa7af50e543` |
 | R5 | done: planner prompt read by bootstrap (`planner_prompt`); `script` metric through `ShellExecutionPort::execute_shell_env` (egress wrapper, timeout; failed run = failed outcome); one `domain::scope::shell_quote`; `APPLICATION_IO` shrink-only list in `tests/layering_lint.rs` (19 files). Not done: the 223 direct `now_ms()` calls (no fix in the row) | `28b063466d1d3c6eebd713bcdbd8339727bc5ea2` |
 | R6 | done: `domain/lp/snapshot/` (compose, knobs, state, hedge_decide, lp_decide, tests); eval logic → `application/skills/lifecycle/eval.rs` (rows, stubs, judge, report types, transcript text), runner → `inbound/eval/{mod,row,tests}.rs`; `inbound/telegram/` (pipe, session, turn, commands, tests); `config/{agent,channels,memory,load,tests}.rs`. Pure moves; glob re-exports keep paths | `51ff4536420ae97404c8e6d35d713c7438373f8c` · `536ef2c25c918aa9bd1f91001da0052a1db9f4f5` · `ccd45c2bff871c59adf1e5b9d4a4115aca9eebc9` · `a8cbe7bca350f521b7468c985e2471bf0f6c8351` |
+| R7 | stages 1–3 done: one Cargo workspace (`crates/tengu-seal` a member, the wasm Worker excluded); 4 seams cut into core (`domain/base58.rs`, `domain/time.rs`, `config/runtime.rs::runtime_db`, `domain/canonical.rs::toml_digest`), the observation recorder counted as core; `tests/layering_lint.rs` `core_never_uses_a_vertical` (`VERTICALS`, `COMPOSITION`, zero exceptions); `src/lib.rs` = the `tengu` lib, unit tests `cargo test --lib`. Stage 4 (`tengu-trading`) not in this wave | `7f8d7c4210b9599269e8ec1555fdd2fcdebe30e7` · `d59e4c7145a7df5a7c399a370e5c14674c19a72a` · `985936fb150fab53779e57a60a614ca2ac77bf03` · `8721b3ffb5171dfb374ade2f7bb0e7accac5eb03` · `9b711da7a68a358ffac213e6c9bce35319f7aea3` · `88337a0cb8bb3621ed91f821864828825f45a962` · `cdd2cf5ed70b375d843dab5ae4d522aee35fdead` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -75,7 +76,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
