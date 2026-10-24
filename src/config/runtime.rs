@@ -127,6 +127,14 @@ pub fn state_dir(
         .unwrap_or_else(|| tengu_home.join("state"))
 }
 
+/// The `tengu run` lease (`outbound/runtime_store.rs`).
+pub(crate) const RUNTIME_DB: &str = "runtime.db";
+
+/// `<state_dir>/runtime.db` — `state_dir` as [`state_dir`] picks it.
+pub(crate) fn runtime_db(state_dir: &Path) -> PathBuf {
+    state_dir.join(RUNTIME_DB)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

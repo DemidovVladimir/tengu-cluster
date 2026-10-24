@@ -8,7 +8,8 @@
 //!
 //! State layout — one state dir per sandbox, `<TENGU_HOME>/state/<state>`,
 //! shared by every process of the install; `tengu prune` never deletes it.
-//! Paths: [`ledger_db`], [`runtime_db`], [`history_dir`].
+//! Paths: [`ledger_db`], [`history_dir`]; `runtime.db` is core
+//! (`config::runtime::runtime_db`: every `tengu run` has one, xmarket or not).
 //!
 //! | Path | Holds | Opened by |
 //! |---|---|---|
@@ -64,8 +65,6 @@ const MKT_CTX_SCHEMA: &str = <MarketCtx as Observed>::SCHEMA;
 
 /// The paper ledger (`outbound/paper_store.rs`).
 pub(crate) const LEDGER_DB: &str = "ledger.db";
-/// The `tengu run` lease (`outbound/runtime_store.rs`).
-pub(crate) const RUNTIME_DB: &str = "runtime.db";
 /// The recorder's `<YYYYMMDD>.db` day files (`outbound/history_sqlite.rs`).
 pub(crate) const HISTORY_DIR: &str = "history";
 /// The market-data warehouse: bars, funding, contexts (`outbound/market_data.rs`, xlab).
@@ -92,12 +91,6 @@ pub(crate) const SPEND_DB: &str = "spend.db";
 /// `<state_dir>/ledger.db`.
 pub(crate) fn ledger_db(state_dir: &Path) -> PathBuf {
     state_dir.join(LEDGER_DB)
-}
-
-/// `<state_dir>/runtime.db` — `state_dir` as `config::runtime::state_dir`
-/// picks it (the xmarket state dir, else `<TENGU_HOME>/state`).
-pub(crate) fn runtime_db(state_dir: &Path) -> PathBuf {
-    state_dir.join(RUNTIME_DB)
 }
 
 /// `<state_dir>/history`.

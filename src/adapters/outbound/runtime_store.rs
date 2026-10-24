@@ -64,7 +64,7 @@ pub(crate) fn read_heartbeat(dir: &Path, sandbox: &str) -> Result<Option<Heartbe
 impl SqliteRuntimeStore {
     /// Open (creating) `<dir>/runtime.db`.
     pub(crate) fn open(dir: &Path) -> Result<Self> {
-        let path = crate::config::xmarket::runtime_db(dir);
+        let path = crate::config::runtime::runtime_db(dir);
         let conn = open_wal(&path, Durability::Full)?;
         conn.execute_batch(SCHEMA_SQL)?;
         Ok(Self {

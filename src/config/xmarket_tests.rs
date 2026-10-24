@@ -1,6 +1,7 @@
 //! Tests of `src/config/xmarket.rs`.
 
 use super::*;
+use crate::config::runtime::{runtime_db, RUNTIME_DB};
 use crate::domain::calendar::Session;
 use chrono::{NaiveDate, NaiveDateTime};
 

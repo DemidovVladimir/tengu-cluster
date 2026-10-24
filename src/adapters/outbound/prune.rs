@@ -297,8 +297,9 @@ mod tests {
     /// goes (`state/flows` was a target with no writer).
     #[test]
     fn never_deletes_the_xmarket_state_dir() {
+        use crate::config::runtime::RUNTIME_DB;
         use crate::config::xmarket::{
-            AUDIT_DB, CATALOG_DB, EVENTS_DB, HISTORY_DIR, LEDGER_DB, RUNTIME_DB, SPEND_DB,
+            AUDIT_DB, CATALOG_DB, EVENTS_DB, HISTORY_DIR, LEDGER_DB, SPEND_DB,
         };
         let history_day = format!("{HISTORY_DIR}/20261002.db");
         let files = [
