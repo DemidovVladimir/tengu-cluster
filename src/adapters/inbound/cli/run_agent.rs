@@ -404,6 +404,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     );
 
     // ----- Build messages + context -----
+    // `[agents.<a>.brief]`: the searcher reads the goal first; what it found
+    // leads the goal (`bootstrap/brief.rs`). It runs in this process, as an
+    // A2A agent turn.
+    let goal =
+        crate::bootstrap::brief::with_brief(&parent_config, &spec_load_name, &spec, &input.goal)
+            .await;
     let mut messages = vec![
         Message {
             role: Role::System,
@@ -413,7 +419,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         },
         Message {
             role: Role::User,
-            content: input.goal.clone(),
+            content: goal,
             tool_call_id: None,
             tool_calls: None,
         },

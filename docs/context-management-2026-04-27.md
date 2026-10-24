@@ -9,11 +9,12 @@
 
 ## TL;DR
 
-Tengu shapes LLM context across **seven layers**, with **31 numbered
+Tengu shapes LLM context across **seven layers**, with **32 numbered
 mechanisms** (the summary table below; #27–31 are the metrics
-observability layer added 2026-04-28). Section headings carry the same
-numbers. None of them is LLM-driven — there is no "summarise the
-conversation" pass. Everything is mechanical: char/token caps, sliding
+observability layer added 2026-04-28; #32, the brief, sits in Layer 5).
+Section headings carry the same numbers. Only #32 is LLM-driven: a
+searcher agent writes a brief before a turn (opt-in, 2026-10-24). There is
+no "summarise the conversation" pass. Everything is mechanical: char/token caps, sliding
 windows, threshold-triggered concatenation, first-line clipping. The
 pieces compose; no single entry point owns "context management".
 
@@ -381,6 +382,21 @@ OpenRouter / local, but **tool calls** of the one CLI run on Claude Code and Cod
 (`EngineContext.max_tool_rounds`: the CLI is killed past it). Wall clock per step:
 `limits.step_timeout_secs` (default **600**), enforced by `run_with_timeout` (`:191`).
 
+### 32. Brief before the turn (`bootstrap/brief.rs::with_brief`, opt-in)
+
+`[agents.<a>.brief] searcher = "<agent>"`: before agent `<a>`'s turn the
+searcher runs one agent turn of its own on the **request alone** (no history);
+its identity and tools decide the answer (for chaos-kb: `kb_topics`, then
+`kb_read` of the ids that matter). An empty answer or `NONE` adds nothing;
+anything else goes **in front of the request** in a marked block
+(`domain/brief.rs::prepend`). The history keeps the request without it.
+Runs on A2A agent turns (`bootstrap/a2a.rs::agent_turn`, not the planner
+call) and every `run-agent` plan step (the `goal`), whichever surface
+started the plan; not yet on chat or webhook turns answered in process
+without a plan. `timeout_secs` (default **60**); an error or timeout is a `warn` line
+and the turn goes on unchanged. One level deep: a searcher may not have a
+brief (`Config::validate`).
+
 ---
 
 ## Layer 6 — Open Brain / Wiki State
@@ -531,6 +547,7 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 21 | 5 | `compress_and_store` (+ cross-plan read) | outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs:534 (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge) | implicit append · `cross_plan_top_k` 5 |
 | 22 | 5 | Phase 5c protocol | inbound/cli/run_agent.rs:678 | three rows |
 | 23 | 5 | subprocess `max_turns` / step wall clock | subprocess_runner.rs:43 · `run_step` :355 | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
+| 32 | 5 | brief before the turn (A2A agent turns, plan steps) | bootstrap/brief.rs::with_brief · domain/brief.rs · bootstrap/a2a.rs::agent_turn · inbound/cli/run_agent.rs | off; `timeout_secs` 60 |
 | 24 | 6 | Open Brain memory | outbound/tools/agentic_memory | Postgres |
 | 25 | 6 | LLM Wiki + planner files | `.tengu/agentic-memory/wiki`, `TENGU_PLANNER_REGISTRY.md` | Markdown/root files |
 | 26 | 7 | `chunk_text` | persistent_store.rs:54 | 1000/200 |
@@ -590,6 +607,7 @@ Comparison points for future sessions:
 | "Why is this turn so big?" — diagnose context bloat | Layer 8 #28 — set `RUST_LOG=tengu=debug` and read the `metrics.layer` lines for the planner call (chars per layer) |
 | Need rolling totals for cost analysis in the TUI | Layer 8 #29/#31 — set `TENGU_TUI_METRICS=1`; aggregator absorbs records even when panel is off |
 | Subagent token counts missing in parent logs | Layer 8 #30 — child binary may be old (no `metrics` field). Rebuild both parent and child. |
+| An agent with `[agents.<a>.brief]` acts as if it never got the brief | Layer 5 #32 — look for the `brief:` lines (`RUST_LOG=tengu=info`): `found nothing`, `failed` or `ran past its timeout`; the text itself at `tengu::bootstrap::brief=debug`. In-process chat and webhook turns (no plan) get no brief yet; their plan steps do |
 
 ---
 
@@ -600,7 +618,7 @@ Comparison points for future sessions:
 - **[`context-cutting-flow-2026-04-27.{svg,html}`](./context-cutting-flow-2026-04-27.svg)** — focused view: Layer 3 (the inner tool loop). Most useful when debugging something inside `collect_engine_response`.
 - **[`compression-flow-2026-04-27.{md,svg}`](./compression-flow-2026-04-27.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
 
-*Last updated 2026-10-08 (checked against the code: line refs, headings
+*Last updated 2026-10-24 (checked against the code: line refs, headings
 numbered as the summary table, recall / fencing / skill-cap / bridge-cap
 facts). If you change any of the mechanisms above, update this doc in the
 same commit.*

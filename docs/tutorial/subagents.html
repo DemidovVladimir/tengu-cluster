@@ -387,7 +387,7 @@ Your role: <span class="c">&lt;role&gt;</span>.
 
 When you have completed your task, your FINAL action MUST be to call the `compress_and_store` tool with a concise `summary` of what you accomplished. Failure to call it will be treated as task failure.</pre></div>
   </div>
-  <p class="note">The identity block is <code>[agents.&lt;a&gt;.identity] name</code>, the agent's <code>role</code> and its <code>instructions</code> (cut to <code>max_file_tokens</code>), as in chat. It is left out when none is set.</p>
+  <p class="note">The identity block is <code>[agents.&lt;a&gt;.identity] name</code>, the agent's <code>role</code> and its <code>instructions</code> (cut to <code>max_file_tokens</code>), as in chat. It is left out when none is set. The user message is the <code>goal</code>; with <code>[agents.&lt;a&gt;.brief]</code> the searcher's findings go in front of it (<a href="brief.html">brief</a>).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-out">
@@ -417,6 +417,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span><b>A deny stays a deny.</b> The workspace root is added to every inherited scope except one with every field empty.</span></li>
     <li><span><b>Hardened compose only narrows.</b> In a <code>[risk]</code>, <code>[soe]</code> or signer sandbox an extra tool or skill fails the step before the engine is built.</span></li>
     <li><span><b>Redacted results.</b> Every tool result and tool error passes the secret redactor before the model sees it.</span></li>
+    <li><span><b>A brief never fails a step.</b> With <code>[agents.&lt;a&gt;.brief]</code> the searcher reads the goal first, in the child; if it errs or passes <code>timeout_secs</code> (60 by default) the step runs on the goal alone.</span></li>
     <li><span><b>Same network rules.</b> The child installs the parent's resolved egress policy; an invalid one aborts it.</span></li>
     <li><span><b>One trace writer.</b> A child never opens the run file: it hands its tool events back over IPC and the parent writes them under the step (an old parent or child sends no <code>trace</code> field and nothing changes).</span></li>
     <li><span><b>One log.</b> The parent reads the child's stderr into its own log (target <code>tengu::run_agent</code>); a failed exit carries its last 40 lines.</span></li>
@@ -452,7 +453,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, the goal's brief (<code>bootstrap/brief.rs</code>), loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
         <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), <code>&lt;step-input&gt;</code>, leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
         <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans (finished steps carried over), plan per session</td></tr>

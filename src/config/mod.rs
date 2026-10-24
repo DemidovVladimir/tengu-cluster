@@ -512,6 +512,17 @@ pub struct AgentConfig {
     /// "read-only"`, `cli_path = "codex"`).
     #[serde(default)]
     pub codex: Option<AgentCodexConfig>,
+    /// `[agents.<a>.brief]`: before each turn, another agent (the searcher)
+    /// reads the request and answers with what the user's knowledge base says
+    /// that matters for it, or `NONE`. The answer goes in front of the request
+    /// (`domain/brief.rs`); the conversation history keeps the request alone.
+    /// Runs on A2A agent turns (`/a2a/agents/<a>`) and on every `run-agent`
+    /// plan step, whichever surface started the plan (`bootstrap/brief.rs`);
+    /// not yet on turns chat (TUI, Telegram) or webhooks answer in process
+    /// without a plan, and never on the planner call. A failed or slow
+    /// searcher is logged and the turn goes on without a brief.
+    #[serde(default)]
+    pub brief: Option<AgentBriefConfig>,
     /// Runtime (never in TOML): set by `Config::fold_default_scopes` on every
     /// agent of a hardened sandbox (`config/hardening.rs`: a `[solana]`
     /// signer, a `[risk]` or an `[soe]` section) — tools without a configured scope then
@@ -995,6 +1006,27 @@ impl Default for AgentLocalConfig {
             api_key_env: default_local_api_key_env(),
         }
     }
+}
+
+/// `[agents.<a>.brief]`: the agent that writes the brief before each turn
+/// (see [`AgentConfig::brief`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentBriefConfig {
+    /// The `[agents.<searcher>]` that writes the brief: usually a small, fast
+    /// model whose only tools read the knowledge base (for chaos-kb:
+    /// `chaos_kb__kb_topics`, `chaos_kb__kb_read`). It gets the request text
+    /// as is; its `identity` says how to answer. It may not be the agent
+    /// itself, nor have a brief of its own.
+    pub searcher: String,
+    /// Wall clock for the searcher's turn, in seconds; past it the turn goes
+    /// on without a brief.
+    #[serde(default = "default_brief_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_brief_timeout_secs() -> u64 {
+    60
 }
 
 /// `[agents.<a>.codex] sandbox` values: the Codex CLI's `-s` policy for
@@ -1629,6 +1661,26 @@ impl Config {
             }
         }
 
+        for (name, agent) in &self.agents {
+            let Some(brief) = &agent.brief else { continue };
+            let at = format!("agents.{name}.brief");
+            errors.require(
+                brief.timeout_secs > 0,
+                format!("{at}.timeout_secs must be greater than 0"),
+            );
+            let searcher = brief.searcher.as_str();
+            match self.agents.get(searcher) {
+                _ if searcher == name => errors.push(format!(
+                    "{at}.searcher: an agent cannot write its own brief"
+                )),
+                None => errors.push(format!("{at}.searcher: no [agents.{searcher}] block")),
+                Some(s) if s.brief.is_some() => errors.push(format!(
+                    "{at}.searcher: `{searcher}` has a brief of its own; a searcher may not"
+                )),
+                Some(_) => {}
+            }
+        }
+
         errors.into_vec()
     }
 
@@ -1885,6 +1937,7 @@ impl Default for Config {
                 claude_code: None,
                 local: None,
                 codex: None,
+                brief: None,
                 no_shell_fallback: false,
                 sandbox: Default::default(),
             },
@@ -2582,6 +2635,56 @@ ttl_days = 7
         .unwrap();
         let err = zero.validate().unwrap_err().to_string();
         assert!(err.contains("step_timeout_secs"), "{err}");
+    }
+
+    #[test]
+    fn a_brief_names_another_agent_without_a_brief_of_its_own() {
+        let base = "[agents.persona]\nengine = \"openrouter\"\nmodel = \"m\"\n\
+                    [agents.searcher]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+        let with = |brief: &str| -> Config {
+            toml::from_str(&format!("{base}[agents.persona.brief]\n{brief}\n")).unwrap()
+        };
+        let ok = with("searcher = \"searcher\"");
+        assert!(ok.validate().is_ok(), "{:?}", ok.validation_errors());
+        assert_eq!(
+            ok.agents["persona"].brief.as_ref().unwrap().timeout_secs,
+            60
+        );
+        for (brief, expected) in [
+            (
+                "searcher = \"nobody\"",
+                "agents.persona.brief.searcher: no [agents.nobody] block",
+            ),
+            (
+                "searcher = \"persona\"",
+                "agents.persona.brief.searcher: an agent cannot write its own brief",
+            ),
+            (
+                "searcher = \"searcher\"\ntimeout_secs = 0",
+                "agents.persona.brief.timeout_secs must be greater than 0",
+            ),
+        ] {
+            let errors = with(brief).validation_errors();
+            assert!(errors.iter().any(|e| e == expected), "{brief}: {errors:?}");
+        }
+        // A searcher with a brief of its own: refused, so briefs never chain
+        // or loop.
+        let chain: Config = toml::from_str(&format!(
+            "{base}[agents.persona.brief]\nsearcher = \"searcher\"\n\
+             [agents.searcher.brief]\nsearcher = \"persona\"\n"
+        ))
+        .unwrap();
+        let errors = chain.validation_errors();
+        assert!(
+            errors.iter().any(|e| e
+                == "agents.persona.brief.searcher: `searcher` has a brief of its own; a searcher may not"),
+            "{errors:?}"
+        );
+        let typo = format!("{base}[agents.persona.brief]\nagent = \"searcher\"\n");
+        assert!(
+            toml::from_str::<Config>(&typo).is_err(),
+            "unknown keys are refused"
+        );
     }
 
     #[test]

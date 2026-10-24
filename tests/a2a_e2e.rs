@@ -12,6 +12,7 @@
 //! | `the_a2a_tool_calls_the_remote` | the opt-in `a2a` tool: `list`, `card`, `send` against the server, scoped (`net_hosts`, `env_reads`) |
 //! | `a_wrong_token_is_refused` | the server answers 401 to a wrong bearer token; the client names it |
 //! | `serve_refuses_without_its_token` | `token_env` unset ⇒ `tengu a2a serve` exits non-zero naming the variable |
+//! | `a_brief_leads_the_request` | `[agents.<a>.brief]`: the searcher agent gets the request as is, before the agent; what it found leads the agent's request in a marked block; `NONE` adds nothing; the context's history keeps the requests without briefs; a searcher that fails leaves the turn as it was |
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -27,8 +28,15 @@ use serde_json::{json, Value};
 const ANSWER: &str = "A2A-E2E-ANSWER-7f3c9a: the helper heard you.";
 const TOKEN: &str = "e2e-bearer-token-0123456789abcdef";
 
-/// OpenAI-compatible mock: every request answered with [`ANSWER`]; the
-/// request bodies kept.
+/// In a searcher's identity: the mock answers it as the searcher.
+const SEARCHER_ROLE: &str = "BRIEF-SEARCHER-ROLE";
+/// What the mock searcher finds.
+const FOUND: &str = "BRIEF-FACT-41d2: the user is allergic to penicillin (Health.md:5-5).";
+/// In a request: the mock searcher finds nothing there.
+const NOTHING_THERE: &str = "NOTHING-THERE";
+
+/// OpenAI-compatible mock: each request answered by a rule (by default
+/// [`ANSWER`]); the request bodies kept.
 struct Llm {
     url: String,
     bodies: Arc<Mutex<Vec<Value>>>,
@@ -70,6 +78,34 @@ fn read_body(sock: &mut std::net::TcpStream) -> String {
 }
 
 fn llm() -> Llm {
+    llm_with(|_| ANSWER.to_string())
+}
+
+/// The mock for briefs: a request whose system prompt holds
+/// [`SEARCHER_ROLE`] is the searcher's — [`FOUND`], or `NONE` when the
+/// request says [`NOTHING_THERE`]; any other request gets [`ANSWER`].
+fn searcher_llm() -> Llm {
+    llm_with(|body| {
+        let texts = |role: &str| -> String {
+            body["messages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|m| m["role"] == role)
+                .filter_map(|m| m["content"].as_str())
+                .collect()
+        };
+        if !texts("system").contains(SEARCHER_ROLE) {
+            ANSWER.to_string()
+        } else if texts("user").contains(NOTHING_THERE) {
+            "NONE".to_string()
+        } else {
+            FOUND.to_string()
+        }
+    })
+}
+
+fn llm_with(rule: fn(&Value) -> String) -> Llm {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!(
@@ -87,11 +123,10 @@ fn llm() -> Llm {
             };
             sock.set_nonblocking(false).ok();
             sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
-            let body = read_body(&mut sock);
-            b.lock()
-                .unwrap()
-                .push(serde_json::from_str(&body).unwrap_or(Value::Null));
-            let reply = json!({"choices": [{"message": {"role": "assistant", "content": ANSWER},
+            let body: Value = serde_json::from_str(&read_body(&mut sock)).unwrap_or(Value::Null);
+            let content = rule(&body);
+            b.lock().unwrap().push(body);
+            let reply = json!({"choices": [{"message": {"role": "assistant", "content": content},
                                "finish_reason": "stop"}]})
             .to_string();
             let _ = write!(
@@ -115,6 +150,25 @@ impl Llm {
             .filter_map(|m| m["content"].as_str().map(str::to_string))
             .collect::<Vec<_>>()
             .join("\n---\n")
+    }
+
+    /// Each request so far as (system prompt, user messages in order).
+    fn requests(&self) -> Vec<(String, Vec<String>)> {
+        self.bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|b| {
+                let msgs = b["messages"].as_array().cloned().unwrap_or_default();
+                let of = |role: &str| -> Vec<String> {
+                    msgs.iter()
+                        .filter(|m| m["role"] == role)
+                        .filter_map(|m| m["content"].as_str().map(str::to_string))
+                        .collect()
+                };
+                (of("system").concat(), of("user"))
+            })
+            .collect()
     }
 }
 
@@ -199,12 +253,17 @@ fn tengu(dir: &Path, config: &Path) -> Command {
 }
 
 fn serve(llm: &Llm) -> Server {
+    serve_toml(|port, ws| server_toml(&llm.url, port, ws))
+}
+
+/// `tengu a2a serve` on the config `toml(port, workspace)` writes.
+fn serve_toml(toml: impl Fn(u16, &Path) -> String) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let ws = dir.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     let port = free_port();
     let config = dir.path().join("server.toml");
-    std::fs::write(&config, server_toml(&llm.url, port, &ws)).unwrap();
+    std::fs::write(&config, toml(port, &ws)).unwrap();
     let child = tengu(dir.path(), &config)
         .args(["a2a", "serve"])
         .env("TENGU_A2A_E2E_TOKEN", TOKEN)
@@ -466,4 +525,163 @@ fn serve_refuses_without_its_token() {
         stderr.contains("TENGU_A2A_E2E_TOKEN is unset or empty"),
         "{stderr}"
     );
+}
+
+/// The server for briefs: `briefed` gets its brief from `finder` (a
+/// searcher by its identity), `unlucky` from `deaf`, whose model server is
+/// gone.
+fn brief_toml(llm: &str, port: u16, ws: &Path, gone: &str) -> String {
+    format!(
+        r#"
+[egress]
+network = "open"
+audit = false
+
+[agents.briefed]
+engine = "local"
+model = "mock"
+default = true
+description = "Answers with what the user's knowledge base says."
+workspace = "{ws}"
+tools = ["read_file"]
+
+[agents.briefed.local]
+base_url = "{llm}"
+
+[agents.briefed.limits]
+context_window = 16384
+
+[agents.briefed.brief]
+searcher = "finder"
+
+[agents.finder]
+engine = "local"
+model = "mock"
+tools = ["read_file"]
+
+[agents.finder.identity]
+instructions = "{SEARCHER_ROLE}: find what the knowledge base says about the request, or answer NONE."
+
+[agents.finder.local]
+base_url = "{llm}"
+
+[agents.finder.limits]
+context_window = 16384
+
+[agents.unlucky]
+engine = "local"
+model = "mock"
+description = "Same, but its searcher's model server is gone."
+tools = ["read_file"]
+
+[agents.unlucky.local]
+base_url = "{llm}"
+
+[agents.unlucky.limits]
+context_window = 16384
+
+[agents.unlucky.brief]
+searcher = "deaf"
+timeout_secs = 20
+
+[agents.deaf]
+engine = "local"
+model = "mock"
+
+[agents.deaf.local]
+base_url = "{gone}"
+
+[agents.deaf.limits]
+context_window = 16384
+
+[a2a.server]
+port = {port}
+token_env = "TENGU_A2A_E2E_TOKEN"
+agents = ["briefed", "unlucky"]
+"#,
+        ws = ws.display()
+    )
+}
+
+#[test]
+fn a_brief_leads_the_request() {
+    let llm = searcher_llm();
+    let gone = format!("http://127.0.0.1:{}/v1", free_port());
+    let server = serve_toml(|port, ws| brief_toml(&llm.url, port, ws, &gone));
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("client.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[agents.asker]
+engine = "local"
+model = "mock"
+default = true
+
+[agents.asker.local]
+base_url = "{llm}"
+
+[a2a.remotes.briefed]
+url = "http://127.0.0.1:{port}/a2a/agents/briefed"
+bearer_env = "TENGU_A2A_E2E_TOKEN"
+timeout_secs = 60
+
+[a2a.remotes.unlucky]
+url = "http://127.0.0.1:{port}/a2a/agents/unlucky"
+bearer_env = "TENGU_A2A_E2E_TOKEN"
+timeout_secs = 60
+"#,
+            llm = llm.url,
+            port = server.port
+        ),
+    )
+    .unwrap();
+    let c = Client { dir, config };
+    let searcher = |r: &(String, Vec<String>)| r.0.contains(SEARCHER_ROLE);
+
+    // The searcher runs first, on the request as is; its finding leads the
+    // agent's request.
+    let request = "Prescribe an antibiotic for my sore throat.";
+    let r = c.send("briefed", request, &[]);
+    assert_eq!(r["task"]["status"]["state"], "TASK_STATE_COMPLETED", "{r}");
+    assert_eq!(artifact_text(&r["task"]), ANSWER);
+    let turns = llm.requests();
+    assert_eq!(turns.len(), 2, "the searcher, then the agent: {turns:?}");
+    assert!(searcher(&turns[0]), "{turns:?}");
+    assert_eq!(turns[0].1, [request], "the searcher gets the request alone");
+    assert!(!searcher(&turns[1]), "{turns:?}");
+    assert_eq!(
+        turns[1].1,
+        [format!(
+            "[Brief from agent `finder`: what the user's knowledge base says that matters for this request]\n\
+             {FOUND}\n\
+             [End of brief]\n\n\
+             {request}"
+        )]
+    );
+
+    // A follow-up where the searcher finds nothing: no brief; the history
+    // holds the first request without its brief.
+    let ctx = r["task"]["contextId"].as_str().unwrap().to_string();
+    let follow = format!("And for the cough? {NOTHING_THERE}");
+    c.send("briefed", &follow, &["--context", &ctx]);
+    let turns = llm.requests();
+    assert_eq!(turns.len(), 4, "{turns:?}");
+    assert!(searcher(&turns[2]) && !searcher(&turns[3]), "{turns:?}");
+    assert_eq!(
+        turns[2].1,
+        [follow.as_str()],
+        "the searcher gets no history"
+    );
+    assert_eq!(turns[3].1, [request, follow.as_str()]);
+
+    // A searcher that fails: the turn goes on with the request as it was.
+    let lone = "Which vaccines are due?";
+    let r = c.send("unlucky", lone, &[]);
+    assert_eq!(r["task"]["status"]["state"], "TASK_STATE_COMPLETED", "{r}");
+    assert_eq!(artifact_text(&r["task"]), ANSWER);
+    let turns = llm.requests();
+    assert_eq!(turns.len(), 5, "the deaf searcher never reached the mock");
+    assert_eq!(turns[4].1, [lone]);
 }

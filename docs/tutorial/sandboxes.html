@@ -433,6 +433,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span class="chip guard">codex env</span><span><b>agents.&lt;a&gt;.codex.forward_env: 'TENGU_KEYS_SESSION_TOKEN' is the seal-proxy session …</b>The Codex CLI starts from an empty env; <code>forward_env</code> names extra vars it may see. Refused: <code>TENGU_MASTER_PASSWORD</code>, <code>TENGU_KEYS_*</code>, <code>[keys.env]</code> names, <code>OPENAI_API_KEY</code>, <code>CODEX_*</code>.</span></li>
     <li><span class="chip guard">hardened</span><span><b>[[mcp_servers]] are not allowed</b>Also: any scope granting <code>shell_bins</code>.</span></li>
     <li><span class="chip bad">loop</span><span><b>decision_loops.&lt;n&gt;.agent: no [agents.&lt;a&gt;] block</b>A loop names an agent that does not exist.</span></li>
+    <li><span class="chip bad">brief</span><span><b>agents.&lt;a&gt;.brief.searcher: an agent cannot write its own brief</b>Also: <code>no [agents.&lt;s&gt;] block</code>, and <code>`&lt;s&gt;` has a brief of its own; a searcher may not</code> (<a href="brief.html">brief</a>).</span></li>
     <li><span class="chip guard">studio</span><span><b>studio.control = true: refused: …</b>A <code>[generation]</code>-bound or hardened sandbox: <a href="studio.html">Studio</a> never plays or stops it.</span></li>
     <li><span class="chip guard">generation</span><span><b>tool `&lt;t&gt;` is bound by capability `&lt;c&gt;`, which generation `W1` does not include</b>Also: an opt-in tool no capability binds, a sandbox the generation does not list, a drifted frozen pin (<a href="lineage.html">Lineage and generations</a>).</span></li>
   </ul>
@@ -444,7 +445,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>No silent typos.</b> <code>Config</code>, <code>AgentConfig</code>, <code>[agents.*.local]</code>, <code>[agents.*.codex]</code>, <code>[keys]</code> and <code>[a2a]</code> deny unknown keys; the load fails.</span></li>
+    <li><span><b>No silent typos.</b> <code>Config</code>, <code>AgentConfig</code>, <code>[agents.*.local]</code>, <code>[agents.*.codex]</code>, <code>[agents.*.brief]</code>, <code>[keys]</code> and <code>[a2a]</code> deny unknown keys; the load fails.</span></li>
     <li><span><b>All issues at once.</b> Validation collects every problem into one <code>Config validation failed (N issues)</code> error.</span></li>
     <li><span><b>No merging.</b> <code>--sandbox</code> replaces the base config whole; an agent's own scope replaces the default whole.</span></li>
     <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>a2a</code>, <code>doctor</code>, <code>decide</code>, <code>studio</code>, <code>history</code>, <code>backtest</code>, <code>ranking</code>, <code>risk</code> and <code>sources</code> with <code>--sandbox</code> log a warning and go on; any other command stops. <code>evidence</code>, <code>lineage</code>, <code>trace</code> and <code>sandbox</code> never read it; <code>soe</code> reads a config only for its weekly commands (<code>--sandbox</code> or <code>-c</code>).</span></li>
@@ -505,7 +506,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

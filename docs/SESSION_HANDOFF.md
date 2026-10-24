@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-10-24 (later): the brief — a searcher agent reads the request first (`[agents.<a>.brief]`), same branch `fix/mcp-only-agent-tools`
+
+Operator ask: check fast, with the knowledge base's compressed shortcuts, whether a request touches what the user stored; a small searcher agent fetches only what matters and its result goes in front of the main agent's prompt. chaos-kb (v2, fdbfcd8c75a049e9fa5cac3a5e8b31da280f516d, not pushed) gained the two tools for it: `kb_topics` (ranked ids + one-line gists, no text) and `kb_read` (exact passages by id, no embedding). Operator choices: Tengu runs it per turn; the searcher is Claude Haiku on the subscription.
+
+| Change | Where | Tests / evidence |
+|---|---|---|
+| `[agents.<a>.brief] searcher`, `timeout_secs` (60): validated — the searcher exists, is not the agent, has no brief of its own; unknown keys refused | `config/mod.rs` (`AgentBriefConfig`, `validation_errors`) | `config::tests::a_brief_names_another_agent_without_a_brief_of_its_own` |
+| Pure rules: empty / `NONE` (any case, final full stop) = no brief; the marked block before the request | `domain/brief.rs` | `domain::brief::tests` (3) |
+| `with_brief`: one `agent_turn` of the searcher on the request alone (boxed recursion, one level deep), tokio timeout, fail-soft (`warn`), info line with `brief_chars` + `elapsed_ms`, the text at `tengu::bootstrap::brief=debug` (redacted) | `bootstrap/brief.rs` | `bootstrap::brief::tests` (timeout cut checked: 30 s timeout ⇒ the test fails at 30 s) |
+| Hooks: A2A agent turns (`agent_turn`, not with `system_override` = the planner call; after the agent's own setup) and every `run-agent` plan step (the goal) — so plans started from chat, Telegram, webhooks or the A2A planner are briefed; history keeps the request. **Not yet** the turns chat / Telegram / webhooks answer in process without a plan (`process_user_text`, application layer) | `bootstrap/a2a.rs`, `adapters/inbound/cli/run_agent.rs` | `a2a_e2e::a_brief_leads_the_request` (searcher first, exact block, `NONE`, history clean, dead searcher), `run_agent_ipc::a_plan_step_gets_its_brief_before_the_goal` |
+| `sandboxes/chaos-kb-lab`: `searcher` (haiku, `none`, only `kb_topics` / `kb_read`) + `briefed` builder (sonnet, no kb tools, `brief.searcher = "searcher"`, 120 s) beside `plain` and `persona` | `sandboxes/chaos-kb-lab/config.toml`, `~/tengu-lab/chaos-kb/driver.sh` | live run on this commit's release binary: `~/tengu-lab/chaos-kb/runs/<time>/RESULT.md` + `~/tengu-lab/chaos-kb/evidence/index.html#brief` |
+| Docs | tutorial `brief.html` (new) + `a2a`, `subagents`, `sandboxes`, `big-picture` (+ footers of `planner`, `tool-loop`, `memory`, `trace`); `context-management` #32 (md + html); `architecture` (md, html, svg); `code-map` (md + html); `configuration.md`; `a2a-2026-10-10.md`; `config.example.toml`; `CLAUDE.md` / `AGENTS.md` row | `tutorial_map`, `code_map` |
+
+| Item | State |
+|---|---|
+| Full suite | `cargo test --no-fail-fast`: 2,349 passed, 1 failed, 116 ignored (+8 new tests); the failure is the same `lineage_cli::the_repo_registry_is_frozen_and_every_pin_recomputes` W1 pin drift (`tool_schema:backtest`, `tool_schema:market_history`) as in the entry below, untouched here |
+| Lint | `cargo fmt --check` clean; `cargo clippy --all-features --all-targets`: no warning in the changed code |
+| Open | the brief on in-process chat / Telegram / webhook turns without a plan (needs a port: `process_user_text` is application layer); push this branch and v2 (operator) |
+
 ## 2026-10-24: an agent with only `[[mcp_servers]]` tools gets them — branch `fix/mcp-only-agent-tools` (from `feature/xpower-sandbox` 9805470d751bc7fb18b4fa96153c1b095cdb73e6); new `sandboxes/chaos-kb-lab`
 
 Found by the chaos-kb exercise (Chaos Substrate v2, a personal knowledge base, as an `[[mcp_servers]]` entry): a scribe whose `tools` were all `chaos_kb__*` saw no tools and answered that the knowledge-base tools were not available. All agents on the subscription (`claude_code`), embeddings on the local Ollama, $0. Driver, vault, results and an evidence page in `~/tengu-lab/chaos-kb/` (outside the repo; `node ~/tengu-lab/chaos-kb/serve-evidence.mjs` → http://127.0.0.1:4300/evidence/).

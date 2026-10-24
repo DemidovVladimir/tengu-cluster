@@ -755,6 +755,32 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.researcher.limits]
 # max_tool_rounds = 20
 # step_timeout_secs = 180
+#
+# Brief: before each turn another agent, the searcher, reads the request and
+# answers with what the user's knowledge base says that matters for it, or
+# NONE. The answer goes in front of the request in a marked block; the
+# conversation history keeps the request alone. Runs on A2A agent turns and
+# every plan step (from chat, Telegram, webhooks or A2A); not yet on a chat or
+# webhook turn answered in process without a plan. A searcher that fails or passes
+# `timeout_secs` is logged and the turn goes on without a brief. The searcher
+# may not be the agent itself nor have a brief of its own.
+# docs/tutorial/brief.html
+#
+# [agents.researcher.brief]
+# searcher = "kb_searcher"                  # an [agents.<name>] block
+# timeout_secs = 60                         # default 60; past it, no brief
+#
+# [agents.kb_searcher]                      # example: a small model that only reads the KB
+# engine = "claude_code"
+# model = "claude-haiku-5-5"
+# tools = ["chaos_kb__kb_topics", "chaos_kb__kb_read"]   # a chaos_kb [[mcp_servers]] entry
+#
+# [agents.kb_searcher.claude_code]
+# builtin_tools_profile = "none"
+#
+# [agents.kb_searcher.identity]
+# instructions = """Call kb_topics with the request. kb_read only the ids that would change the
+# task for this user. Answer those facts in short lines, each with its id, or exactly NONE."""
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.

@@ -9,6 +9,7 @@ pub(crate) mod backoff;
 pub(crate) mod backtest;
 pub(crate) mod blueprint;
 pub(crate) mod book;
+pub(crate) mod brief;
 pub(crate) mod calendar;
 pub(crate) mod canonical;
 pub(crate) mod decision;

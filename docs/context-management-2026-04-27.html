@@ -367,7 +367,7 @@
 
 <div class="header">
   <h1>Tengu-Cluster · Context Management Explorer</h1>
-  <div class="sub">2026-04-27 · checked against the code 2026-10-08 · canonical reference · 7 layers · 31 mechanisms · companion to <a href="context-management-2026-04-27.md">.md</a> + <a href="context-management-2026-04-27.svg">.svg</a></div>
+  <div class="sub">2026-04-27 · checked against the code 2026-10-24 · canonical reference · 7 layers · 32 mechanisms · companion to <a href="context-management-2026-04-27.md">.md</a> + <a href="context-management-2026-04-27.svg">.svg</a></div>
 </div>
 
 <div class="tabs">
@@ -399,7 +399,7 @@
 
 <!-- ============ MECHANISMS ============ -->
 <div class="panel" id="panel-mechs">
-  <h2>All 31 mechanisms — searchable, filterable</h2>
+  <h2>All 32 mechanisms — searchable, filterable</h2>
   <div class="mech-controls">
     <input type="text" class="mech-search" id="mech-search" placeholder="Filter by name, file, knob, description…">
     <div class="layer-filter" id="layer-filter"></div>
@@ -595,6 +595,9 @@ const MECHS = [
   { n: 23, layer: 5, title: "Subprocess max_turns", where: "subprocess_runner.rs:43 · run_step :355",
     body: "Hard cap on the subagent mini-loop = the agent block's <code>limits.max_tool_rounds</code> (serde default 20 only for payloads without the field) — engine turns on OpenRouter / local, <strong>tool calls</strong> of the one CLI run on Claude Code and Codex. Hits the compress_and_store warn path on exhaust. Wall clock per step: <code>limits.step_timeout_secs</code> via <code>run_with_timeout</code>.",
     pills: ["max_tool_rounds = 70", "step_timeout_secs = 600"], tags: ["subagent", "turns", "limit", "timeout"] },
+  { n: 32, layer: 5, title: "Brief before the turn (opt-in)", where: "bootstrap/brief.rs::with_brief · domain/brief.rs",
+    body: "<code>[agents.&lt;a&gt;.brief] searcher</code>: before the turn the searcher agent runs on the request alone (no history); an empty answer or <code>NONE</code> adds nothing, anything else goes in front of the request in a marked block. The history keeps the request without it. A2A agent turns (not the planner call) and <code>run-agent</code> plan steps; every plan step whichever surface started it; not yet in-process chat or webhook turns without a plan. An error or timeout is a warn line; the turn goes on unchanged. The only LLM-driven mechanism.",
+    pills: ["timeout_secs = 60", "NONE = no brief"], tags: ["subagent", "a2a", "brief", "searcher", "knowledge base"] },
 
   // Layer 6
   { n: 24, layer: 6, title: "Open Brain live memory", where: "outbound/tools/agentic_memory/mod.rs",
@@ -742,6 +745,7 @@ const CONFIG = [
   { layer: 3, knob: "limits.compact_result_limit", def: "200", where: "config/mod.rs:636", what: "First-line clip threshold for in-place compaction (#15); 0 does not disable it." },
   { layer: 4, knob: "limits.max_mcp_result_chars", def: "50_000", where: "config/mod.rs:641", what: "MCP bridge cap for the Claude Code and Codex engines (reaches the bridge as TENGU_BRIDGE_MAX_RESULT_CHARS)." },
   { layer: 5, knob: "AgentIpcInput.max_turns (= limits.max_tool_rounds)", def: "70", where: "subprocess_runner.rs:43 · run_step", what: "Subagent mini-loop turn cap, taken from the agent block; serde default 20 only for payloads without the field." },
+  { layer: 5, knob: "agents.<a>.brief.timeout_secs", def: "60", where: "config/mod.rs::AgentBriefConfig · bootstrap/brief.rs", what: "Wall clock for the searcher's turn (#32); past it the turn goes on without a brief." },
   { layer: 5, knob: "limits.step_timeout_secs", def: "600", where: "config/mod.rs:646 · subprocess_runner.rs::run_with_timeout", what: "Wall-clock cap for one plan step; the parent kills the child after it." },
   { layer: 6, knob: "TENGU_PLANNER_REGISTRY.md", def: "root file", where: "orchestrator/shared_files.rs", what: "Generated planner roster loaded into the planner prompt." },
   { layer: 7, knob: "memory.persistent_store_chunk_size", def: "1000", where: "config/mod.rs:1055", what: "File chunk window in chars." },

@@ -261,7 +261,10 @@ impl ChatServiceFactory for A2aChatServiceFactory {
 /// One in-process turn of `agent_name`: its engine, workspace (or a temp
 /// dir for the turn), tools, skills and scopes — or, with
 /// `system_override` (the planner call) or for the `[orchestrator]` agent,
-/// no tools. `history` = earlier `(user, assistant)` pairs.
+/// no tools. `history` = earlier `(user, assistant)` pairs. Without
+/// `system_override`, an agent with `[agents.<a>.brief]` gets its
+/// searcher's brief in front of `text` (`bootstrap/brief.rs`); `history`
+/// stays as given.
 pub(crate) async fn agent_turn(
     cfg: &Config,
     agent_name: &str,
@@ -341,6 +344,12 @@ pub(crate) async fn agent_turn(
             },
         )
     };
+    // After the agent's own setup, so an agent that cannot start costs no
+    // searcher turn.
+    let text = match system_override {
+        None => crate::bootstrap::brief::with_brief(cfg, agent_name, agent, text).await,
+        Some(_) => text.to_string(),
+    };
     let message = |role: Role, content: &str| Message {
         role,
         content: content.to_string(),
@@ -352,7 +361,7 @@ pub(crate) async fn agent_turn(
         messages.push(message(Role::User, q));
         messages.push(message(Role::Assistant, a));
     }
-    messages.push(message(Role::User, text));
+    messages.push(message(Role::User, &text));
     let (bridge_tools, mcp_servers) = crate::bootstrap::tools::bridge_inputs(
         engine.manages_own_workspace(),
         &tool_defs,

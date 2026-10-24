@@ -1,13 +1,18 @@
 # Tengu Cluster — "chaos-kb-lab" sandbox (2026-10-24, exercise)
 # Does a personal knowledge base change what an agent builds for you? The same
-# request ("build me a simple to-do list website") goes to two agents that
-# differ in one thing: `persona` also has the four chaos-kb tools, which read
-# a vault of notes about you; `plain` has none. Both share one model, one
-# identity text and the same file tools, each in its own workspace.
+# request ("build me a simple to-do list website") goes to three agents that
+# differ in one thing: `persona` also has two chaos-kb tools, which read a
+# vault of notes about you; `briefed` has none, but before its turn the small
+# `searcher` reads the vault for it and the request arrives with a brief in
+# front ([agents.briefed.brief]); `plain` has neither. The three share one
+# model, one identity text and the same file tools, each in its own workspace.
 #
 #   scribe   (Claude Code, none)   stores the facts you give it in the vault (kb_remember)
 #   plain    (Claude Code, none)   builds the site from the request alone
-#   persona  (Claude Code, none)   builds it after reading the vault (kb_search / kb_check)
+#   persona  (Claude Code, none)   builds it after reading the vault itself (kb_search / kb_check)
+#   searcher (Claude Code, none)   lists the vault's topics for a request, reads the ones that matter
+#                                  (kb_topics / kb_read), answers the facts or NONE
+#   briefed  (Claude Code, none)   builds it from the request with the searcher's brief in front
 #
 # chaos-kb (Chaos Substrate v2, ~/development/chaos-substrate/v2) is an
 # external [[mcp_servers]] entry: an Obsidian-style Markdown vault, a redb
@@ -138,15 +143,74 @@ fs_roots = ["~/tengu-lab/chaos-kb/persona"]
 [agents.persona.scopes.list_directory]
 fs_roots = ["~/tengu-lab/chaos-kb/persona"]
 
+# --- The searcher and the briefed builder -------------------------------------
+# The searcher is not served: Tengu runs it before each `briefed` turn, on the
+# request text alone. Only these two kb tools: it lists, then reads.
+[agents.searcher]
+engine = "claude_code"
+model = "claude-haiku-5-5"
+workspace = "~/tengu-lab/chaos-kb/searcher"
+tools = ["chaos_kb__kb_topics", "chaos_kb__kb_read"]
+
+[agents.searcher.claude_code]
+builtin_tools_profile = "none"
+
+[agents.searcher.identity]
+name = "searcher"
+instructions = """You brief another agent before it works on a request from the user. Call
+kb_topics once with the request text. From the list, keep only the ids whose passages would
+change how this request should be done for this user: their preferences, constraints and facts
+about them. Read those with one kb_read call. Answer with the facts as short lines, each ending
+with its id in parentheses, using only what kb_read returned; never add, guess or advise. If
+nothing in the list matters for the request, answer exactly NONE."""
+
+[agents.briefed]
+engine = "claude_code"
+model = "claude-sonnet-5-5"
+workspace = "~/tengu-lab/chaos-kb/briefed"
+description = """
+Builder with a brief: writes small static websites into its workspace with
+write_file. Before its turn a searcher reads the user's chaos-kb vault and puts
+what matters in front of the request."""
+example_queries = ["Build me a simple to-do list website."]
+tools = ["write_file", "read_file", "list_directory"]
+
+[agents.briefed.brief]
+searcher = "searcher"
+timeout_secs = 120   # a cold Claude Code start + two MCP calls; past it, no brief
+
+[agents.briefed.claude_code]
+builtin_tools_profile = "none"
+
+[agents.briefed.identity]
+name = "builder"
+instructions = """You build small static websites. Write every file into your working directory
+with write_file; use no other folder. If a knowledge base about the user is among your tools,
+consult it before any choice that depends on who they are or what they like."""
+
+[agents.briefed.limits]
+max_tool_rounds = 60
+step_timeout_secs = 1800
+stream_event_timeout_secs = 600
+
+[agents.briefed.scopes.write_file]
+fs_roots = ["~/tengu-lab/chaos-kb/briefed"]
+
+[agents.briefed.scopes.read_file]
+fs_roots = ["~/tengu-lab/chaos-kb/briefed"]
+
+[agents.briefed.scopes.list_directory]
+fs_roots = ["~/tengu-lab/chaos-kb/briefed"]
+
 # --- The agents' process: A2A server (agents only, no planner) ----------------
 [a2a.server]
 port = 8740
 token_env = "TENGU_CHAOS_KB_LAB_TOKEN"
 name = "tengu chaos-kb-lab"
-description = "The chaos-kb exercise: one request, a builder with memory and one without."
+description = "The chaos-kb exercise: one request; builders without memory, with kb tools, and with a brief."
 orchestrator = false
-agents = ["scribe", "plain", "persona"]
-max_running = 2
+agents = ["scribe", "plain", "persona", "briefed"]
+max_running = 3
 run_timeout_secs = 1800
 
 [a2a.remotes.scribe]
@@ -165,6 +229,13 @@ max_result_chars = 20000
 [a2a.remotes.persona]
 url = "http://127.0.0.1:8740/a2a/agents/persona"
 description = "The builder with memory."
+bearer_env = "TENGU_CHAOS_KB_LAB_TOKEN"
+timeout_secs = 1800
+max_result_chars = 20000
+
+[a2a.remotes.briefed]
+url = "http://127.0.0.1:8740/a2a/agents/briefed"
+description = "The builder with a brief."
 bearer_env = "TENGU_CHAOS_KB_LAB_TOKEN"
 timeout_secs = 1800
 max_result_chars = 20000

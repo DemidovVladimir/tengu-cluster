@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brief: a searcher reads first · Tengu</title>
+<meta name="description" content="How [agents.<a>.brief] works: before an agent's turn its searcher, another agent, reads the request alone and answers with what the user's knowledge base says, or NONE; a finding leads the request in a marked block.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: wrapped transcripts, the config check */
+  .tabpanel pre.wrap, pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .seg label { display: block; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+  .seg label:last-child span { border-right: 0; }
+  .seg input:checked + span { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .two-col { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .mini { font-size: 0.76rem; }
+  .cfg-out { font-size: 0.76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cfg-out.bad { color: var(--bad); }
+  .checks code { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · before the turn</div>
+  <h1>Brief: a searcher reads first</h1>
+  <p class="lede">Before an agent's turn, its searcher, another agent, reads the request and answers with what the user's knowledge base says, or <code>NONE</code>. A finding leads the request, so the main agent need not search.</p>
+  <ul class="facts">
+    <li>searcher timeout <b>60 s</b> by default</li>
+    <li><b>NONE</b> or empty = no brief</li>
+    <li><b>A2A</b> agent turns + <b>plan steps</b></li>
+    <li><b>1</b> level: a searcher has no brief</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> searcher and agent</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> knowledge base tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> the answer check</li>
+    <li><span class="chip data">data</span> config, brief, history</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One turn before the turn</span>
+    <h2 id="s-flow">From request to briefed request</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 470" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A request reaches an agent with a brief block. Its searcher runs one turn on the request alone and may call knowledge base tools. Its answer is checked: empty, NONE, an error or a timeout leave the request as it was; anything else goes in front of the request in a marked block. The agent then runs its turn, and the A2A history keeps the request without the brief.</title>
+        <!-- edges -->
+        <path class="e" id="p-in" d="M105 4 L105 40" data-at="1"/>
+        <path class="e" id="p-req-s" d="M190 72 L280 72" data-at="2"/>
+        <path class="e dash" id="p-cfg-s" d="M190 178 C235 178 235 100 280 100" data-at="2"/>
+        <path class="e" id="p-s-kb" d="M470 60 L560 60" data-at="3"/>
+        <path class="e flow" id="p-kb-s" d="M560 94 L470 94" data-at="3"/>
+        <path class="e" id="p-s-gate" d="M375 114 L375 188" data-at="4,7"/>
+        <path class="e" id="p-gate-none" d="M285 235 C190 235 120 250 120 300" data-at="5,7"/>
+        <path class="e" id="p-gate-brief" d="M465 235 L520 235" data-at="6"/>
+        <path class="e" id="p-none-agent" d="M220 330 C262 330 262 395 300 395" data-at="5,7-8"/>
+        <path class="e" id="p-brief-agent" d="M680 290 C680 350 600 410 520 410" data-at="6,8"/>
+        <path class="e flow" id="p-agent-hist" d="M300 425 L240 425" data-at="9"/>
+
+        <!-- nodes -->
+        <g class="n" data-at="1-2">
+          <rect x="20" y="40" width="170" height="64" rx="8"/>
+          <text x="105" y="66" text-anchor="middle" class="t-title">Request</text>
+          <text x="105" y="86" text-anchor="middle" class="t-small">A2A message · step goal</text>
+        </g>
+        <g class="n data" data-at="2">
+          <rect x="20" y="150" width="170" height="56" rx="8"/>
+          <text x="105" y="174" text-anchor="middle" class="t-title t-mono">[agents.&lt;a&gt;.brief]</text>
+          <text x="105" y="193" text-anchor="middle" class="t-small">searcher · timeout_secs</text>
+        </g>
+        <g class="n heart" data-at="2-4,7">
+          <rect x="280" y="30" width="190" height="84" rx="10"/>
+          <text x="375" y="52" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="375" y="72" text-anchor="middle" class="t-title">Searcher</text>
+          <text x="375" y="90" text-anchor="middle" class="t-small">one turn, no history</text>
+          <text x="375" y="106" text-anchor="middle" class="t-small">own identity · tools</text>
+        </g>
+        <g class="n hands" data-at="3">
+          <rect x="560" y="30" width="280" height="84" rx="10"/>
+          <text x="700" y="52" text-anchor="middle" class="t-kanji k">手</text>
+          <text x="700" y="72" text-anchor="middle" class="t-title">KB tools (example)</text>
+          <text x="700" y="90" text-anchor="middle" class="t-small t-mono">chaos_kb__kb_topics</text>
+          <text x="700" y="106" text-anchor="middle" class="t-small t-mono">then chaos_kb__kb_read</text>
+        </g>
+        <g class="n guard" data-at="4-7">
+          <polygon points="375,188 465,235 375,282 285,235"/>
+          <text x="375" y="232" text-anchor="middle" class="t-title">found?</text>
+          <text x="375" y="250" text-anchor="middle" class="t-small">empty · NONE</text>
+        </g>
+        <g class="n" data-at="5,7-8">
+          <rect x="20" y="300" width="200" height="60" rx="8"/>
+          <text x="120" y="325" text-anchor="middle" class="t-title">Request as it was</text>
+          <text x="120" y="344" text-anchor="middle" class="t-small">no brief added</text>
+        </g>
+        <g class="n data" data-at="6,8">
+          <rect x="520" y="200" width="320" height="90" rx="8"/>
+          <text x="680" y="222" text-anchor="middle" class="zone-label">what the agent gets</text>
+          <text x="680" y="246" text-anchor="middle" class="t-title">Brief + request</text>
+          <text x="680" y="266" text-anchor="middle" class="t-small">block, then the request</text>
+        </g>
+        <g class="n heart" data-at="8-9">
+          <rect x="300" y="370" width="220" height="80" rx="10"/>
+          <text x="410" y="394" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="410" y="416" text-anchor="middle" class="t-title">Agent turn</text>
+          <text x="410" y="436" text-anchor="middle" class="t-small">own model · own tools</text>
+        </g>
+        <g class="n data" data-at="9">
+          <rect x="20" y="395" width="220" height="60" rx="8"/>
+          <text x="130" y="419" text-anchor="middle" class="t-title">A2A history</text>
+          <text x="130" y="438" text-anchor="middle" class="t-small">keeps the request alone</text>
+        </g>
+
+        <!-- per-step badges (one slot) -->
+        <g class="pop badge" data-at="1"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">A2A agent turn or plan step</text></g>
+        <g class="pop badge" data-at="2"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">no brief block = no searcher</text></g>
+        <g class="pop badge" data-at="3"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">example tools, not built in</text></g>
+        <g class="pop badge" data-at="4"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">cut at timeout_secs (60 s)</text></g>
+        <g class="pop badge" data-at="5"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">NONE · none. · empty: nothing</text></g>
+        <g class="pop badge" data-at="6"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">answer trimmed, then joined</text></g>
+        <g class="pop badge" data-at="7"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">warn logged · turn goes on</text></g>
+        <g class="pop badge" data-at="8"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">briefed text, or as it was</text></g>
+        <g class="pop badge" data-at="9"><rect x="560" y="150" width="280" height="24" rx="12"/><text x="700" y="166" text-anchor="middle">history: the request alone</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok" r="6" data-path="p-in" data-at="1" data-dur="800"/>
+        <circle class="tok" r="6" data-path="p-req-s" data-at="2" data-dur="900"/>
+        <circle class="tok" r="5" data-path="p-cfg-s" data-at="2" data-delay="500" data-dur="900"/>
+        <circle class="tok heart" r="6" data-path="p-s-kb" data-at="3" data-dur="800"/>
+        <circle class="tok hands" r="6" data-path="p-kb-s" data-at="3" data-delay="900" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-s-gate" data-at="4" data-dur="900"/>
+        <circle class="tok guard" r="6" data-path="p-gate-none" data-at="5" data-dur="1100"/>
+        <circle class="tok guard" r="6" data-path="p-gate-brief" data-at="6" data-dur="700"/>
+        <circle class="tok bad" r="6" data-path="p-s-gate" data-at="7" data-dur="700"/>
+        <circle class="tok bad" r="6" data-path="p-gate-none" data-at="7" data-delay="700" data-dur="1100"/>
+        <circle class="tok" r="6" data-path="p-none-agent" data-at="8" data-dur="1000"/>
+        <circle class="tok" r="6" data-path="p-brief-agent" data-at="8" data-dur="1200"/>
+        <circle class="tok heart" r="6" data-path="p-agent-hist" data-at="9" data-dur="800"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A request reaches agent <code>&lt;a&gt;</code>: a message to <code>/a2a/agents/&lt;a&gt;</code>, or a plan step's goal inside <code>tengu run-agent</code>.</li>
+        <li><code>[agents.&lt;a&gt;.brief]</code> names its <code>searcher</code>. Without the block nothing else happens. With it, the searcher runs one turn of its own on the request text alone, with no history.</li>
+        <li>Its own <code>identity</code>, model and tools decide how it answers. Example: a small model whose only tools are <code>chaos_kb__kb_topics</code>, then <code>chaos_kb__kb_read</code> for just the passages that matter.</li>
+        <li>Its answer comes back. The whole searcher turn, tool calls included, is cut at <code>timeout_secs</code>: 60 by default.</li>
+        <li>An empty answer, or <code>NONE</code> in any letter case with an optional final full stop, adds nothing. The request goes on as it was.</li>
+        <li>Anything else is trimmed and goes in front of the request, in a marked block that names the searcher.</li>
+        <li>A searcher that fails or runs past <code>timeout_secs</code> logs a warning. The turn goes on with the request unchanged: a brief never fails a turn.</li>
+        <li>Then agent <code>&lt;a&gt;</code> runs its own turn on that text, with its own model and tools.</li>
+        <li>In an A2A context the history keeps the request without the brief. The next turn's searcher again sees only the new request.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-text">
+  <div class="sec-head">
+    <span class="kicker">The exact text</span>
+    <h2 id="s-text">What the agent receives</h2>
+    <p>The strings are the tests' own (<code>tests/a2a_e2e.rs</code>, <code>tests/run_agent_ipc.rs</code>); the block is the one <code>brief::prepend</code> builds.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-found" aria-selected="true">a finding</button>
+      <button type="button" aria-controls="tab-none">NONE</button>
+      <button type="button" aria-controls="tab-fail">failed or late</button>
+      <button type="button" aria-controls="tab-step">plan step</button>
+    </div>
+    <div class="tabpanel" id="tab-found"><pre class="wrap"><span class="c"># a_brief_leads_the_request: agent `briefed`, searcher `finder`</span>
+<span class="k">finder gets</span>
+Prescribe an antibiotic for my sore throat.
+
+<span class="k">finder answers</span>
+BRIEF-FACT-41d2: the user is allergic to penicillin (Health.md:5-5).
+
+<span class="k">briefed gets</span>
+<span class="j">[Brief from agent `finder`: what the user's knowledge base says that matters for this request]</span>
+BRIEF-FACT-41d2: the user is allergic to penicillin (Health.md:5-5).
+<span class="j">[End of brief]</span>
+
+Prescribe an antibiotic for my sore throat.
+
+<span class="c"># log (info): brief: the searcher's finding leads the request</span></pre></div>
+    <div class="tabpanel" id="tab-none" hidden><pre class="wrap"><span class="c"># the follow-up, in the same A2A context</span>
+<span class="k">finder gets</span> <span class="c">(no history)</span>
+And for the cough? NOTHING-THERE
+
+<span class="k">finder answers</span>
+NONE
+
+<span class="k">briefed gets</span> <span class="c">(its user messages, history first)</span>
+Prescribe an antibiotic for my sore throat.   <span class="c"># turn 1, without its brief</span>
+And for the cough? NOTHING-THERE
+
+<span class="c"># log (info): brief: the searcher found nothing; no brief</span></pre></div>
+    <div class="tabpanel" id="tab-fail" hidden><pre class="wrap"><span class="c"># agent `unlucky`, searcher `deaf`: its model server is gone</span>
+<span class="k">deaf</span>  <span class="h">the call fails: no answer</span>
+
+<span class="k">unlucky gets</span>
+Which vaccines are due?
+
+<span class="c"># log (warn): brief: the searcher failed; the turn goes on without a brief</span>
+
+<span class="c"># a searcher whose server never answers (bootstrap::brief::tests), past timeout_secs:</span>
+<span class="c"># log (warn): brief: the searcher ran past its timeout; the turn goes on without a brief</span></pre></div>
+    <div class="tabpanel" id="tab-step" hidden><pre class="wrap"><span class="c"># a_plan_step_gets_its_brief_before_the_goal: step agent `stepper`, searcher `finder`</span>
+<span class="c"># both run inside one tengu run-agent child</span>
+<span class="k">finder gets</span>
+Plan dinner for Saturday.
+
+<span class="k">finder answers</span>
+BRIEF-FACT-7e10: the user is vegetarian (Food.md:3-6).
+
+<span class="k">stepper gets</span>
+<span class="j">[Brief from agent `finder`: what the user's knowledge base says that matters for this request]</span>
+BRIEF-FACT-7e10: the user is vegetarian (Food.md:3-6).
+<span class="j">[End of brief]</span>
+
+Plan dinner for Saturday.</pre></div>
+  </div>
+  <p class="note">Only a bare <code>NONE</code> means nothing. <code>none</code>, <code>None.</code> and an empty answer add no brief; <code>None of the notes say so, but: vegetarian.</code> is a brief (<code>domain::brief::tests</code>).</p>
+</section>
+
+<section class="sec" aria-labelledby="s-check">
+  <div class="sec-head">
+    <span class="kicker">Try it: break the config</span>
+    <h2 id="s-check">What the config refuses</h2>
+    <p>The config from <code>config::tests</code>, one brief block at a time. The output is what <code>tengu --config &lt;file&gt; status</code> printed for each file.</p>
+  </div>
+  <div class="widget">
+    <div class="seg" role="radiogroup" aria-label="The brief block">
+      <label><input type="radio" name="cfg" value="ok" checked><span>valid</span></label>
+      <label><input type="radio" name="cfg" value="nobody"><span>no such agent</span></label>
+      <label><input type="radio" name="cfg" value="self"><span>its own searcher</span></label>
+      <label><input type="radio" name="cfg" value="chain"><span>searcher with a brief</span></label>
+      <label><input type="radio" name="cfg" value="zero"><span>timeout 0</span></label>
+      <label><input type="radio" name="cfg" value="typo"><span>unknown key</span></label>
+      <label><input type="radio" name="cfg" value="missing"><span>no searcher</span></label>
+    </div>
+    <span class="verdict ok" id="cfg-verdict" aria-live="polite"></span>
+    <div class="two-col">
+      <div class="card data"><h3>config.toml</h3><pre class="mini" id="cfg-toml"></pre></div>
+      <div class="card guard"><h3>Result</h3><pre class="cfg-out" id="cfg-out"></pre></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Five endings</span>
+    <h2 id="s-out">How a brief ends</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">brief</span><span><b>a finding</b>The trimmed answer leads the request in the marked block. Log: <code>brief: the searcher's finding leads the request</code>.</span></li>
+    <li><span class="chip data">none</span><span><b>NONE or empty</b>The request goes on as it was. Log: <code>brief: the searcher found nothing; no brief</code>.</span></li>
+    <li><span class="chip warn">warn</span><span><b>the searcher failed</b>Logged with the error; the request goes on as it was.</span></li>
+    <li><span class="chip warn">warn</span><span><b>past timeout_secs</b>The searcher's turn is dropped; the request goes on as it was.</span></li>
+    <li><span class="chip data">off</span><span><b>no brief block</b>No searcher turn at all.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-where-runs">
+  <div class="sec-head">
+    <span class="kicker">Surfaces</span>
+    <h2 id="s-where-runs">Where it runs today</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">on</span><span><b>A2A agent turns</b><code>/a2a/agents/&lt;a&gt;</code> on <a href="a2a.html"><code>tengu a2a serve</code></a>. The searcher runs in the server process.</span></li>
+    <li><span class="chip ok">on</span><span><b>plan steps</b>Every <a href="subagents.html"><code>tengu run-agent</code></a> child, including the steps the A2A planner dispatches. The searcher runs inside the child, as an in-process agent turn.</span></li>
+    <li><span class="chip bad">off</span><span><b>the planner call</b>A turn with a system override (<code>system_override</code>) is never briefed.</span></li>
+    <li><span class="chip bad">not yet</span><span><b>chat and webhook turns</b>A turn answered in process on the TUI, Telegram or a webhook gets no brief yet. The plan steps such a turn starts do: each is a <code>tengu run-agent</code> child.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>A brief never fails a turn.</b> A searcher error or a run past <code>timeout_secs</code> logs a warning, and the request goes on unchanged.</span></li>
+    <li><span><b>Bounded in time.</b> The whole searcher turn, tool calls included, is cut at <code>timeout_secs</code>: 60 by default, and 0 is refused.</span></li>
+    <li><span><b>One level deep.</b> An agent may not be its own searcher, and a searcher may not have a brief of its own, so briefs never chain or loop.</span></li>
+    <li><span><b>A real agent.</b> <code>searcher</code> is required and must name an <code>[agents.&lt;name&gt;]</code> block, or the config does not load. Unknown keys in the block do not parse.</span></li>
+    <li><span><b>The request alone.</b> The searcher gets the request text with no conversation history.</span></li>
+    <li><span><b>History stays clean.</b> An A2A context records the request without its brief; only the current turn carries it.</span></li>
+    <li><span><b>Told apart from asked.</b> The brief sits between <code>[Brief from agent `&lt;searcher&gt;`: what the user's knowledge base says that matters for this request]</code> and <code>[End of brief]</code>, then a blank line, then the request.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Set one up, then run the tests</h2>
+    <p>An example block: the agent names, model and vault path are examples; the tool names come from a chaos-kb <code>[[mcp_servers]]</code> entry named <code>chaos_kb</code>.</p>
+  </div>
+<pre><span class="c"># example: a researcher briefed by a small knowledge base searcher</span>
+<span class="k">[[mcp_servers]]</span>
+name      = <span class="s">"chaos_kb"</span>
+transport = <span class="s">"stdio"</span>
+command   = [<span class="s">"chaos-kb"</span>, <span class="s">"--vault"</span>, <span class="s">"${HOME}/notes"</span>, <span class="s">"mcp"</span>]
+
+<span class="c"># the rest of [agents.researcher] as before</span>
+<span class="k">[agents.researcher.brief]</span>
+<span class="c"># required: another [agents.&lt;name&gt;] block</span>
+searcher     = <span class="s">"kb_searcher"</span>
+<span class="c"># the default; must be greater than 0</span>
+timeout_secs = <span class="n">60</span>
+
+<span class="c"># the searcher needs no description</span>
+<span class="k">[agents.kb_searcher]</span>
+engine = <span class="s">"openrouter"</span>
+model  = <span class="s">"&lt;a small, fast model&gt;"</span>
+tools  = [<span class="s">"chaos_kb__kb_topics"</span>, <span class="s">"chaos_kb__kb_read"</span>]
+
+<span class="k">[agents.kb_searcher.identity]</span>
+instructions = <span class="s">"""Call kb_topics with the request. kb_read only the ids that would change the
+task for this user. Answer those facts in short lines, each with its id, or exactly NONE."""</span></pre>
+  <p>The tests below run against a mock model server on <code>127.0.0.1</code>: no key needed. From the repo root:</p>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --test a2a_e2e a_brief</span>
+<span class="ln">test a_brief_leads_the_request ... <span class="hl">ok</span></span>
+<span class="ln o"># a finding, then NONE with the history, then a searcher whose server is gone</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --test run_agent_ipc a_plan_step</span>
+<span class="ln">test a_plan_step_gets_its_brief_before_the_goal ... <span class="hl">ok</span></span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu brief::tests</span>
+<span class="ln">test domain::brief::tests::nothing_found_is_no_brief ... <span class="hl">ok</span></span>
+<span class="ln">test bootstrap::brief::tests::a_searcher_past_its_timeout_leaves_the_request ... <span class="hl">ok</span></span>
+<span class="ln o"># and three more: the trimmed brief, the marked block, no brief block</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu a_brief_names_another_agent</span>
+<span class="ln">test config::tests::a_brief_names_another_agent_without_a_brief_of_its_own ... <span class="hl">ok</span></span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/brief.rs</code></td><td>the rules: when an answer is a brief (<code>from_answer</code>, <code>NONE</code>) and the marked block (<code>prepend</code>)</td></tr>
+        <tr><td><code>src/bootstrap/brief.rs</code></td><td><code>with_brief</code>: runs the searcher's turn, the timeout, the log lines; never fails the turn</td></tr>
+        <tr><td><code>src/bootstrap/a2a.rs</code></td><td><code>agent_turn</code>: briefs A2A agent turns, skips the planner call; also runs the searcher's turn</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the plan step: briefs the goal inside the <code>run-agent</code> child</td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>AgentBriefConfig</code>, the 60 s default, the brief checks in <code>validation_errors</code></td></tr>
+        <tr><td><code>tests/a2a_e2e.rs</code></td><td><code>a_brief_leads_the_request</code>: a finding, NONE with history, a failed searcher</td></tr>
+        <tr><td><code>tests/run_agent_ipc.rs</code></td><td><code>a_plan_step_gets_its_brief_before_the_goal</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: the config check. Messages copied from `tengu --config <file> status`
+   (Config::load: serde for parse errors, validation_errors in config/mod.rs). */
+(function () {
+  var BASE = '[agents.persona]\nengine = "openrouter"\nmodel = "m"\n\n[agents.searcher]\nengine = "openrouter"\nmodel = "m"\n\n';
+  var HEAD = "Error: Failed to load config at <path>\n\nCaused by:\n    ";
+  function failed(lines) {
+    return HEAD + "Config validation failed (" + lines.length + " issue" + (lines.length === 1 ? "" : "s") + "):\n" +
+      lines.map(function (l) { return "    - " + l; }).join("\n");
+  }
+  var CASES = {
+    ok: { block: '[agents.persona.brief]\nsearcher = "searcher"', v: ["ok", "Loads: persona's turns get a brief from searcher"],
+      out: "# no error\n# timeout_secs = 60, the default" },
+    nobody: { block: '[agents.persona.brief]\nsearcher = "nobody"', v: ["bad", "Refused: the config does not load"],
+      out: failed(["agents.persona.brief.searcher: no [agents.nobody] block"]) },
+    self: { block: '[agents.persona.brief]\nsearcher = "persona"', v: ["bad", "Refused: the config does not load"],
+      out: failed(["agents.persona.brief.searcher: an agent cannot write its own brief"]) },
+    chain: { block: '[agents.persona.brief]\nsearcher = "searcher"\n\n[agents.searcher.brief]\nsearcher = "persona"', v: ["bad", "Refused: briefs never chain or loop"],
+      out: failed(["agents.persona.brief.searcher: `searcher` has a brief of its own; a searcher may not",
+                   "agents.searcher.brief.searcher: `persona` has a brief of its own; a searcher may not"]) + "\n\n# the two lines come in no fixed order" },
+    zero: { block: '[agents.persona.brief]\nsearcher = "searcher"\ntimeout_secs = 0', v: ["bad", "Refused: the config does not load"],
+      out: failed(["agents.persona.brief.timeout_secs must be greater than 0"]) },
+    typo: { block: '[agents.persona.brief]\nagent = "searcher"', v: ["bad", "Does not parse"],
+      out: HEAD + 'TOML parse error at line 10, column 1\n       |\n    10 | agent = "searcher"\n       | ^^^^^\n    unknown field `agent`, expected `searcher` or `timeout_secs`' },
+    missing: { block: '[agents.persona.brief]\ntimeout_secs = 30', v: ["bad", "Does not parse"],
+      out: HEAD + "TOML parse error at line 9, column 1\n      |\n    9 | [agents.persona.brief]\n      | ^^^^^^^^^^^^^^^^^^^^^^\n    missing field `searcher`" }
+  };
+  var verdict = document.getElementById("cfg-verdict");
+  var toml = document.getElementById("cfg-toml"), out = document.getElementById("cfg-out");
+  function render() {
+    var c = CASES[document.querySelector('input[name="cfg"]:checked').value];
+    verdict.className = "verdict " + c.v[0];
+    verdict.textContent = c.v[1];
+    toml.textContent = BASE + c.block;
+    out.textContent = c.out;
+    out.className = "cfg-out" + (c.v[0] === "bad" ? " bad" : "");
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="cfg"]'), function (x) { x.addEventListener("change", render); });
+  render();
+})();
+</script>
+</body>
+</html>

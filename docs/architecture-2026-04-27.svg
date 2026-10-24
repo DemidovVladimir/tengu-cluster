@@ -1203,6 +1203,7 @@
     <text x="10" y="128" class="file">bootstrap/a2a.rs</text>
     <text x="10" y="140" class="small">planner = orchestrator turn · agent = turn</text>
     <text x="10" y="152" class="small">with its tools · answers redacted</text>
+    <text x="10" y="168" class="small">brief first: bootstrap/brief.rs</text>
     <text x="10" y="188" class="small" font-style="italic">fail-closed; private agents never served</text>
   </g>
 

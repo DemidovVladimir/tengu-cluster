@@ -204,6 +204,7 @@
     <li><span><b>Fail-closed server.</b> No <code>token_env</code> and no loopback <code>allow_unauthenticated</code>: the config does not load. An unset token stops the start.</span></li>
     <li><span><b>No private agents.</b> Only agents with a <code>description</code> can be served; tasks of one endpoint are invisible to another.</span></li>
     <li><span><b>Redacted out.</b> Answers and errors pass the secret registry before they leave.</span></li>
+    <li><span><b>Brief first.</b> A served agent with <code>[agents.&lt;a&gt;.brief]</code> gets its searcher's findings in front of the message; the context keeps the message alone (<a href="brief.html">brief</a>). The planner call gets none.</span></li>
     <li><span><b>Same tool on every engine.</b> OpenRouter, local, Claude Code and Codex (the last two through the MCP bridge) run the same code; <code>bridge_conformance</code> and the engine matrix (one <code>a2a</code> leg per engine) prove it.</span></li>
   </ul>
 </section>
@@ -245,7 +246,7 @@
         <tr><td><code>src/adapters/outbound/tools/a2a/mod.rs</code></td><td>the <code>a2a</code> tool</td></tr>
         <tr><td><code>src/ports/a2a.rs</code></td><td><code>A2aRunner</code>: who answers a served message (planner or one agent)</td></tr>
         <tr><td><code>src/application/a2a/</code></td><td>the server's methods and task store</td></tr>
-        <tr><td><code>src/bootstrap/a2a.rs</code></td><td>who answers (planner or agent turn), the cards</td></tr>
+        <tr><td><code>src/bootstrap/a2a.rs</code></td><td>who answers (planner or agent turn), the cards; an agent turn asks for its brief first (<code>bootstrap/brief.rs</code>)</td></tr>
         <tr><td><code>src/adapters/inbound/a2a.rs</code> · <code>cli/a2a.rs</code></td><td>HTTP routes, SSE, auth · <code>tengu a2a</code></td></tr>
       </tbody>
     </table>
@@ -253,7 +254,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

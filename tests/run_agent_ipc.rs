@@ -14,6 +14,7 @@
 //! | widening compose | hardened sandbox (a `[solana]` signer), `compose.tools` adds `write_file` to a base listing `read_file` | exit != 0 before the engine is built, stderr: "compose would widen agent `arch` in a hardened sandbox", stdout empty; the same compose without the signer offers `write_file` to a loopback model, exit 0 |
 //! | local fit | local agent, 16 384-token window, `read_file` of 100 000 bytes | the tool message the server gets next is ≤ 8 192 bytes (1/8 of the window), exit 0; a local agent left on the default window is warned about on stderr |
 //! | OpenRouter caps | `OPENROUTER_BASE_URL` = a loopback fake, `max_tool_result_chars = 2000`, `compact_result_limit = 50`, `read_file` of 100 011 bytes, then a small file | round 0's result capped (+ footer); in the next request it is line 1 only; one system message per request |
+//! | brief | `[agents.stepper.brief] searcher = "finder"`, both local agents on one loopback fake | the fake's first request is the searcher's, its one user message the step's goal as is; the second is the step's, its user message the searcher's answer in the marked brief block, then the goal; exit 0 |
 //! | Claude Code, no workspace (`--features claude_code`) | `[claude_code] cli_path` = a stand-in that logs argv, cwd and stdin, streams a `compress_and_store` call, writes the step's summary file, then sleeps 30 s | `--mcp-config` + every tool in `--allowedTools`; cwd = a `tengu-step-*` temp dir, gone after the step; the system prompt only in `--system-prompt`; the bridge transcript = system, goal, the call; the run ends at the stored summary (< 15 s), IPC `summary` = the stub's |
 //!
 //! None of the failure paths emit an `AgentIpcOutput` — every failure before
@@ -432,6 +433,85 @@ fn local_engine_child_fits_tool_results_to_the_window() {
             .contains("agents.unsized.limits.context_window is the 1000000 default"),
         "load warning missing:\n{}",
         run.stderr
+    );
+}
+
+/// `[agents.<a>.brief]` on a plan step: the searcher reads the goal first;
+/// its answer leads the goal the step's agent gets.
+#[test]
+fn a_plan_step_gets_its_brief_before_the_goal() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let (port, server) = fake_local_server(vec![
+        r#"{"choices":[{"message":{"content":"BRIEF-FACT-7e10: the user is vegetarian (Food.md:3-6)."},"finish_reason":"stop"}]}"#,
+        r#"{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}"#,
+    ]);
+    let local = format!(
+        "context_window = 16384\n\n[agents.{{0}}.local]\nbase_url = \"http://127.0.0.1:{port}/v1\"\napi_key_env = \"\"\n"
+    );
+    let config = format!(
+        "[egress]\nnetwork = \"open\"\n\n[memory]\nenabled = false\n\n\
+         [agents.stepper]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\
+         description = \"fixture: a briefed step\"\ntools = [\"read_file\"]\n\
+         workspace = \"{workspace}\"\n\n\
+         [agents.stepper.brief]\nsearcher = \"finder\"\n\n\
+         [agents.stepper.limits]\n{stepper}\n\
+         [agents.finder]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\n\
+         [agents.finder.limits]\n{finder}",
+        workspace = workspace.path().display(),
+        stepper = local.replace("{0}", "stepper"),
+        finder = local.replace("{0}", "finder"),
+    );
+    let config_path = workspace.path().join("config.toml");
+    std::fs::write(&config_path, config).unwrap();
+    let goal = "Plan dinner for Saturday.";
+    let input = serde_json::json!({
+        "goal": goal,
+        "agent_name": "stepper",
+        "model": "",
+        "max_turns": 3,
+        "session_id": "test-session-brief",
+        "step_id": "step-1"
+    })
+    .to_string();
+
+    let run = run_agent_with(
+        Some("1"),
+        &input,
+        &[("TENGU_CONFIG", config_path.to_str().unwrap())],
+        Duration::from_secs(20),
+    );
+    let bodies = server.join().expect("fake server");
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        run.stdout,
+        run.stderr
+    );
+    let users = |body: &str| -> Vec<String> {
+        let body: serde_json::Value = serde_json::from_str(body).expect("request JSON");
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .map(|m| m["content"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(bodies.len(), 2, "stderr:\n{}", run.stderr);
+    assert_eq!(
+        users(&bodies[0]),
+        [goal],
+        "the searcher gets the goal as is"
+    );
+    assert_eq!(
+        users(&bodies[1]),
+        [format!(
+            "[Brief from agent `finder`: what the user's knowledge base says that matters for this request]\n\
+             BRIEF-FACT-7e10: the user is vegetarian (Food.md:3-6).\n\
+             [End of brief]\n\n\
+             {goal}"
+        )]
     );
 }
 

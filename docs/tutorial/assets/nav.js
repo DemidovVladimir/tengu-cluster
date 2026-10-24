@@ -30,6 +30,7 @@ window.TUTORIAL = {
     { slug: "skill-lifecycle", chapter: "team", title: "Skill evals and evolution", blurb: "Score a skill, rewrite it, keep the better version." },
     { slug: "channels", chapter: "team", title: "Chat surfaces", blurb: "Terminal UI, Telegram and webhooks feed the same runtime." },
     { slug: "a2a", chapter: "team", title: "A2A: other harnesses", blurb: "Agents call other agent harnesses, and other harnesses call Tengu's agents, over the A2A protocol." },
+    { slug: "brief", chapter: "team", title: "Brief: a searcher reads first", blurb: "Before an agent's turn, a small searcher agent reads the knowledge base; its few lines of facts lead the request." },
 
     { slug: "memory", chapter: "memory", title: "Open Brain and LLM Wiki", blurb: "Postgres memory with recall lanes, compiled into a reviewed wiki." },
     { slug: "local-memory", chapter: "memory", title: "Workspace memory", blurb: "Profile files, vector recall and small stores per workspace." },
