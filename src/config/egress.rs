@@ -1,16 +1,6 @@
 //! `[egress]` — network policy schema and validation. The runtime policy
 //! (clients, proxy env, audit log) lives in `adapters/egress.rs`; see
 //! `docs/egress.md`.
-//!
-//! | Field | Default | Notes |
-//! |---|---|---|
-//! | `network` | `"tor"` | `tor` \| `open` |
-//! | `proxy` | tor: `TENGU_TOR_PROXY` or `socks5h://127.0.0.1:9050`; open: none | `socks5h` \| `http` \| `https` with a port; `socks5://` refused (DNS leak) |
-//! | `route_llm_api` | tor: `true`; open: `false` | LLM provider traffic (OpenRouter, embeddings, Jev, the Claude CLI) through the proxy; `true` needs a proxy |
-//! | `allow_hosts` · `deny_hosts` | `[]` | sandbox-wide ceiling for tool traffic (`*.suffix`, `*`); deny checked first; no empty pattern |
-//! | `https_only` | `false` | refuse `http://` |
-//! | `shell_network` | `"proxy_env"` | `proxy_env` (advisory) \| `isolated` (macOS `sandbox-exec`, loopback proxy only) |
-//! | `audit` · `audit_log` | `true` · `<TENGU_HOME>/logs/egress.jsonl` | JSONL per request; `~` expanded |
 
 use std::path::PathBuf;
 

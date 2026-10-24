@@ -13,8 +13,6 @@
 //! | `heartbeat_secs` | `300` | … until that row is this old, so `asof` always finds a recent row; `0` = never |
 //! | `min_interval_secs` | `{}` | per schema: at most one row per key per interval (changed or not) |
 //! | `retention_days` | `30` | day files older than this are deleted (on open, at each new day); `0` = keep all |
-//!
-//! Read the day files with `tengu history range|asof`.
 
 use std::collections::BTreeMap;
 

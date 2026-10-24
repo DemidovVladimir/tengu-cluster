@@ -142,7 +142,7 @@ Writers refuse agent / CLI state paths (`.tengu/`, `.claude/`, `skills/` via `wr
 | `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine → scan → validate → install from URL / git / local path (default tier `managed`; `--strict` refuses caution / dangerous verdicts) |
 | `tengu skill seed <name> [<resources_dir>] [--tier T] [--description] [--learner-facing] [--yes]` | Teacher onboarding: SKILL.md template + `resources/` folder |
 
-Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); no sandbox ships one — commented `[skill_lifecycle]` sample in `config.example.toml`, `src/config/skill_lifecycle.rs` (module doc).
+Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); no sandbox ships one — commented `[skill_lifecycle]` sample in `config.example.toml`, `src/config/skill_lifecycle.rs`.
 
 ## Example: shell skill
 
@@ -160,7 +160,7 @@ cargo test {{filter}} 2>&1
 Its command is gated by `shell_bins` in its scope (first command word only — a guard rail, not a sandbox); it never loads in a hardened sandbox.
 
 ## Related
-- `src/config/agent.rs` · `src/config/skill_lifecycle.rs` (module docs) — `skill_packages`, `[skill_lifecycle]`
+- `src/config/agent.rs` · `src/config/skill_lifecycle.rs` — `skill_packages`, `[skill_lifecycle]`
 - `docs/mcp-bridge.md` — how skill tools reach Claude Code
 - `docs/engine-backends.md` — engines
 - `docs/archive/2026-04/skill-redesign-2026-04-29.md` · `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (history)

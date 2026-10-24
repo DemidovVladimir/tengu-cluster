@@ -1,6 +1,6 @@
 # Configuration
 
-One TOML file per sandbox holds the channel settings, `[egress]`, the planner and **every agent** (in-process and subagent alike). Each key — default, meaning, its own load rules — is documented once, in its section's module doc in `src/config/` (§ Root sections); `config.example.toml` shows every section commented, and every block of it uncommented must deserialize (`config::tests::every_example_block_uncommented_deserializes`). This page: how a config loads, the rules that span sections, environment variables. Code side (who reads each section, how to add a field): `docs/code-map.md` §3–§4.
+One TOML file per sandbox holds the channel settings, `[egress]`, the planner and **every agent** (in-process and subagent alike). Each key — default, meaning, its own load rules — is documented once, in the doc comments of its struct in `src/config/` (§ Root sections); `config.example.toml` shows every section commented. This page: how a config loads, the rules that span sections, environment variables. Code side (who reads each section, how to add a field): `docs/code-map.md` §3–§4.
 
 ## Load pipeline
 
@@ -30,7 +30,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 
 `Config` is `deny_unknown_fields`: an unknown or misspelled top-level key (`[rsik]`) fails the load. A violated rule fails `Config::load`, all errors listed at once.
 
-| Key | Keys + rules: module doc (`src/config/`) | Absent = | Unknown keys inside |
+| Key | Keys + rules: doc comments (`src/config/`) | Absent = | Unknown keys inside |
 |---|---|---|---|
 | `[agents.<id>]` | `agent.rs` (`AgentConfig`, `.limits`, `.flow`, `.identity`, `.claude_code`, `.local`, `.codex`; `.prompt_budget`) | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
 | `[orchestrator]` | `agent.rs` (`OrchestratorConfig`) | single-agent dispatch | **error** |

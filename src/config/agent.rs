@@ -1,55 +1,6 @@
 //! `[agents.<a>]` — `AgentConfig` and its blocks (`[limits]`, `[flow]`,
 //! `[identity]`, `[claude_code]` / `[local]` / `[codex]`), the engine list,
 //! `[orchestrator]`, `[[mcp_servers]]` and the global `[claude_code]`.
-//!
-//! | `[agents.<a>]` key | Default | Notes |
-//! |---|---|---|
-//! | `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI), `codex` (`codex` CLI signed in with ChatGPT; `[agents.<a>.codex] sandbox`; refused in hardened sandboxes); all four in every build — `docs/engine-backends.md`; the Studio builder (`tengu sandbox new`) writes these blocks from a canvas — `docs/builder.md` |
-//! | `model` | required | non-empty; slug format per engine |
-//! | `default` | `false` | at most one agent |
-//! | `description` | none | present ⇒ in `TENGU_PLANNER_REGISTRY.md`, runnable as a plan step (`tengu run-agent`); absent ⇒ in-process only (planner role, `@role:` chat). No `description` and not `default` = a **private** agent: never reachable from Telegram, the only kind that may hold exec tools or a Solana wallet grant. Non-empty when set |
-//! | `example_queries` | `[]` | rendered under the registry entry |
-//! | `tools` | `[]` | allow-list on every surface: chat (TUI, Telegram, webhooks, eval, `tengu tool`), `run-agent` steps, feeds, decision loops, the Claude Code bridge, `[[mcp_servers]]` tools (`bootstrap::tools::agent_base_tools`). Empty = every always-on tool + configured opt-ins. Opt-in names listed here switch on. Never list `compress_and_store` |
-//! | `workspace_tools` | `[]` | older opt-in list, merged with `tools`; only `src/domain/tools.rs::WORKSPACE_TOOLS` names |
-//! | `workspace` | none | `~` expanded. Without it a plan step / webhook turn runs in a temp dir removed after it (load warns when the agent's tools write files or skills) |
-//! | `skill_packages` (`skills`) | `[]` | skills loaded (`docs/skills.md`) |
-//! | `role` | none | free-form; non-empty when set |
-//! | `scopes.<tool>` | `{}` | `ToolScope` — `domain/scope.rs` |
-//! | `claude_code.builtin_tools_profile` | `"none"` | `none` \| `read_only` \| `research` \| `editor` \| `editor_shell` (`config::CLAUDE_CODE_PROFILES`; read trimmed; unknown = error); `research` = WebSearch only (runs at Anthropic on the subscription; no Read / Glob / Grep, no WebFetch — files and pages via bridged tools); every profile runs without settings files, hooks, plugins, skills, CLAUDE.md and auto-memory; `none` required in a hardened sandbox |
-//! | `local.base_url` · `local.api_key_env` | `http://127.0.0.1:8888` · `UNSLOTH_API_KEY` | `engine = "local"` only; a trailing `/v1` is dropped; unset / empty env = no `Authorization` header |
-//! | `codex.sandbox` · `codex.web_search` · `codex.cli_path` · `codex.forward_env` | `"read-only"` · `"disabled"` · `"codex"` · `[]` | `engine = "codex"` only; `sandbox` = the Codex CLI's own shell / patch policy: `read-only` \| `workspace-write` (read trimmed; anything else = error; never network); `web_search` = OpenAI's hosted search: `disabled` \| `cached` \| `live` (`config::CODEX_WEB_SEARCH`, read trimmed; anything else = error; runs at OpenAI on the subscription, not from this machine); `cli_path` non-empty (`PATH` lookup unless absolute). `model` = a bare OpenAI id the login serves (a ChatGPT login refuses some, e.g. `gpt-5.5` on 2026-10-14; `~/.codex/config.toml` model / effort never apply: `--ignore-user-config`); billing = the `codex login` ChatGPT subscription. The CLI starts from an EMPTY env + the base set (`engines/codex.rs::BASE_ENV`: `PATH`, `HOME`, locale, temp, TLS certs, `CODEX_HOME`, non-secret `TENGU_*`); `forward_env` = extra env names it (and its bridge) get — readable by the CLI's built-in shell, so list only what the agent's bridged tools must read; refused at load: `TENGU_MASTER_PASSWORD`, `TENGU_KEYS_*`, every `[keys.env]` name, `OPENAI_API_KEY`, `CODEX_*` |
-//!
-//! | Sub-table | Fields (default) | Rules |
-//! |---|---|---|
-//! | `.identity` | `name`, `instructions` (none) | `instructions` go into the system prompt |
-//! | `.flow` | `scope` (`per-sender`: `main` \| `per-group` \| `per-pipe-sender` \| `per-sender`), `reset_mode` (`idle`: `idle` \| `manual` \| `time`), `idle_timeout_minutes` (30), `max_history_turns`, `compaction_threshold_ratio`, `compaction_keep_turns`, `compaction_summary_max_tokens` (none) | ratio within (0, 1]; the others > 0 when set |
-//! | `.limits` | `max_tokens_per_flow` (100 000), `context_window` (1 000 000), `max_output_tokens_per_turn` (none = model default), `max_tool_rounds` (70), `max_tool_result_chars` (300 000), `stream_event_timeout_secs` (120; a `codex` CLI is killed only after max(it, 900) s of silence — it keeps the caller alive every 30 s while it reasons), `request_timeout_secs` (600), `compact_result_limit` (200), `max_mcp_result_chars` (50 000), `step_timeout_secs` (600) | `max_tokens_per_flow`, `step_timeout_secs` > 0; costs > 0, `warn_at_cost` ≤ `max_cost_per_flow`; `max_output_tokens_per_turn` ≤ `context_window`; a `local` agent on the default window warns — set the server's real one |
-//! | `.prompt_budget` | `max_file_tokens` (2 000), `max_skill_context_tokens` (16 000), `max_total_tokens` (32 000) | > 0; each ≤ `max_total_tokens` |
-//!
-//! | Limit | Meaning |
-//! |---|---|
-//! | `max_tool_rounds` | per chat turn or plan step: engine turns on `openrouter` / `local` (chat then forces one answer without tools), tool calls on `claude_code` (the CLI run is killed past it) |
-//! | `step_timeout_secs` | wall clock the parent enforces on one `run-agent` step |
-//! | `context_window` (`local`) | one tool result is capped at 1/8 of it; a typed row above the cap is compacted to a pointer |
-//!
-//! | `[orchestrator]` key | Default | Notes |
-//! |---|---|---|
-//! | `agent` | required | the `[agents.*]` block whose engine + model run the planner call |
-//! | `max_attempts_per_step` | 3 | Tier 1: retries of one step before escalation |
-//! | `max_replans` | 2 | Tier 2: replans before bailing out |
-//! | `route_explicit_agents` | `false` | `true` = `@role:` messages also go through the planner |
-//!
-//! | Section | Fields (default) | Notes |
-//! |---|---|---|
-//! | `[claude_code]` | `cli_path` (`claude`), `timeout_secs` (120) | per-agent `builtin_tools_profile` in `[agents.<a>.claude_code]` |
-//! | `[[mcp_servers]]` | `name`, `transport` (`stdio` \| `http`), `command` (stdio), `url` (http), `env` (`$VAR` resolved at spawn), `auth = { type = "bearer", token = "$VAR" }` | tools `<name>__<tool>`; a schema outside the engine subset is dropped with a warn; refused in a hardened sandbox — `docs/tools.md` § MCP servers |
-//!
-//! | Orchestration fact | Where |
-//! |---|---|
-//! | `[orchestrator]` present turns orchestration on; unknown keys fail the load (the removed `engine` too): the planner runs on `agent`'s engine + model | `OrchestratorConfig` |
-//! | planner prompt = `skills/orchestrator/SKILL.md` read from the cwd (inline fallback when missing) | `application/orchestrator/planner.rs` |
-//! | subagents = the `[agents.*]` blocks with a `description`; the registry is regenerated each planner turn | `orchestrator/shared_files.rs::routable_agents` |
-//! | the child re-loads the same config and takes `[agents.<step.agent>]`; the plan the step belongs to arrives as IPC `plan_state` | `cli/run_agent.rs`, `outbound/subprocess_runner.rs` |
 
 use super::*;
 
@@ -96,9 +47,14 @@ pub(crate) const ENGINES: &[&str] = &["openrouter", "claude_code", "local", "cod
 /// Unknown keys are a parse error so a typo never silently disables a knob.
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
+    /// At most one agent sets it.
     #[serde(default)]
     pub default: bool,
+    /// One of [`ENGINES`] (`docs/engine-backends.md`).
     pub engine: String,
+    /// Non-empty; the slug per engine: OpenRouter `anthropic/claude-sonnet-4-6`,
+    /// Claude Code `claude-sonnet-4-6`, Codex a bare OpenAI id, local the
+    /// server's own id.
     pub model: String,
     /// Planner-facing description. **Present ⇒ the agent is a routable
     /// subagent**: it is rendered into `TENGU_PLANNER_REGISTRY.md` and the
@@ -118,6 +74,8 @@ pub struct AgentConfig {
     /// listed here are opted in exactly like `workspace_tools`.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// `~` expanded. Unset: a plan step or webhook turn runs in a temp dir
+    /// removed after it (load warns when its tools write files or skills).
     #[serde(default)]
     pub workspace: Option<PathBuf>,
     #[serde(default)]
@@ -209,7 +167,10 @@ pub struct IdentityConfig {
     pub instructions: Option<String>,
 }
 
-/// Flow/session behavior (scope and reset strategy).
+/// Flow/session behavior (scope and reset strategy). `scope`: `main` |
+/// `per-group` | `per-pipe-sender` | `per-sender` (default); `reset_mode`:
+/// `idle` (default) | `manual` | `time`; `compaction_threshold_ratio` within
+/// (0, 1], the other options > 0 when set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowConfig {
     #[serde(default = "default_scope")]

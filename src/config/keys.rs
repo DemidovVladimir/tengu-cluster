@@ -14,20 +14,6 @@
 //! OPENROUTER_BASE_URL = "openrouter"   # → <proxy>/openrouter
 //! OPENROUTER_API_KEY = "@session"      # → the session token
 //! ```
-//!
-//! | Field | Default | Rules |
-//! |---|---|---|
-//! | `proxy` | none = off | the Worker origin: `https://host` (no path, query, fragment, user / password); `http://127.0.0.1` / `localhost` only for `wrangler dev`; its host inside `[egress] allow_hosts` when set; every other field needs it |
-//! | `client` | the agent's only key | SSH-agent key comment or full `SHA256:` fingerprint |
-//! | `agent_socket` | `$SSH_AUTH_SOCK` | `~` expanded |
-//! | `strip` | `[]` | env var names (`[A-Z0-9_]`) removed at load and in every child — local copies of Worker keys; never a name `[keys.env]` sets |
-//! | `[keys.env]` `VAR = "<route>[/path][?query]"` | `{}` | exported as `<proxy>/<value>` (overrides any inherited value); the session asks for exactly these routes |
-//! | `[keys.env]` `VAR = "@session"` | — | the session token; only `OPENROUTER_API_KEY`, and only next to `OPENROUTER_BASE_URL = "<route>"` |
-//!
-//! | Load rule | Where |
-//! |---|---|
-//! | `PRIVY_API_URL` in `[keys.env]` needs `PRIVY_APP_SECRET` in `strip` (`FALLBACK_KEYS`: no session never falls back to a local secret) | here |
-//! | a failed session at startup unsets every `[keys.env]` var and the session vars (warn); `tengu telegram` with `TELEGRAM_API_URL` routed and no session refuses to start | `outbound/keys`, `inbound/telegram/` |
 
 use std::collections::BTreeMap;
 

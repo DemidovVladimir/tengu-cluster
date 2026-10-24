@@ -1,29 +1,5 @@
 //! Channel sections: `[telegram]`, `[webhooks]` (+ endpoints) and the
 //! workspace `[scaffold]` `tengu telegram` applies.
-//!
-//! | `[telegram]` key | Default | Notes |
-//! |---|---|---|
-//! | `enabled` | `false` | |
-//! | `allowed_users` | `[]` | merged with `TENGU_TELEGRAM_ALLOWED_USERS`; both empty = `tengu telegram` refuses to start; an unlisted sender gets "Unauthorized." |
-//! | `tool_approvals` · `approve_only` | — | **removed** 2026-10-23 (they gated nothing): `[telegram]` refuses unknown keys, so either fails the load. No tool call waits for an approval; gate tools with `tools` and scopes |
-//!
-//! | `[webhooks]` key | Default | Notes |
-//! |---|---|---|
-//! | `enabled` | `false` | `tengu webhooks` refuses to start when off; `tengu run` mounts the routes only when on (and built with `webhooks`) |
-//! | `bind` · `port` | `127.0.0.1` · 7080 | |
-//! | `endpoints.<n>.agent` | `""` | informational — the planner routes; required unless `loop` is set |
-//! | `endpoints.<n>.loop` | none | feed the payload to `[decision_loops.<loop>]` instead of the planner |
-//! | `endpoints.<n>.secret_env` · `.secret` | none | HMAC-SHA256 key (`X-Tengu-Signature: sha256=<hex>`): env var name, or inline (less safe); exactly one |
-//! | `endpoints.<n>.auth_header_env` | none | static `Authorization` header value (Helius), constant-time compare; never with an HMAC secret |
-//! | `endpoints.<n>.goal_template` | `"A webhook arrived. Process the payload below."` | prefix of the synthesized user message |
-//!
-//! | Section | Fields (default) | Notes |
-//! |---|---|---|
-//! | `[scaffold]` | `root` (required), `directories` (`[]`), `files` (`[{path, content}]`), `project.directories` · `project.files` | created when `tengu telegram` starts (files never overwritten); `project` = template of Telegram's `/project <name>`; soft `tengu prune --sandbox` clears `project.directories` |
-//!
-//! Private agents (no `description`, not `default`) are never `@`-routable from Telegram nor its default.
-//!
-//! Webhooks, checked when the listener starts: exactly one auth scheme, `loop` names a `[decision_loops]` block, `agent` set when there is no `loop`; an env var missing at request time answers 500. Reply `202 {"session_id": "webhook-<n>-<uuid>"}`; a full loop queue answers 429. Operator doc: `docs/webhooks.md`.
 
 use super::*;
 

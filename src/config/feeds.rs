@@ -28,8 +28,6 @@
 //! At least one of `every_secs`, `windows`, `at`. No `budget` key: tools
 //! budget themselves against `[rate_limits.<name>]` (`hl-info-client`).
 //! Strategy ranking stays a `kind = "tool"` feed (critic C14).
-//!
-//! Call ids `feed:<name>:<slot ms>:<i>`; names `[a-z0-9_-]+`.
 
 use std::collections::BTreeMap;
 

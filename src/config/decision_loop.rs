@@ -44,27 +44,6 @@
 //!           wallet_sol = { observation = "snap", path = "/data/wallet_balances/native_sol/value" } }
 //! caps  = { target_sol = 2.0 }
 //! ```
-//!
-//! | Field | Default | Notes |
-//! |---|---|---|
-//! | `model` | `~typesafe/jev-latest` | OpenRouter `/api/alpha/decisions` (`OPENROUTER_API_KEY`) |
-//! | `goal` | required | objective + hard limits |
-//! | `agent` | required | an `[agents.<a>]` block: its tools, scopes, workspace |
-//! | `history` · `max_steps` | 8 · 4 | ≥ 1 |
-//! | `act_at` | 0.8 | (0, 1]; below it the step escalates (or stops) |
-//! | `dry_run` · `escalate` | `true` · `true` | dry run: non-`read_only` actions logged, not run |
-//! | `timeout_secs` | 20 | decisions HTTP timeout |
-//! | `event_reduce` | `{}` | reducer for the event |
-//! | `world` · `world_max_age_secs` | `{}` · 30 | alias → observation key `<schema>:<subject>`, read from the agent's store each step, never fetched |
-//! | `actions.<a>` | ≥ 1, one terminal (no `tool`) | `description` (required), `tool`, `args` (`{slot}` templating), `slots` (static list \| `{from, items, value, top}` \| `{observation, items, value, top}`, top 5), `reduce`, `caps`, `read_only`, `requires` (`world` alias → max age s) |
-//!
-//! | Load rule (a violation fails `Config::load`) | Where |
-//! |---|---|
-//! | `agent` exists; with a non-empty `tools`, every action `tool` is in it (a dry-run loop's write actions excepted) | `config/mod.rs` |
-//! | a terminal action has no slots; `from` / `observation` / `requires` / `caps` name an action / `world` alias / slot | here |
-//! | a loop action running a Solana write tool with `read_only = true` sets `args.mode = "simulate"`; one running an exec tool is not `read_only` | `config/solana.rs`, `config/risk.rs` |
-//!
-//! Triggers: webhook `loop = "<n>"`, `tengu decide --loop <n>`, a `[feeds.<f>] kind = "tick"` under `tengu run`, `tengu backtest --gate`.
 
 use std::collections::BTreeMap;
 
