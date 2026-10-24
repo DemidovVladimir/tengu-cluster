@@ -32,7 +32,7 @@
 > Cloudflare Worker, `tengu keys`) and Solana sends signed by a Privy wallet
 > through it; tool counts.
 >
-> Companion to `docs/tengu-analysis.html` (the deep version). This doc is the
+> Companion to `docs/archive/2026-04/tengu-analysis.html` (the deep version). This doc is the
 > obsidian-friendly **state snapshot** taken at the end of the 2026-04-26
 > session that landed per-example vectors, TUI debug panel, and durable
 > user-message persistence. See also: `docs/comparison-2026-04-26.svg` for
@@ -236,8 +236,8 @@ Beyond the open items above, three architectural directions where Tengu lags beh
 2. **Borrow Hermes's session search + summarisation.** With durable msg persistence shipped today, the data is now there. A follow-up that runs LLM summarisation on session-old messages and writes back into `agentic_memory step outputs` would make Tengu's recall comparable to Hermes's FTS5 + summary path, while keeping the vector-first design.
 3. **Borrow PI's MCP marketplace shape.** Tengu has the MCP bridge but no UX for discovering or installing servers. A `tengu mcp install <name>` subcommand backed by a tiny registry (even just a JSON manifest) would let users adopt connectors without editing TOML.
 
-These are all additive — they don't conflict with the doctrine ("LLM = heart, Open Brain / Karpathy LLM Wiki = brain, tools = hands"). They just fill in the agent-layer features Tengu's `tengu-analysis.html` flagged as missing.
+These are all additive — they don't conflict with the doctrine ("LLM = heart, Open Brain / Karpathy LLM Wiki = brain, tools = hands"). They just fill in the agent-layer features Tengu's `archive/2026-04/tengu-analysis.html` flagged as missing.
 
 ---
 
-*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above, a 2026-09-18 fact pass (banner at top), a 2026-10-02 pass (§ Trading runtime axes; Tengu rows of the TL;DR and § Tools), a 2026-10-08 code check (lineage + evidence, strategy ranking, source evidence, counts, skill rows) a 2026-10-09 code check (SOE weekly cycle, execution trace, Tengu Studio, `WORKSPACE_TOOLS` count) and a 2026-10-13 code check (Studio builder, Codex engine, A2A, seal proxy, Privy Solana signing, tool counts). The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*
+*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above, a 2026-09-18 fact pass (banner at top), a 2026-10-02 pass (§ Trading runtime axes; Tengu rows of the TL;DR and § Tools), a 2026-10-08 code check (lineage + evidence, strategy ranking, source evidence, counts, skill rows) a 2026-10-09 code check (SOE weekly cycle, execution trace, Tengu Studio, `WORKSPACE_TOOLS` count) and a 2026-10-13 code check (Studio builder, Codex engine, A2A, seal proxy, Privy Solana signing, tool counts). The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `archive/2026-04/tengu-analysis.html` for the deep historical analysis.*

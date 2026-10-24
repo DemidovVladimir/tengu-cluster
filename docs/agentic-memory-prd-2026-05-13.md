@@ -9,7 +9,7 @@
 | Tengu as product host | Tengu as reference spike only |
 | Planner-specific recall | Codex/Claude/Cowork adjustable project memory |
 
-Canonical short doc: `docs/portable-agentic-memory-plugin-2026-05-15.md`.
+Canonical short doc: `docs/archive/2026-05/portable-agentic-memory-plugin-2026-05-15.md`.
 
 ## Correction
 

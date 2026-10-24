@@ -8,7 +8,7 @@
 > Companion to `compression-flow-2026-04-27.svg`. Open both together.
 >
 > **Different axis: in-turn context cutting** — see
-> `context-cutting-flow-2026-04-27.svg`. That diagram covers Layer 3 —
+> `tutorial/tool-loop.html`. That page covers Layer 3 —
 > the FIVE mechanisms that shrink the LLM's prompt each turn (sliding
 > history, mid-loop tool-result compaction, per-result truncation, MCP
 > bridge cap, output-truncated auto-continue). This file is about

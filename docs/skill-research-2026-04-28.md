@@ -303,7 +303,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 | `MetricKind::DialogReplay` | `scores_current_slice_via_llm_judge`, `scores_current_slice_via_tool_assertion`, `rejects_when_slice_empty` |
 | Lifecycle-verb routing | `planner_routes_create_skill_phrase_to_skill_author`, `planner_routes_evaluate_to_skill_evaluator`, `planner_refuses_create_when_dialog_lt_2_messages` |
 
-### Manual smoke (add to `docs/manual-test-checklist.md`)
+### Manual smoke (add to `docs/archive/2026-04/manual-test-checklist.md`)
 
 ```
 SKL-1  list shows every in-tree skill, marks Script/ShellCheck
@@ -374,5 +374,5 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 | In-process three-tier loader (`skill_packages`) | `src/application/skills/registry.rs::skill_directories` |
 | Cowork reference | `/var/folders/.../skills/skill-creator/{SKILL.md,scripts/,agents/,eval-viewer/}` |
 | Hermes reference | `/Users/vladimirdemidov/development/hermes-agent/{hermes_cli,tools}/skills_hub.py` + `tools/skills_guard.py` |
-| Design spec | `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` |
-| Pipeline diagrams | `docs/skill-lifecycle-pipeline-diagrams.md` |
+| Design spec | `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` |
+| Pipeline diagrams | `docs/archive/2026-04/skill-lifecycle-pipeline-diagrams.md` |

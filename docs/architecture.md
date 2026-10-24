@@ -115,7 +115,7 @@ A harness-owned subsystem for **distillation**, **metric measurement**, and **bo
 - `tengu eval <skill>` (`adapters/inbound/eval/`; rows, judge and report types in `application/skills/lifecycle/eval.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
 - `tengu skill evolve <skill>` — bounded rewrite→rescore loop. Baseline, scratch git worktree, N cycles via the `skill-improver` agent, best-cycle selection (no regression > 0.05 on other gated metrics), user approval gate, apply-or-discard.
 
-All three honour harness-owned doctrine: cycle counts, regression tolerance, best-cycle selection, and approval are Rust policy; LLMs only propose content. See [[skills#Metrics & Evolution]] and `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
+All three honour harness-owned doctrine: cycle counts, regression tolerance, best-cycle selection, and approval are Rust policy; LLMs only propose content. See [[skills#Metrics & Evolution]] and `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
 
 ### Plugin Architecture (`src/adapters/outbound/tools/`, `src/application/tools/registry.rs`)
 
@@ -219,4 +219,4 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 - [[configuration]] — config reference
 - [[mcp-bridge]] — MCP tool bridge details
 - [[skills]] — skill system architecture (incl. metrics, distillation, evolve)
-- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — skill-lifecycle design spec (archived; live reference: `docs/skill-lifecycle-validation.md`)
+- `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — skill-lifecycle design spec (archived; live reference: `docs/skill-lifecycle-validation.md`)

@@ -130,7 +130,7 @@ When the user says "let's save this as a skill", "distill this", "turn this into
 - **`metrics`** -- at least one metric. Every distilled skill MUST ship with metrics:
   - Prefer `shell_check` for deterministic outcomes (tx confirmed, file exists, exit code 0).
   - Use `llm_judge` with a narrative rubric for qualitative criteria.
-  - See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` s.6 for the full schema.
+  - See `docs/skills.md` § Metrics & Evolution for the full schema.
 - **`from_message_index`** -- the 0-based message index where the distilled behaviour started. When in doubt, pick the message where the user stated the goal.
 - **`fixture_hints.drop_tool_names`** -- exclude noise like `memory_search` or unrelated tool calls that shouldn't appear in replay fixtures.
 

@@ -887,7 +887,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
 # `tengu skill evolve <skill>`. All three drive the metrics: frontmatter
 # contract declared per-skill in SKILL.md. See
-# `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
+# `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
 
 # [skill_lifecycle]
 # improver_agent = "skill-improver"        # Required for `tengu skill evolve`

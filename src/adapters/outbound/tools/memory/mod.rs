@@ -9,7 +9,7 @@
 //!   via `AgentConfig.workspace_tools` (like `shared_cache`).
 //!
 //! Both tools are natively async — no `block_in_place` bridge. See task A5 in
-//! `docs/superpowers/plans/2026-04-16-phase-a-tool-plugin-architecture.md`.
+//! `docs/archive/2026-04/superpowers/plans/2026-04-16-phase-a-tool-plugin-architecture.md`.
 
 use anyhow::Result;
 use async_trait::async_trait;

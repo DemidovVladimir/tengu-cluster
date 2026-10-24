@@ -103,7 +103,18 @@ A skill's `metrics:` block declares accuracy characteristics the harness measure
 | `dialog_replay` | Reflective eval: scores the current dialog slice from `from_message_index` by delegating to a sibling `llm_judge` / `tool_assertion` metric (`delegate_metric`). |
 | `description_trigger` | Judge LLM decides whether the planner would route to this skill for each query in `queries_file` (`{queries: [{query, should_trigger}]}`); `runs_per_query` (3), `holdout` (0.4). |
 
-Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric. Full frontmatter schema: `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6.1.
+Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric.
+
+Fields and load checks (`lifecycle/metrics.rs::MetricSpec` + `validate_metrics`; every metric has a `name`, unique in the skill, and an optional `min_pass_rate` in [0, 1]; no `metrics:` block = the skill loads and `tengu eval` refuses it):
+
+| Kind | Required | Optional | Refused at load |
+|---|---|---|---|
+| `shell_check` | `cmd` | `expect_stdout_matches`, `expect_exit_code` | empty `cmd`; neither expectation set |
+| `llm_judge` | `rubric_file` (under the skill dir) | `judge_model` | rubric file missing |
+| `tool_assertion` | `tool`, `action`, `assert` | `key` | empty `tool` |
+| `script` | `path` (under the skill dir) | — | file missing |
+| `dialog_replay` | `from_message_index`, `delegate_metric` | `expected_outcome` | empty `delegate_metric` |
+| `description_trigger` | `queries_file` (under the skill dir) | `judge_model`, `runs_per_query` (3), `holdout` (0.4) | file missing; `runs_per_query` 0; `holdout` outside [0, 1] |
 
 ## Distillation and in-chat edits
 
@@ -152,4 +163,4 @@ Its command is gated by `shell_bins` in its scope (first command word only — a
 - `docs/configuration.md` — `skill_packages`, `[skill_lifecycle]`
 - `docs/mcp-bridge.md` — how skill tools reach Claude Code
 - `docs/engine-backends.md` — engines
-- `docs/skill-redesign-2026-04-29.md` · `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`
+- `docs/skill-redesign-2026-04-29.md` · `docs/archive/2026-04/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (history)

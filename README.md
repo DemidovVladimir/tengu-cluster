@@ -377,8 +377,8 @@ Restart=on-failure
 |---|---|
 | `docs/index.html` | Docs hub |
 | `docs/tutorial/index.html` | Visual tutorial: one animated page per feature, built from the code; every code change updates its pages (`docs/tutorial/sources.toml`, `cargo test --test tutorial_map`, `docs/tutorial/AUTHORING.md`) |
-| `docs/changes-2026-09-29-to-10-02.html` | What changed 2026-09-29 → 2026-10-02 |
-| `docs/xmarket-2026-10-02.html` · `docs/xlab-2026-10-02.html` | xmarket paper desk · xlab history-first harness (visual) |
+| `docs/archive/2026-10/changes-2026-09-29-to-10-02.html` | What changed 2026-09-29 → 2026-10-02 |
+| `docs/archive/2026-10/xmarket-2026-10-02.html` · `docs/archive/2026-10/xlab-2026-10-02.html` | xmarket paper desk · xlab history-first harness (visual) |
 | `docs/architecture-2026-04-27.md` (+ `.svg`, `.html`) | **Canonical** — seven steps from prompt to reply, file map per subsystem |
 | `docs/code-map.md` · `docs/code-map.html` | Where every file lives + how to add tools / engines / config / channels |
 | `docs/SESSION_HANDOFF.md` | Running state log, open items, gotchas |
@@ -390,8 +390,8 @@ Restart=on-failure
 | `docs/typed-observations-2026-09-24.md` | Observation envelope, cache, recorder; Solana, Hyperliquid, xm, xlab rows |
 | `docs/decision-loop-plan-2026-09-24.md` · `docs/lping-2026-09-24.md` | Jev decision loops · the lping sandbox |
 | `docs/runtime-2026-09-30.md` | `tengu run`: lease, feeds, health, state layout, the xmarket sandboxes |
-| `docs/xmarket-prd-2026-09-29.md` · `docs/xmarket-tracker-2026-09-29.md` · `docs/xmarket-gaps-2026-09-29.md` | xmarket PRD (+ operator addendum) · tracker (§ 0 rules, W1 notes, backlog) · per-item detail |
-| `docs/xmarket-build-plan-2026-09-30.md` · `docs/xmarket-feasibility-2026-09-30.md` | Waves, gates, engine matrix · edge evidence after costs |
+| `docs/xmarket-prd-2026-09-29.md` · `docs/xmarket-tracker-2026-09-29.md` · `docs/archive/2026-09/xmarket-gaps-2026-09-29.md` | xmarket PRD (+ operator addendum) · tracker (§ 0 rules, W1 notes, backlog) · per-item detail |
+| `docs/archive/2026-09/xmarket-build-plan-2026-09-30.md` · `docs/xmarket-feasibility-2026-09-30.md` | Waves, gates, engine matrix · edge evidence after costs |
 | `docs/xmarket-risk-paper-2026-09-30.md` | `[risk]` gate, paper ledger, exits, weekend fade, halts, `tengu risk` |
 | `docs/xlab-2026-10-01.md` | xlab: `market.db`, spec DSL, backtest engine, Jev gate arm, tools, results |
 | `docs/plans/TENGU_HANDOFF.md` · `docs/plans/TENGU_ROADMAP.md` | Operator intent: W1 → W2 → evolution, gated phases, operator reviews |

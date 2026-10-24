@@ -148,7 +148,7 @@ Every commit follows the repo rules: tutorial pages + `sources.toml` (`cargo tes
 | Where | What | Fix |
 |---|---|---|
 | `src/adapters/outbound/tools/agentic_memory/mod.rs:1242` | The wiki compiler defaults to `anthropic/claude-sonnet-4-6` over `OPENROUTER_API_KEY` | Fail unless `TENGU_WIKI_COMPILER_MODEL` is set (S8) |
-| `docs/validation-checklist.md:5`, `docs/orchestration-test-scenarios.md:14` | Runbooks tell an agent to export `OPENROUTER_API_KEY` and quote OpenRouter dollar costs | Archive them (O2) |
+| `docs/archive/2026-04/validation-checklist.md:5`, `docs/archive/2026-04/orchestration-test-scenarios.md:14` | Runbooks tell an agent to export `OPENROUTER_API_KEY` and quote OpenRouter dollar costs | Archive them (O2) |
 
 ---
 
@@ -298,7 +298,7 @@ The content is accurate (CLAUDE.md cites 29/29 live functions, `code-map.md` 568
 | ID | Problem | Evidence | Fix | Effort | ✓ |
 |---|---|---|---|---|---|
 | O1 | 86 tracked top-level docs, 62 dated, 6 with "historical" banners, 3 different "start here" orders. Dated names are used for living docs edited weekly. | `git ls-files docs` | Target tree below. Rule: living docs are undated with a "Checked against the code on <date>" footer; dated PRDs, plans, research and reports go to `docs/archive/<yyyy-mm>/` once shipped. Never move a lineage-cited doc (8 files). | M | ✏️ |
-| O2 | 42 files (2.07 MB) cited by no code, test, web page or lineage record, several with dead paths; 3 runbooks break the model-spend rule. | e.g. `docs/harness-architecture.md` (30/42 live paths), `docs/xmarket-gaps-2026-09-29.md` (352 KB), `docs/IMPLEMENTATION_PLAN.md`, `docs/superpowers/*`, `docs/validation-checklist.md` | `git mv` to the archive with a one-row-per-file `docs/archive/README.md`; merge live skill-lifecycle facts into `docs/skills.md` first. | S | 🔍 |
+| O2 | 42 files (2.07 MB) cited by no code, test, web page or lineage record, several with dead paths; 3 runbooks break the model-spend rule. | e.g. `docs/archive/2026-04/harness-architecture.md` (30/42 live paths), `docs/archive/2026-09/xmarket-gaps-2026-09-29.md` (352 KB), `docs/archive/2026-04/IMPLEMENTATION_PLAN.md`, `docs/archive/2026-04/superpowers/*`, `docs/archive/2026-04/validation-checklist.md` | `git mv` to the archive with a one-row-per-file `docs/archive/README.md`; merge live skill-lifecycle facts into `docs/skills.md` first. | S | 🔍 |
 | O3 | 7 hand-synced HTML explorers duplicate the tutorial and the generated `code-map.html`; the architecture html carries a 44.6 KB hand `FILE_MAP`; the svg embeds 116 file names. | `docs/architecture-2026-04-27.html:1074`, `:1431` | Archive 6 explorers; keep only the walk-a-turn view of the architecture page; strip file names from the svg. ~480 KB. | M | 🔍 |
 | O4 | `code-map.md` § 7 is a 148 KB hand table (22 drifted line counts) although `tests/code_map.rs` already builds the same data. | `tests/code_map.rs:222` checks presence only | Generate § 7 into a GENERATED block with the existing `TENGU_REGEN_CODE_MAP` switch. | S | 🔍 |
 | O5 | `docs/SESSION_HANDOFF.md` is 139 KB (65% before 2026-10-08); its "Open items" is the 2026-05-14 phase table; gate state lives in 4–5 files. | `docs/SESSION_HANDOFF.md:710`, `:808` | Resume + one Open-gates table (the only place gate state lives) + last 3 sessions, ≤ 40 KB; older sessions to `docs/archive/handoffs/`. `handoff_for_check.md` keeps the newest session only. | S | 🔍 |

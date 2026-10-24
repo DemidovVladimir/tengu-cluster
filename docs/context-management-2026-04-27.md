@@ -255,8 +255,8 @@ No dedup or per-skill-count cap — selection happens upstream.
 ## Layer 3 — Inner tool-calling loop
 
 `application/chat/tool_loop.rs::collect_engine_response`. The **per-turn**
-context-cutting layer. See `context-cutting-flow-2026-04-27.html` for
-the interactive walkthrough.
+context-cutting layer. See `tutorial/tool-loop.html` for
+the animated walkthrough.
 
 ### 14. `truncate_tool_result` (`application/chat/tool_loop.rs:481`, via `tool_result_content` `:406`)
 
@@ -622,8 +622,7 @@ Comparison points for future sessions:
 ## Companion docs
 
 - **[`context-management-2026-04-27.svg`](./context-management-2026-04-27.svg)** — the full layered diagram (this doc's picture).
-- **[`context-management-2026-04-27.html`](./context-management-2026-04-27.html)** — interactive explorer (search the mechanisms, walk a turn, drag config knobs).
-- **[`context-cutting-flow-2026-04-27.{svg,html}`](./context-cutting-flow-2026-04-27.svg)** — focused view: Layer 3 (the inner tool loop). Most useful when debugging something inside `collect_engine_response`.
+- **[`tutorial/tool-loop.html`](./tutorial/tool-loop.html)** — focused view: Layer 3 (the inner tool loop), animated. Most useful when debugging something inside `collect_engine_response`.
 - **[`compression-flow-2026-04-27.{md,svg}`](./compression-flow-2026-04-27.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
 
 *Last updated 2026-10-08 (checked against the code: line refs, headings
