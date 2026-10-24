@@ -373,85 +373,8 @@ Restart=on-failure
 
 ## Documentation
 
-| Doc | Covers |
-|---|---|
-| `docs/index.html` | Docs hub |
-| `docs/tutorial/index.html` | Visual tutorial: one animated page per feature, built from the code; every code change updates its pages (`docs/tutorial/sources.toml`, `cargo test --test tutorial_map`, `docs/tutorial/AUTHORING.md`) |
-| `docs/archive/2026-10/changes-2026-09-29-to-10-02.html` | What changed 2026-09-29 → 2026-10-02 |
-| `docs/archive/2026-10/xmarket-2026-10-02.html` · `docs/archive/2026-10/xlab-2026-10-02.html` | xmarket paper desk · xlab history-first harness (visual) |
-| `docs/architecture.md` (+ `.svg`, `.html`) | **Canonical** — seven steps from prompt to reply, file map per subsystem |
-| `docs/code-map.md` · `docs/code-map.html` | Where every file lives + how to add tools / engines / config / channels |
-| `docs/SESSION_HANDOFF.md` | Running state log, open items, gotchas |
-| `docs/configuration.md` · `docs/tools.md` · `docs/skills.md` | Config schema + env vars · tools · skills |
-| `docs/engine-backends.md` · `docs/mcp-bridge.md` | Engines (`openrouter`, `local`, `claude_code`, `codex`) + engine matrix · the MCP bridge the CLI engines use |
-| `docs/egress.md` · `docs/webhooks.md` | Tor / host allowlist / audit · webhook listener |
-| `docs/context.md` (+ `.svg`, `.html`) | Every mechanism that shapes what an LLM sees |
-| `docs/memory-*.md` | Open Brain + LLM Wiki spec |
-| `docs/observations.md` | Observation envelope, cache, recorder; Solana, Hyperliquid, xm, xlab rows |
-| `docs/decision-loops.md` · `docs/lping.md` | Jev decision loops · the lping sandbox |
-| `docs/runtime.md` | `tengu run`: lease, feeds, health, state layout, the xmarket sandboxes |
-| `docs/xmarket-prd-2026-09-29.md` · `docs/xmarket-tracker.md` · `docs/archive/2026-09/xmarket-gaps-2026-09-29.md` | xmarket PRD (+ operator addendum) · tracker (§ 0 rules, W1 notes, backlog) · per-item detail |
-| `docs/archive/2026-09/xmarket-build-plan-2026-09-30.md` · `docs/xmarket-feasibility-2026-09-30.md` | Waves, gates, engine matrix · edge evidence after costs |
-| `docs/xmarket-risk-paper.md` | `[risk]` gate, paper ledger, exits, weekend fade, halts, `tengu risk` |
-| `docs/xlab-2026-10-01.md` | xlab: `market.db`, spec DSL, backtest engine, Jev gate arm, tools, results |
-| `docs/plans/TENGU_HANDOFF.md` · `docs/plans/TENGU_ROADMAP.md` | Operator intent: W1 → W2 → evolution, gated phases, operator reviews |
-| `docs/lineage.md` | `lineage/` registry, `tengu evidence` (vault, grade, regrade), `tengu lineage`, `[generation]` binding |
-| `docs/archive/2026-10/w1-review-2026-10-06.md` · `docs/p{6,7,8,9,10}-*-2026-10-08.md` | Operator Review #1 (verdict APPROVE) · Phases 6–11 reports (no W2 candidate built; W1 kept) |
-| `docs/forward-evidence-runbook-2026-10-08.md` | Rule W forward weekend #2: start, stop, snapshot, grade, regrade |
-| `docs/ranking.md` | Scheduled strategy ranking: contracts, ranker, publisher, `tengu ranking`, xlab-w2 feeds |
-| `docs/soe-2026-10-08.md` · `docs/source-evidence.md` | Software Opportunity Engine contract, `tengu soe`, the weekly cycle, replay, grades, the Review #2 packet · the source layer (SEC EDGAR, EU TED, as-of view, `tengu sources`) |
-| `docs/studio.md` · `docs/control-loop-lab.md` · `docs/plans/TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-90; ST-50 = the builder) |
-| `docs/builder.md` · `docs/archive/2026-10/studio-editor-design-2026-10-08.md` | Studio builder (`tengu sandbox new`, `--allow-edit`: cards → TOML, wires, secret stores, Finalise) · its design (ST-40; built as the builder after the operator's 2026-10-10 request) |
-| `docs/a2a.md` | A2A: the `a2a` tool, `tengu a2a serve`, `[a2a]`, interop, `sandboxes/a2a-lab` |
-| `docs/sealed-keys.md` · `docs/cloudflare-secrets-setup.html` · `docs/sealed-check.md` | Seal proxy: Worker, routes, clients, sessions, `[keys]`, `tengu keys` · the operator's step-by-step setup (deploy, secrets, `[keys]`) · the `sealed-check` proof runbook |
+Start at **`docs/index.html`**: five steps on top (this Quickstart → `docs/tutorial/big-picture.html` → `docs/code-map.md` § 2 → the doc of the area you touch → `docs/SESSION_HANDOFF.md` § Open gates), then every doc and explorer under one search. Shipped plans and reports: `docs/archive/README.md`.
 
 ## Module map
 
-Hexagonal, single crate. Every file, extension recipe (tools, engines, config, channels) and dependency: **`docs/code-map.md`** (interactive graph: `docs/code-map.html`). Layer rules are enforced by `tests/layering_lint.rs`.
-
-```
-src/lib.rs                  the `tengu` lib: every module (private) + `run` → adapters::inbound::cli::run
-src/main.rs                 6 lines → tengu::run
-src/domain/                 plain data + pure policy: message, session, plan, scope (ToolScope), secrets, tools, metrics, memory,
-                            observation, decision, schedule, time, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
-                            canonical (JSON + sha256, TOML digest), base58, evidence (+ _coverage), sec (EDGAR decoders), workflow (Studio graph), trace
-                            (execution-trace envelope), blueprint (builder canvas); hl/ (ctx, book), lp/ (DLMM, perps, hedge), xm/ (risk
-                            gate, ledger, paper, exits, weekend_fade, cost, grade, regrade), backtest/ (spec, kinds, engine, fills, costs,
-                            features, gate, stats, report, checks, evaluation, labels, ranking), lineage/ (records, registry + checks,
-                            pins, locks, ranking contracts), source/ (records, as-of view, packet, SEC, TED), soe/ (opportunity,
-                            economics, gates, rank, allocate, portfolio, profile, proposal, challenge, forecast, memo, replay, review,
-                            eval), a2a/ (A2A 1.0 types, JSON-RPC, 0.3 dialect, card, text)
-src/ports/                  traits: engine, tool, memory, orchestration, shell, observation, decision, clock, history, market_data,
-                            book, paper, runtime, solana_signer, solana_writes, skill_source, tool_activity, evidence, lineage,
-                            source_store, soe (cycle store, stage runner), trace (sink, reader), a2a (server runner), builder (drafts)
-src/config/                 schema + validation (mod.rs) + one file per section: egress, decision_loop, solana, hardening, xmarket,
-                            risk, rate_limits, runtime, recorder, feeds, backtest, skill_lifecycle, lineage ([generation] + registry
-                            loader), strategy_ranking, sources, soe (private profile + [soe]), studio, keys (seal proxy), a2a;
-                            builder/ (palette, compiler, templates); execution_map (`tengu decide --map`); sections (what tools
-                            read), paths
-src/application/            use cases: chat/, orchestrator/, memory/, skills/, tools/, decision_loop/ (Jev loop, world, slots),
-                            runtime/ (feeds, loops, health), backtest/ (run, run dir, Jev gate arm), ranking/ (coordinator, files),
-                            lineage/ (verify, attempts), soe/ (weekly cycle, freeze, replay, grade, review, the soe_cycle job),
-                            studio/ (graph, stream, board, inspect, control), a2a/ (server methods, task store), builder.rs,
-                            evidence.rs, sources.rs (as-of packet, purge), trace_exec.rs (cause, TracedExecutor), observe.rs,
-                            paper.rs, metrics.rs
-src/bootstrap/              composition root: tools.rs, memory.rs, orchestrator.rs, sandbox.rs, decision.rs, runtime.rs, soe.rs,
-                            studio.rs, trace.rs, a2a.rs, builder.rs
-src/adapters/outbound/      engines/ (openrouter, local, claude_code, codex, cli_run), tools/ (catalog: workspace, http, crypto, memory,
-                            cache, skill*, manage_skill, view_skill, agentic_memory, solana, hyperliquid, xm, xlab, sources, soe, a2a),
-                            mcp_client/, memory/, hyperliquid/ (info client), solana/ (RPC, send, Privy signer), backfill/ (hl,
-                            gecko, hl_archive, json, sec), sources/ (SEC, TED fetchers, sources.db), soe/ (cycle store, stage runner
-                            + cache), evidence/ (vault, read-only readers), lineage/ (read-only resolvers), a2a/ (A2A client),
-                            keys/ (seal-proxy client, ssh-agent), market_data.rs, paper_store.rs, history_sqlite.rs,
-                            decision_cache.rs, decisions.rs, observations.rs, runtime_store.rs, trace_store.rs, builder_store.rs,
-                            rate_limit.rs, http_class.rs, clock.rs, egress.rs, secrets.rs, shell.rs, bridge_env.rs,
-                            subprocess_runner.rs, noop.rs, prune.rs, scaffold.rs
-src/adapters/inbound/       cli/ (mod + run_agent, doctor, decide, history, backtest, ranking, risk, evidence, lineage, soe (+ soe/weekly),
-                            sources, studio, sandbox, trace, a2a, keys, skill, tool), run.rs (`tengu run`), a2a.rs (`tengu a2a serve`),
-                            studio/ (Studio server + builder routes, default feature `studio`), tui/, telegram.rs, webhooks.rs,
-                            mcp_bridge.rs, eval.rs, evolve.rs, channel.rs, activity.rs
-web/studio/                 the Studio pages (index.html, studio.css, studio.js; builder.html, builder.css, builder.js), embedded
-                            with include_str!; draw only what the Rust API serves
-crates/tengu-seal/          seal-proxy formats shared with the Worker (route, session, ssh, target)
-cloudflare/seal-worker/     the `tengu-seal` Cloudflare Worker (Rust; wrangler.toml ROUTES / CLIENTS)
-```
+Hexagonal, one crate (+ `crates/tengu-seal`). Layers and who may import whom: `docs/code-map.md` § 1 (enforced by `tests/layering_lint.rs`); every source file with its one-line purpose, generated from the code: § 7; interactive graph: `docs/code-map.html`.

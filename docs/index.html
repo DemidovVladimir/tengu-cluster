@@ -144,7 +144,7 @@
 <div class="top">
   <header class="bar">
     <h1>Tengu-Cluster · Docs hub</h1>
-    <p class="sub">2026-10-09 (<code>main</code> @ <span class="hash">f7ac9a5636e2493e3839e896cba9951a2d41aefb</span>) · every HTML explorer and markdown doc in one place · one search filters both · self-contained, works offline · the W1 build history (<code>feature/xmarket</code>) is on the <a href="archive/2026-10/changes-2026-09-29-to-10-02.html">change timeline</a></p>
+    <p class="sub">checked 2026-10-24 · five steps, then every HTML explorer and markdown doc in one place · one search filters both · self-contained, works offline · shipped plans and reports: <a href="archive/README.md">the archive</a></p>
     <div class="bar-row">
       <label class="search"><span class="sr-only">Search the docs</span><input type="search" id="q" placeholder="Search docs and explorers, e.g. risk, bridge, xlab, studio, soe" autocomplete="off" spellcheck="false"></label>
       <nav class="jump" aria-label="Sections">
@@ -164,39 +164,11 @@
 <section id="start" aria-labelledby="h-start">
   <h2 id="h-start">Start here — in this order</h2>
   <div class="path">
-    <div class="step"><span class="n">1</span><a class="t" href="../CLAUDE.md">CLAUDE.md</a><p>Doctrine, hexagonal layout, required reading, the docs to update after a change, key gotchas. Read first, every session. Twin for other assistants: <a href="../AGENTS.md">AGENTS.md</a>.</p></div>
-    <div class="step"><span class="n">2</span><a class="t" href="code-map.md">docs/code-map.md</a><p>Where every source file lives and how to add a tool, an engine or a config section. Interactive graph: <a href="code-map.html">code-map.html</a>.</p></div>
-    <div class="step"><span class="n">3</span><a class="t" href="architecture.md">docs/architecture.md</a><p>One user message from prompt to reply in seven steps, file by file. Picture: <a href="architecture.svg">.svg</a>; explorer: <a href="architecture.html">.html</a>.</p></div>
-    <div class="step"><span class="n">4</span><a class="t" href="SESSION_HANDOFF.md">docs/SESSION_HANDOFF.md</a><p>Running state: the resume table at the top, open items, active gotchas.</p></div>
-  </div>
-  <div class="callout">
-    <strong>New to Tengu?</strong> The visual field manual explains every feature on its own animated page (35 pages), drawn from the code and updated with every code change.
-    <div class="links">
-      <a href="tutorial/index.html">docs/tutorial/ — field manual</a>
-      <a href="tutorial/big-picture.html">one message, end to end</a>
-      <a href="tutorial/decision-loop.html">decision loop (Jev)</a>
-      <a href="tutorial/studio.html">Studio</a>
-      <a href="tutorial/builder.html">sandbox builder</a>
-      <a href="tutorial/trace.html">execution trace</a>
-      <a href="tutorial/soe.html">SOE</a>
-    </div>
-  </div>
-  <div class="callout">
-    <strong>What changed lately (2026-10-13, PRs #50–#54 merged):</strong> the drag-and-drop sandbox builder (<code>tengu sandbox new</code>, <a href="builder.md">doc</a>) and <code>engine = "codex"</code> (ChatGPT subscription, <a href="engine-backends.md">engines</a>) — #52; A2A (tool <code>a2a</code>, <code>tengu a2a serve</code>, <a href="a2a.md">doc</a>) — #53; the seal proxy (provider keys only in a Cloudflare Worker, <code>tengu keys</code>, <a href="sealed-keys.md">doc</a>; Worker not deployed yet — operator step) — #50; Solana write tools sign with a Privy wallet through it (<code>[solana] privy_wallet_id</code>) — #51; forward weekend #2 graded — #54. <strong>2026-10-08/09, PRs #39–#44:</strong> strategy ranking (contracts unsealed), the Software Opportunity Engine O0–O4 + the source-evidence layer (offline until the operator's G-O0), Tengu Studio + the control-loop lab, docs sweep A. Open operator gates: the top of <a href="SESSION_HANDOFF.md">SESSION_HANDOFF</a>.
-    <div class="links">
-      <a href="ranking.md">strategy ranking</a>
-      <a href="soe-2026-10-08.md">SOE</a>
-      <a href="source-evidence.md">source evidence</a>
-      <a href="studio.md">Studio</a>
-      <a href="builder.md">Studio builder</a>
-      <a href="control-loop-lab.md">control-loop lab</a>
-      <a href="plans/TENGU_STUDIO_PLAN.md">Studio plan</a>
-      <a href="a2a.md">A2A (2026-10-10)</a>
-      <a href="sealed-keys.md">seal proxy</a>
-      <a href="cloudflare-secrets-setup.html">Cloudflare setup</a>
-      <a href="sealed-check.md">sealed-check runbook</a>
-    </div>
-    <div class="links">Earlier (2026-09-30 → 10-01, 90 commits on <code>feature/xmarket</code>): <a href="archive/2026-10/changes-2026-09-29-to-10-02.html">change timeline</a> <a href="archive/2026-10/xmarket-2026-10-02.html">xmarket explorer</a> <a href="archive/2026-10/xlab-2026-10-02.html">xlab explorer</a></div>
+    <div class="step"><span class="n">1</span><a class="t" href="../README.md#quickstart">README § Quickstart</a><p>Build, pick a sandbox, run a first turn. Agents: <a href="../CLAUDE.md">CLAUDE.md</a> / <a href="../AGENTS.md">AGENTS.md</a> load every session (doctrine, rules, gotchas).</p></div>
+    <div class="step"><span class="n">2</span><a class="t" href="tutorial/big-picture.html">tutorial/big-picture.html</a><p>One message end to end, animated. Every other feature has its own page: <a href="tutorial/index.html">the field manual</a>.</p></div>
+    <div class="step"><span class="n">3</span><a class="t" href="code-map.md">docs/code-map.md § 2</a><p>Where X lives — then § 4 for how to add a tool, an engine or a config section. Graph: <a href="code-map.html">code-map.html</a>.</p></div>
+    <div class="step"><span class="n">4</span><a class="t" href="#docs">The doc of your area</a><p>One living doc per feature (below; CLAUDE.md "Required reading" says which to read before which files). The per-turn flow: <a href="architecture.md">architecture.md</a>.</p></div>
+    <div class="step"><span class="n">5</span><a class="t" href="SESSION_HANDOFF.md">SESSION_HANDOFF § Open gates</a><p>Where work stands: resume, open gates (whose, state, next), the last three sessions.</p></div>
   </div>
 </section>
 
